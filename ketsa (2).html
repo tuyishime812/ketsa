@@ -1,0 +1,864 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ketsa — Trade on what happens next</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,wght@0,400;0,500;0,600;1,400&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* ============ DESIGN TOKENS ============ */
+  :root{
+    --paper:        #FFFFFF;
+    --paper-alt:     #F6F7F9;
+    --panel:         #FCFCFD;
+
+    --line:          #E4E7EC;
+    --line-strong:   #CDD3DB;
+
+    --ink:           #0C1526;
+    --ink-2:         #4C5768;
+    --ink-3:         #8A93A3;
+
+    --brand:         #1447E6;
+    --brand-ink:     #0E33AD;
+    --brand-tint:    #EEF2FE;
+
+    --pos:           #0F8F5F;
+    --pos-tint:      #E7F5EF;
+    --neg:           #C13333;
+    --neg-tint:      #FBEBEB;
+
+    --f-serif:       'Newsreader', serif;
+    --f-body:        'Inter', sans-serif;
+    --f-mono:        'IBM Plex Mono', monospace;
+
+    --r-s:           6px;
+    --r-m:           10px;
+    --r-l:           16px;
+
+    --ease:          cubic-bezier(.2,.7,.2,1);
+  }
+
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  html{ scroll-behavior:smooth; }
+  body{
+    background:var(--paper);
+    color:var(--ink);
+    font-family:var(--f-body);
+    line-height:1.55;
+    -webkit-font-smoothing:antialiased;
+  }
+  a{ color:inherit; text-decoration:none; }
+  ul{ list-style:none; }
+  button{ font-family:inherit; cursor:pointer; background:none; border:none; }
+  svg{ display:block; }
+
+  :focus-visible{ outline:2px solid var(--brand); outline-offset:2px; border-radius:3px; }
+  ::selection{ background:var(--brand); color:#fff; }
+
+  .wrap{ max-width:1220px; margin:0 auto; padding:0 32px; }
+
+  /* ============ NAV ============ */
+  .nav{
+    position:sticky; top:0; z-index:100;
+    background:rgba(255,255,255,.92);
+    backdrop-filter:blur(10px);
+    border-bottom:1px solid var(--line);
+  }
+  .nav__inner{ display:flex; align-items:center; justify-content:space-between; height:68px; }
+  .logo{ display:flex; align-items:center; gap:9px; font-family:var(--f-serif); font-style:italic; font-weight:600; font-size:22px; color:var(--ink); }
+  .logo__mark{ width:8px; height:8px; border-radius:50%; background:var(--brand); }
+
+  .nav__links{ display:flex; align-items:center; gap:34px; }
+  .nav__links a{ font-size:14px; color:var(--ink-2); font-weight:500; transition:color .18s var(--ease); }
+  .nav__links a:hover{ color:var(--ink); }
+
+  .nav__actions{ display:flex; align-items:center; gap:10px; }
+  .nav__toggle{ display:none; }
+
+  .btn{
+    display:inline-flex; align-items:center; justify-content:center; gap:8px;
+    font-weight:600; font-size:14px;
+    padding:10px 18px; border-radius:7px; border:1px solid transparent;
+    transition:all .18s var(--ease);
+    white-space:nowrap;
+  }
+  .btn--ghost{ color:var(--ink); border-color:var(--line-strong); }
+  .btn--ghost:hover{ border-color:var(--ink); background:var(--paper-alt); }
+  .btn--brand{ background:var(--ink); color:#fff; }
+  .btn--brand:hover{ background:var(--brand-ink); transform:translateY(-1px); }
+  .btn--lg{ padding:13px 24px; font-size:15px; border-radius:8px; }
+
+  /* ============ HERO ============ */
+  .hero{ padding:80px 0 64px; border-bottom:1px solid var(--line); }
+  .hero__grid{ display:grid; grid-template-columns:1fr .92fr; gap:64px; align-items:start; }
+
+  .eyebrow{
+    display:inline-flex; align-items:center; gap:7px;
+    font-family:var(--f-mono); font-size:12px; letter-spacing:.03em;
+    color:var(--brand); background:var(--brand-tint); border:1px solid #D6E0FB;
+    padding:6px 11px; border-radius:100px; margin-bottom:24px;
+  }
+  .eyebrow__dot{ width:5px; height:5px; border-radius:50%; background:var(--pos); animation:pulse-dot 2s infinite; }
+  @keyframes pulse-dot{ 0%,100%{opacity:1} 50%{opacity:.3} }
+
+  .hero h1{
+    font-family:var(--f-serif); font-weight:500;
+    font-size:clamp(38px, 4.4vw, 58px);
+    line-height:1.08; letter-spacing:-.01em; color:var(--ink);
+  }
+  .hero h1 em{ font-style:italic; color:var(--brand); }
+  .hero p.lede{ margin-top:22px; font-size:17px; line-height:1.65; color:var(--ink-2); max-width:460px; }
+  .hero__ctas{ display:flex; gap:12px; margin-top:32px; flex-wrap:wrap; }
+
+  .hero__proof{ display:flex; gap:0; margin-top:48px; padding-top:26px; border-top:1px solid var(--line); }
+  .proof{ padding-right:32px; margin-right:32px; border-right:1px solid var(--line); }
+  .proof:last-child{ border-right:none; }
+  .proof__num{ font-family:var(--f-mono); font-weight:600; font-size:21px; color:var(--ink); }
+  .proof__label{ font-size:12px; color:var(--ink-3); margin-top:4px; }
+
+  [data-reveal]{ opacity:0; transform:translateY(14px); animation:reveal-up .65s var(--ease) forwards; }
+  @keyframes reveal-up{ to{ opacity:1; transform:translateY(0); } }
+
+  /* ============ SIGNATURE: MARKET WATCH PANEL ============ */
+  .watch{
+    background:var(--panel); border:1px solid var(--line-strong); border-radius:var(--r-m);
+    box-shadow:0 1px 2px rgba(12,21,38,.04), 0 16px 40px -24px rgba(12,21,38,.18);
+    overflow:hidden;
+  }
+  .watch__bar{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:13px 18px; border-bottom:1px solid var(--line); background:var(--paper);
+  }
+  .watch__title{ font-family:var(--f-mono); font-size:11.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-2); }
+  .watch__live{ display:flex; align-items:center; gap:6px; font-family:var(--f-mono); font-size:10.5px; color:var(--pos); }
+  .watch__live::before{ content:""; width:5px; height:5px; border-radius:50%; background:var(--pos); animation:pulse-dot 1.6s infinite; }
+
+  .watch__head{
+    display:grid; grid-template-columns:1.6fr .9fr .8fr .7fr; gap:8px;
+    padding:9px 18px; font-family:var(--f-mono); font-size:10px; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-3);
+    border-bottom:1px solid var(--line);
+  }
+  .watch__row{
+    display:grid; grid-template-columns:1.6fr .9fr .8fr .7fr; gap:8px; align-items:center;
+    padding:12px 18px; border-bottom:1px solid var(--line);
+    transition:background .5s var(--ease);
+  }
+  .watch__row:last-child{ border-bottom:none; }
+  .watch__row.flash-up{ background:var(--pos-tint); }
+  .watch__row.flash-down{ background:var(--neg-tint); }
+
+  .watch__name{ font-size:13px; font-weight:600; color:var(--ink); }
+  .watch__cat{ font-size:11px; color:var(--ink-3); display:block; margin-top:1px; }
+  .watch__spark{ width:64px; height:22px; }
+  .watch__spark path{ fill:none; stroke-width:1.6; }
+  .watch__price{ font-family:var(--f-mono); font-size:13.5px; font-weight:600; color:var(--ink); text-align:right; }
+  .watch__chg{ font-family:var(--f-mono); font-size:12px; font-weight:600; text-align:right; }
+  .watch__chg.up{ color:var(--pos); }
+  .watch__chg.down{ color:var(--neg); }
+
+  .watch__foot{ padding:11px 18px; font-family:var(--f-mono); font-size:10.5px; color:var(--ink-3); background:var(--paper); display:flex; justify-content:space-between; }
+
+  /* ============ TICKER ============ */
+  .ticker{ border-bottom:1px solid var(--line); background:var(--paper-alt); overflow:hidden; white-space:nowrap; padding:11px 0; }
+  .ticker__track{ display:inline-flex; animation:ticker-scroll 42s linear infinite; }
+  .ticker:hover .ticker__track{ animation-play-state:paused; }
+  @keyframes ticker-scroll{ from{ transform:translateX(0);} to{ transform:translateX(-50%);} }
+  .ticker__item{ display:inline-flex; align-items:center; gap:8px; padding:0 24px; font-family:var(--f-mono); font-size:12.5px; color:var(--ink-2); border-right:1px solid var(--line); }
+  .ticker__item b{ color:var(--ink); font-weight:600; }
+  .ticker__item .up{ color:var(--pos); }
+  .ticker__item .down{ color:var(--neg); }
+
+  /* ============ SECTIONS ============ */
+  .section{ padding:88px 0; }
+  .section--alt{ background:var(--paper-alt); }
+  .section__head{ display:flex; align-items:flex-end; justify-content:space-between; gap:24px; margin-bottom:38px; flex-wrap:wrap; }
+  .section__kicker{ font-family:var(--f-mono); font-size:11.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--brand); margin-bottom:9px; }
+  .section__head h2{ font-family:var(--f-serif); font-weight:500; font-size:clamp(26px,3vw,34px); letter-spacing:-.01em; }
+  .section__head p{ color:var(--ink-2); font-size:15px; max-width:420px; }
+
+  /* ============ TABS (segmented pill style) ============ */
+  .tabs{ display:flex; flex-wrap:wrap; gap:10px; margin-bottom:32px; }
+  .tab{
+    font-size:13.5px; font-weight:500; color:var(--ink-2);
+    background:var(--paper); border:1px solid var(--line-strong);
+    padding:9px 17px; border-radius:100px; line-height:1;
+    transition:all .18s var(--ease);
+  }
+  .tab:hover{ color:var(--ink); border-color:var(--ink-3); background:var(--paper-alt); }
+  .tab.is-active{ color:#fff; background:var(--ink); border-color:var(--ink); font-weight:600; }
+
+  /* ============ MARKET CARDS ============ */
+  .cards{ display:grid; grid-template-columns:repeat(3,1fr); gap:1px; background:var(--line); border:1px solid var(--line); border-radius:var(--r-m); overflow:hidden; }
+  .card{
+    background:var(--paper); padding:24px; display:flex; flex-direction:column; gap:15px;
+    opacity:0; transform:translateY(16px); transition:background .2s var(--ease);
+  }
+  .card.is-visible{ opacity:1; transform:translateY(0); transition:opacity .55s var(--ease), transform .55s var(--ease); }
+  .card:hover{ background:var(--paper-alt); }
+
+  .card__top{ display:flex; align-items:center; justify-content:space-between; }
+  .card__tag{ font-family:var(--f-mono); font-size:10px; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-3); }
+  .card__chg{ font-family:var(--f-mono); font-size:12px; font-weight:600; }
+  .card__chg.up{ color:var(--pos); }
+  .card__chg.down{ color:var(--neg); }
+
+  .card h3{ font-family:var(--f-serif); font-weight:500; font-size:17px; line-height:1.4; color:var(--ink); min-height:48px; }
+
+  .spark{ width:100%; height:38px; }
+  .spark path.line{ fill:none; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; stroke-dasharray:300; stroke-dashoffset:300; transition:stroke-dashoffset 1s var(--ease); }
+  .card.is-visible .spark path.line{ stroke-dashoffset:0; }
+
+  .probar{ height:3px; border-radius:100px; background:var(--line); overflow:hidden; }
+  .probar__fill{ height:100%; width:0%; background:var(--ink); transition:width .9s var(--ease) .15s; }
+
+  .card__prices{ display:flex; gap:8px; }
+  .price-btn{
+    flex:1; display:flex; align-items:baseline; justify-content:center; gap:6px;
+    padding:9px 8px; border-radius:6px; border:1px solid var(--line-strong);
+    transition:all .16s var(--ease);
+  }
+  .price-btn span.lbl{ font-size:10.5px; font-weight:600; letter-spacing:.03em; color:var(--ink-3); }
+  .price-btn span.val{ font-family:var(--f-mono); font-size:13.5px; font-weight:600; color:var(--ink); }
+  .price-btn--yes:hover{ border-color:var(--pos); background:var(--pos-tint); }
+  .price-btn--yes:hover span.val{ color:var(--pos); }
+  .price-btn--no:hover{ border-color:var(--neg); background:var(--neg-tint); }
+  .price-btn--no:hover span.val{ color:var(--neg); }
+
+  .card__meta{ display:flex; justify-content:space-between; font-family:var(--f-mono); font-size:11px; color:var(--ink-3); }
+
+  /* ============ DASHBOARD ============ */
+  .dash{
+    background:var(--paper); border:1px solid var(--line-strong); border-radius:var(--r-l);
+    box-shadow:0 1px 2px rgba(12,21,38,.04), 0 24px 60px -30px rgba(12,21,38,.2);
+    overflow:hidden;
+    opacity:0; transform:translateY(20px);
+  }
+  .dash.is-visible{ opacity:1; transform:translateY(0); transition:opacity .7s var(--ease), transform .7s var(--ease); }
+
+  .dash__head{ display:flex; align-items:flex-start; justify-content:space-between; padding:28px 28px 0; flex-wrap:wrap; gap:16px; }
+  .dash__balance-label{ font-family:var(--f-mono); font-size:11px; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-3); margin-bottom:8px; }
+  .dash__balance{ font-family:var(--f-serif); font-weight:500; font-size:38px; color:var(--ink); letter-spacing:-.01em; }
+  .dash__change{ font-family:var(--f-mono); font-size:13px; font-weight:600; margin-top:6px; display:inline-flex; align-items:center; gap:5px; padding:3px 9px; border-radius:100px; }
+  .dash__change.up{ color:var(--pos); background:var(--pos-tint); }
+  .dash__change.down{ color:var(--neg); background:var(--neg-tint); }
+
+  .dash__ranges{ display:flex; gap:4px; background:var(--paper-alt); border:1px solid var(--line); border-radius:100px; padding:4px; }
+  .range-btn{ font-family:var(--f-mono); font-size:12px; font-weight:600; color:var(--ink-3); padding:6px 13px; border-radius:100px; transition:all .18s var(--ease); }
+  .range-btn:hover{ color:var(--ink); }
+  .range-btn.is-active{ background:var(--ink); color:#fff; }
+
+  .dash__chart{ padding:20px 20px 0; height:220px; position:relative; }
+  .dash__chart svg{ width:100%; height:100%; overflow:visible; }
+  .dash__chart .grid-line{ stroke:var(--line); stroke-width:1; }
+  #dashDot{ filter:drop-shadow(0 2px 4px rgba(20,71,230,.35)); }
+  #dashPulse{ animation:pulse-ring 2.2s ease-out infinite; transform-origin:center; }
+  @keyframes pulse-ring{
+    0%{ opacity:.55; transform:scale(1); }
+    100%{ opacity:0; transform:scale(3.4); }
+  }
+
+  .dash__stats{ display:grid; grid-template-columns:repeat(3,1fr); border-top:1px solid var(--line); margin-top:24px; }
+  .stat-tile{ padding:22px 28px; border-right:1px solid var(--line); }
+  .stat-tile:last-child{ border-right:none; }
+  .stat-tile__label{ font-family:var(--f-mono); font-size:11px; letter-spacing:.04em; text-transform:uppercase; color:var(--ink-3); margin-bottom:8px; }
+  .stat-tile__val{ font-family:var(--f-mono); font-weight:600; font-size:24px; color:var(--ink); }
+  .stat-tile__val.up{ color:var(--pos); }
+
+  .dash__positions{ border-top:1px solid var(--line); }
+  .pos-head{
+    display:grid; grid-template-columns:1.5fr .7fr .7fr .7fr .7fr; gap:8px;
+    padding:12px 28px; font-family:var(--f-mono); font-size:10px; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-3);
+    border-bottom:1px solid var(--line); background:var(--paper-alt);
+  }
+  .pos-row{
+    display:grid; grid-template-columns:1.5fr .7fr .7fr .7fr .7fr; gap:8px; align-items:center;
+    padding:14px 28px; border-bottom:1px solid var(--line);
+    opacity:0; transform:translateX(-10px); transition:all .16s var(--ease);
+  }
+  .pos-row:last-child{ border-bottom:none; }
+  .pos-row.is-visible{ opacity:1; transform:translateX(0); transition:opacity .5s var(--ease), transform .5s var(--ease), background .3s; }
+  .pos-row:hover{ background:var(--paper-alt); }
+  .pos-name{ font-size:13.5px; font-weight:600; color:var(--ink); }
+  .pos-spark{ width:56px; height:20px; }
+  .pos-spark path{ fill:none; stroke-width:1.6; }
+  .pos-val{ font-family:var(--f-mono); font-size:13px; color:var(--ink-2); text-align:right; }
+  .pos-pnl{ font-family:var(--f-mono); font-size:13px; font-weight:600; text-align:right; }
+  .pos-pnl.up{ color:var(--pos); }
+  .pos-pnl.down{ color:var(--neg); }
+
+  @media (max-width:720px){
+    .dash__stats{ grid-template-columns:1fr; }
+    .stat-tile{ border-right:none; border-bottom:1px solid var(--line); }
+    .pos-head, .pos-row{ grid-template-columns:1.4fr .8fr .8fr; }
+    .pos-spark{ display:none; }
+  }
+
+  /* ============ HOW IT WORKS (editorial list) ============ */
+  .steps{ border-top:1px solid var(--line); }
+  .step{ display:grid; grid-template-columns:80px 1fr 1.4fr; gap:24px; padding:32px 0; border-bottom:1px solid var(--line); align-items:baseline; }
+  .step__num{ font-family:var(--f-mono); font-size:13px; color:var(--brand); }
+  .step h3{ font-family:var(--f-serif); font-weight:500; font-size:20px; }
+  .step p{ color:var(--ink-2); font-size:14.5px; line-height:1.65; }
+
+  @media (max-width:720px){
+    .step{ grid-template-columns:1fr; gap:8px; }
+  }
+
+  /* ============ CTA BAND ============ */
+  .cta-band{
+    background:var(--ink); color:#fff; border-radius:var(--r-l);
+    padding:60px 52px; display:flex; align-items:center; justify-content:space-between; gap:32px;
+  }
+  .cta-band h2{ font-family:var(--f-serif); font-weight:500; font-size:clamp(24px,3vw,32px); max-width:440px; letter-spacing:-.01em; }
+  .cta-band p{ color:#AEB8CC; margin-top:10px; font-size:15px; max-width:400px; }
+  .cta-band .btn--brand{ background:#fff; color:var(--ink); }
+  .cta-band .btn--brand:hover{ background:#E9ECF4; }
+
+  /* ============ FOOTER ============ */
+  footer{ border-top:1px solid var(--line); padding:52px 0 30px; }
+  .foot__top{ display:grid; grid-template-columns:1.4fr repeat(3,1fr); gap:32px; margin-bottom:40px; }
+  .foot__brand p{ color:var(--ink-3); font-size:13px; margin-top:14px; max-width:250px; line-height:1.6; }
+  .foot h4{ font-size:11.5px; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-3); margin-bottom:15px; }
+  .foot ul li{ margin-bottom:10px; }
+  .foot ul a{ font-size:13.5px; color:var(--ink-2); transition:color .18s; }
+  .foot ul a:hover{ color:var(--ink); }
+  .foot__bottom{ display:flex; justify-content:space-between; align-items:center; padding-top:22px; border-top:1px solid var(--line); font-size:12px; color:var(--ink-3); flex-wrap:wrap; gap:10px; }
+
+  /* ============ RESPONSIVE ============ */
+  @media (max-width:980px){
+    .hero__grid{ grid-template-columns:1fr; }
+    .cards{ grid-template-columns:repeat(2,1fr); }
+    .foot__top{ grid-template-columns:1fr 1fr; }
+  }
+  @media (max-width:720px){
+    .wrap{ padding:0 20px; }
+    .nav__links{ display:none; }
+    .nav__toggle{ display:block; }
+    .cards{ grid-template-columns:1fr; }
+    .cta-band{ flex-direction:column; align-items:flex-start; padding:36px 26px; }
+    .foot__top{ grid-template-columns:1fr; }
+    .hero__proof{ flex-wrap:wrap; row-gap:16px; }
+    .proof{ padding-right:20px; margin-right:20px; }
+    .watch__head, .watch__row{ grid-template-columns:1.4fr .8fr .7fr; }
+    .watch__spark{ display:none; }
+  }
+
+  @media (prefers-reduced-motion:reduce){
+    *{ animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important; scroll-behavior:auto !important; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ============ NAV ============ -->
+<header class="nav">
+  <div class="wrap nav__inner">
+    <div class="logo"><span class="logo__mark"></span>Ketsa</div>
+    <nav class="nav__links">
+      <a href="#markets">Markets</a>
+      <a href="#dashboard">Dashboard</a>
+      <a href="#how">How it works</a>
+      <a href="#">Docs</a>
+    </nav>
+    <div class="nav__actions">
+      <a href="#" class="btn btn--ghost">Log in</a>
+      <a href="#" class="btn btn--brand">Get started</a>
+      <button class="nav__toggle" aria-label="Menu">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M4 7H20M4 12H20M4 17H20" stroke="#0C1526" stroke-width="1.8" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<!-- ============ HERO ============ -->
+<section class="hero">
+  <div class="wrap hero__grid">
+    <div>
+      <span class="eyebrow" data-reveal style="animation-delay:.04s"><span class="eyebrow__dot"></span>$84.2M traded this week</span>
+      <h1 data-reveal style="animation-delay:.12s">Trade on <em>what happens next.</em></h1>
+      <p class="lede" data-reveal style="animation-delay:.2s">
+        Ketsa is a real-time market for the outcomes that matter — politics, crypto, sport, and culture. Prices move with the crowd, not a bookmaker, and you can exit the instant the odds turn your way.
+      </p>
+      <div class="hero__ctas" data-reveal style="animation-delay:.28s">
+        <a href="#markets" class="btn btn--brand btn--lg">Explore markets</a>
+        <a href="#how" class="btn btn--ghost btn--lg">How it works</a>
+      </div>
+      <div class="hero__proof" data-reveal style="animation-delay:.36s">
+        <div class="proof"><div class="proof__num" data-counter data-target="412" data-suffix="K">0</div><div class="proof__label">Traders onboard</div></div>
+        <div class="proof"><div class="proof__num" data-counter data-target="1284" data-suffix="">0</div><div class="proof__label">Live markets</div></div>
+        <div class="proof"><div class="proof__num" data-counter data-target="97" data-suffix=".4M">0</div><div class="proof__label">Total volume</div></div>
+      </div>
+    </div>
+
+    <!-- SIGNATURE ELEMENT: MARKET WATCH PANEL -->
+    <div class="watch" data-reveal style="animation-delay:.22s">
+      <div class="watch__bar">
+        <span class="watch__title">Market watch</span>
+        <span class="watch__live">Live</span>
+      </div>
+      <div class="watch__head">
+        <span>Market</span><span></span><span style="text-align:right">Price</span><span style="text-align:right">24h</span>
+      </div>
+      <div id="watchBody"></div>
+      <div class="watch__foot"><span>Updated seconds ago</span><span>UTC</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ TICKER ============ -->
+<div class="ticker"><div class="ticker__track" id="tickerTrack"></div></div>
+
+<!-- ============ MARKETS ============ -->
+<section class="section" id="markets">
+  <div class="wrap">
+    <div class="section__head">
+      <div>
+        <div class="section__kicker">Order book</div>
+        <h2>Markets moving right now</h2>
+      </div>
+      <p>Every price is a probability. Buy the side you believe, sell whenever the market catches up to you.</p>
+    </div>
+
+    <div class="tabs" id="tabs">
+      <button class="tab is-active" data-filter="all">All</button>
+      <button class="tab" data-filter="politics">Politics</button>
+      <button class="tab" data-filter="crypto">Crypto</button>
+      <button class="tab" data-filter="sports">Sports</button>
+      <button class="tab" data-filter="culture">Culture</button>
+      <button class="tab" data-filter="tech">Tech</button>
+      <button class="tab" data-filter="climate">Climate</button>
+    </div>
+
+    <div class="cards" id="cardGrid"></div>
+  </div>
+</section>
+
+<!-- ============ DASHBOARD ============ -->
+<section class="section section--alt" id="dashboard">
+  <div class="wrap">
+    <div class="section__head">
+      <div>
+        <div class="section__kicker">Dashboard</div>
+        <h2>Your positions, priced live</h2>
+      </div>
+      <p>Track performance across every market you're in, updated in real time as odds move.</p>
+    </div>
+
+    <div class="dash" id="dashPanel">
+      <div class="dash__head">
+        <div>
+          <div class="dash__balance-label">Portfolio value</div>
+          <div class="dash__balance" id="dashBalance">$0</div>
+          <div class="dash__change up" id="dashChange">+0.0% today</div>
+        </div>
+        <div class="dash__ranges" id="dashRanges">
+          <button class="range-btn is-active" data-range="1D">1D</button>
+          <button class="range-btn" data-range="1W">1W</button>
+          <button class="range-btn" data-range="1M">1M</button>
+          <button class="range-btn" data-range="1Y">1Y</button>
+        </div>
+      </div>
+
+      <div class="dash__chart">
+        <svg viewBox="0 0 720 200" preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="dashGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#1447E6" stop-opacity="0.16"/>
+              <stop offset="100%" stop-color="#1447E6" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <line class="grid-line" x1="0" y1="30" x2="720" y2="30"></line>
+          <line class="grid-line" x1="0" y1="100" x2="720" y2="100"></line>
+          <line class="grid-line" x1="0" y1="170" x2="720" y2="170"></line>
+          <path id="dashArea" fill="url(#dashGrad)" opacity="0"></path>
+          <path id="dashLine" fill="none" stroke="#1447E6" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"></path>
+          <circle id="dashPulse" r="5" fill="#1447E6" opacity="0"></circle>
+          <circle id="dashDot" r="4.5" fill="#1447E6"></circle>
+        </svg>
+      </div>
+
+      <div class="dash__stats">
+        <div class="stat-tile">
+          <div class="stat-tile__label">Total P&amp;L</div>
+          <div class="stat-tile__val up" data-counter data-prefix="+$" data-target="3120">0</div>
+        </div>
+        <div class="stat-tile">
+          <div class="stat-tile__label">Open positions</div>
+          <div class="stat-tile__val" data-counter data-target="4">0</div>
+        </div>
+        <div class="stat-tile">
+          <div class="stat-tile__label">Win rate</div>
+          <div class="stat-tile__val" data-counter data-target="68" data-suffix="%">0</div>
+        </div>
+      </div>
+
+      <div class="dash__positions">
+        <div class="pos-head">
+          <span>Market</span><span>Trend</span><span>Avg</span><span style="text-align:right">Current</span><span style="text-align:right">P&amp;L</span>
+        </div>
+        <div id="posBody"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ HOW IT WORKS ============ -->
+<section class="section" id="how">
+  <div class="wrap">
+    <div class="section__head">
+      <div>
+        <div class="section__kicker">Mechanics</div>
+        <h2>Three steps, one price</h2>
+      </div>
+      <p>No order forms, no fine print. Shares trade between 1¢ and 99¢ based on what the market believes.</p>
+    </div>
+    <div class="steps">
+      <div class="step">
+        <div class="step__num">01</div>
+        <h3>Pick a market</h3>
+        <p>Browse thousands of questions on politics, crypto, sport, and culture — each priced by real trading, not a bookmaker's line.</p>
+      </div>
+      <div class="step">
+        <div class="step__num">02</div>
+        <h3>Buy Yes or No</h3>
+        <p>Shares cost between 1¢ and 99¢. If you're right, each share resolves to $1. If you're wrong, it resolves to zero.</p>
+      </div>
+      <div class="step">
+        <div class="step__num">03</div>
+        <h3>Cash out anytime</h3>
+        <p>Sell your position the moment the odds move your way — you don't have to wait for the market to resolve.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ CTA BAND ============ -->
+<section class="wrap" style="padding:0 32px 96px;">
+  <div class="cta-band">
+    <div>
+      <h2>Markets are opinions with a price.</h2>
+      <p>Put a number on what you believe. Ketsa turns your read on the world into a position you can trade.</p>
+    </div>
+    <a href="#" class="btn btn--brand btn--lg">Create an account</a>
+  </div>
+</section>
+
+<!-- ============ FOOTER ============ -->
+<footer>
+  <div class="wrap">
+    <div class="foot__top">
+      <div class="foot__brand">
+        <div class="logo"><span class="logo__mark"></span>Ketsa</div>
+        <p>A real-time market for the questions everyone's arguing about. Trade the odds, not the opinions.</p>
+      </div>
+      <div class="foot">
+        <h4>Product</h4>
+        <ul><li><a href="#markets">Markets</a></li><li><a href="#dashboard">Dashboard</a></li><li><a href="#how">How it works</a></li><li><a href="#">Pricing</a></li></ul>
+      </div>
+      <div class="foot">
+        <h4>Company</h4>
+        <ul><li><a href="#">About</a></li><li><a href="#">Careers</a></li><li><a href="#">Blog</a></li><li><a href="#">Contact</a></li></ul>
+      </div>
+      <div class="foot">
+        <h4>Resources</h4>
+        <ul><li><a href="#">Docs</a></li><li><a href="#">API</a></li><li><a href="#">Status</a></li><li><a href="#">Support</a></li></ul>
+      </div>
+    </div>
+    <div class="foot__bottom">
+      <span>© 2026 Ketsa. All rights reserved.</span>
+      <span>Trading involves risk. Markets resolve based on published rules.</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+/* ================================================================
+   Note on script order: every const used inside a function must be
+   declared (and initialized) BEFORE that function is first invoked,
+   since `const`/`let` are block-scoped but not hoisted the way
+   `function` declarations are. Observers, then renderers, then calls.
+================================================================= */
+
+/* ================= SHARED HELPERS ================= */
+function sparkPath(pts, w, h){
+  const max = Math.max(...pts), min = Math.min(...pts);
+  const nx = i => (i/(pts.length-1))*w;
+  const ny = v => h - ((v-min)/(max-min || 1))*(h-4) - 2;
+  let d = `M${nx(0)},${ny(pts[0])}`;
+  for(let i=1;i<pts.length;i++) d += ` L${nx(i)},${ny(pts[i])}`;
+  return d;
+}
+
+function animateValue(el, from, to, { prefix='', suffix='', duration=1000, decimals=0 } = {}){
+  const start = performance.now();
+  function tick(now){
+    const p = Math.min((now-start)/duration, 1);
+    const eased = 1 - Math.pow(1-p, 3);
+    const val = from + (to-from)*eased;
+    el.textContent = prefix + val.toLocaleString(undefined, { minimumFractionDigits:decimals, maximumFractionDigits:decimals }) + suffix;
+    if(p < 1) requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+}
+
+/* ================= SCROLL REVEAL OBSERVERS (declared first) ================= */
+const io = new IntersectionObserver(entries => {
+  entries.forEach(en => { if(en.isIntersecting){ en.target.classList.add('is-visible'); io.unobserve(en.target); } });
+}, { threshold:.16 });
+
+const counterIo = new IntersectionObserver(entries => {
+  entries.forEach(en => {
+    if(en.isIntersecting){
+      const el = en.target;
+      const target = parseFloat(el.dataset.target);
+      const prefix = el.dataset.prefix || '';
+      const suffix = el.dataset.suffix || '';
+      const decimals = el.dataset.target.includes('.') ? 1 : 0;
+      animateValue(el, 0, target, { prefix, suffix, duration:1300, decimals });
+      counterIo.unobserve(el);
+    }
+  });
+}, { threshold:.5 });
+
+function observeCards(){ document.querySelectorAll('.card:not(.is-visible)').forEach(c => io.observe(c)); }
+
+/* ================= MARKET CARDS ================= */
+const MARKETS = [
+  { cat:'crypto',   tag:'Crypto',   q:'Will BTC close above $120,000 before December 31?',           yes:41, meta:['$2.4M vol','8.1K traders'], trend:'up',   pts:[10,14,12,18,16,22,20,26,24,28] },
+  { cat:'politics', tag:'Politics', q:'Will the Fed cut interest rates at the next meeting?',         yes:47, meta:['$5.1M vol','14K traders'],  trend:'down', pts:[30,28,26,27,24,22,23,20,19,18] },
+  { cat:'sports',   tag:'Sports',   q:'Will Team Nova win the Apex Championship Finals?',             yes:78, meta:['$1.2M vol','5.4K traders'], trend:'up',   pts:[18,20,24,26,30,32,34,36,38,40] },
+  { cat:'culture',  tag:'Culture',  q:'Will the next Best Picture winner be an original screenplay?', yes:55, meta:['$640K vol','2.1K traders'],trend:'up',   pts:[16,18,17,20,22,21,24,26,25,28] },
+  { cat:'tech',     tag:'Tech',     q:'Will a major lab ship a 10-trillion parameter model in 2026?', yes:23, meta:['$980K vol','3.3K traders'], trend:'down', pts:[26,24,25,22,20,18,17,15,14,12] },
+  { cat:'climate',  tag:'Climate',  q:'Will 2026 be recorded as the hottest year on record?',         yes:69, meta:['$1.8M vol','6.7K traders'], trend:'up',   pts:[20,22,24,23,26,28,30,32,31,34] },
+  { cat:'politics', tag:'Politics', q:'Will the EU pass the Digital Markets amendment by Q4?',        yes:62, meta:['$3.3M vol','9.9K traders'], trend:'up',   pts:[14,16,15,18,20,22,24,26,28,30] },
+  { cat:'crypto',   tag:'Crypto',   q:'Will Ethereum average gas fees drop below 1 gwei this month?', yes:33, meta:['$710K vol','2.8K traders'], trend:'down', pts:[24,22,23,20,18,19,16,15,13,12] },
+  { cat:'sports',   tag:'Sports',   q:'Will the Riverside Open see a first-time champion this year?', yes:44, meta:['$540K vol','1.9K traders'], trend:'up',   pts:[12,14,13,16,18,17,20,22,21,24] },
+];
+
+const grid = document.getElementById('cardGrid');
+function renderCards(filter='all'){
+  grid.innerHTML = '';
+  MARKETS.filter(m => filter==='all' || m.cat===filter).forEach(m => {
+    const line = sparkPath(m.pts, 200, 38);
+    const color = m.trend === 'up' ? 'var(--pos)' : 'var(--neg)';
+    const chgVal = (m.trend === 'up' ? '+' : '-') + (2 + Math.random()*6).toFixed(1) + '%';
+    const card = document.createElement('article');
+    card.className = 'card';
+    card.innerHTML = `
+      <div class="card__top">
+        <span class="card__tag">${m.tag}</span>
+        <span class="card__chg ${m.trend}">${chgVal}</span>
+      </div>
+      <h3>${m.q}</h3>
+      <svg class="spark" viewBox="0 0 200 38" preserveAspectRatio="none">
+        <path class="line" d="${line}" stroke="${color}"></path>
+      </svg>
+      <div class="probar"><div class="probar__fill" style="width:${m.yes}%"></div></div>
+      <div class="card__prices">
+        <div class="price-btn price-btn--yes"><span class="lbl">YES</span><span class="val">${m.yes}¢</span></div>
+        <div class="price-btn price-btn--no"><span class="lbl">NO</span><span class="val">${100-m.yes}¢</span></div>
+      </div>
+      <div class="card__meta"><span>${m.meta[0]}</span><span>${m.meta[1]}</span></div>
+    `;
+    grid.appendChild(card);
+  });
+  observeCards();
+}
+renderCards();
+
+document.getElementById('tabs').addEventListener('click', e => {
+  const tab = e.target.closest('.tab');
+  if(!tab) return;
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('is-active'));
+  tab.classList.add('is-active');
+  renderCards(tab.dataset.filter);
+});
+
+/* ================= HERO PROOF COUNTERS ================= */
+document.querySelectorAll('[data-counter]').forEach(el => counterIo.observe(el));
+
+/* ================= TICKER ================= */
+const tickerItems = [
+  { t:'BTC &gt; $120K', v:'41¢', d:'up' },
+  { t:'FED CUTS RATES', v:'47¢', d:'down' },
+  { t:'NOVA WINS FINALS', v:'78¢', d:'up' },
+  { t:'HOTTEST YEAR', v:'69¢', d:'up' },
+  { t:'AI 10T MODEL', v:'23¢', d:'down' },
+  { t:'ETH GAS &lt; 1GWEI', v:'33¢', d:'down' },
+  { t:'EU DMA AMENDMENT', v:'62¢', d:'up' },
+  { t:'BEST PICTURE ORIGINAL', v:'55¢', d:'up' },
+];
+const track = document.getElementById('tickerTrack');
+(function buildTicker(){
+  const set = tickerItems.map(it => `<span class="ticker__item"><b>${it.t}</b><span class="${it.d}">${it.v} ${it.d==='up' ? '▲' : '▼'}</span></span>`).join('');
+  track.innerHTML = set + set;
+})();
+
+/* ================= MARKET WATCH PANEL ================= */
+const watchData = [
+  { name:'BTC &gt; $120K', cat:'Crypto',   price:41, pts:[10,14,12,18,16,22,20,26] },
+  { name:'Fed cuts rates', cat:'Politics', price:47, pts:[30,28,26,27,24,22,23,20] },
+  { name:'Nova wins finals', cat:'Sports', price:78, pts:[18,20,24,26,30,32,34,36] },
+  { name:'Hottest year on record', cat:'Climate', price:69, pts:[20,22,24,23,26,28,30,32] },
+  { name:'EU DMA amendment', cat:'Politics', price:62, pts:[14,16,15,18,20,22,24,26] },
+];
+const watchBody = document.getElementById('watchBody');
+const watchRows = [];
+
+watchData.forEach(d => {
+  const row = document.createElement('div');
+  row.className = 'watch__row';
+  const path = sparkPath(d.pts, 64, 22);
+  row.innerHTML = `
+    <div><span class="watch__name">${d.name}</span><span class="watch__cat">${d.cat}</span></div>
+    <svg class="watch__spark" viewBox="0 0 64 22" preserveAspectRatio="none"><path d="${path}" stroke="var(--ink-3)"></path></svg>
+    <span class="watch__price">${d.price}¢</span>
+    <span class="watch__chg up">+0.0</span>
+  `;
+  watchBody.appendChild(row);
+  watchRows.push({ el:row, priceEl: row.querySelector('.watch__price'), chgEl: row.querySelector('.watch__chg'), sparkEl: row.querySelector('.watch__spark path'), val:d.price, pts:[...d.pts] });
+});
+
+function jitterWatch(){
+  watchRows.forEach(r => {
+    const delta = Math.random()*5 - 2.4;
+    let next = Math.max(1, Math.min(99, Math.round(r.val + delta)));
+    const dir = next >= r.val ? 'up' : 'down';
+    r.chgEl.textContent = (dir === 'up' ? '+' : '') + (next - r.val).toFixed(0);
+    r.chgEl.className = 'watch__chg ' + dir;
+    r.priceEl.textContent = next + '¢';
+    r.pts.push(next); r.pts.shift();
+    r.sparkEl.setAttribute('d', sparkPath(r.pts, 64, 22));
+    r.sparkEl.setAttribute('stroke', dir === 'up' ? 'var(--pos)' : 'var(--neg)');
+    r.val = next;
+    r.el.classList.remove('flash-up','flash-down');
+    void r.el.offsetWidth;
+    r.el.classList.add(dir === 'up' ? 'flash-up' : 'flash-down');
+    setTimeout(() => r.el.classList.remove('flash-up','flash-down'), 700);
+  });
+}
+setInterval(jitterWatch, 2800);
+
+/* ================= DASHBOARD ================= */
+const RANGES = {
+  '1D': { pts:[16800,17050,16920,17240,17480,17390,17650,17820,17960,18120,18040,18420], balance:18420, change:4.2 },
+  '1W': { pts:[15200,15800,15600,16400,16100,16900,17300,17100,17600,17980],              balance:17980, change:8.6 },
+  '1M': { pts:[12100,12800,12500,13600,13100,14200,13900,15000,15600,16210],              balance:16210, change:21.4 },
+  '1Y': { pts:[4200,5100,4800,6300,7100,6800,8200,7900,9100,9800],                        balance:9800,  change:138.2 },
+};
+
+const dashLineEl  = document.querySelector('#dashLine');
+const dashAreaEl  = document.querySelector('#dashArea');
+const dashDotEl   = document.querySelector('#dashDot');
+const dashPulseEl = document.querySelector('#dashPulse');
+const dashBalanceEl = document.getElementById('dashBalance');
+const dashChangeEl  = document.getElementById('dashChange');
+
+let dashCurrentBalance = 0;
+
+function renderChart(rangeKey, animate){
+  const r = RANGES[rangeKey];
+  const w = 720, h = 200;
+  const max = Math.max(...r.pts), min = Math.min(...r.pts);
+  const nx = i => (i/(r.pts.length-1))*w;
+  const ny = v => h - ((v-min)/(max-min || 1))*(h-34) - 17;
+
+  let lineD = `M${nx(0)},${ny(r.pts[0])}`;
+  for(let i=1;i<r.pts.length;i++) lineD += ` L${nx(i)},${ny(r.pts[i])}`;
+  const areaD = lineD + ` L${w},${h} L0,${h} Z`;
+
+  dashLineEl.setAttribute('d', lineD);
+  dashAreaEl.setAttribute('d', areaD);
+
+  const lastX = nx(r.pts.length-1), lastY = ny(r.pts[r.pts.length-1]);
+  dashDotEl.setAttribute('cx', lastX);  dashDotEl.setAttribute('cy', lastY);
+  dashPulseEl.setAttribute('cx', lastX); dashPulseEl.setAttribute('cy', lastY);
+
+  const len = dashLineEl.getTotalLength();
+  dashLineEl.style.transition = 'none';
+  dashLineEl.style.strokeDasharray = len;
+  dashLineEl.style.strokeDashoffset = animate ? len : 0;
+  dashAreaEl.style.transition = 'none';
+  dashAreaEl.style.opacity = animate ? 0 : 1;
+  dashPulseEl.style.opacity = 0;
+  // force reflow so the transition below actually animates
+  dashLineEl.getBoundingClientRect();
+
+  if(animate){
+    dashLineEl.style.transition = 'stroke-dashoffset 1.15s cubic-bezier(.2,.7,.2,1)';
+    dashLineEl.style.strokeDashoffset = 0;
+    dashAreaEl.style.transition = 'opacity 1s ease .35s';
+    dashAreaEl.style.opacity = 1;
+    setTimeout(() => { dashPulseEl.style.transition = 'opacity .3s'; dashPulseEl.style.opacity = 1; }, 1150);
+  } else {
+    dashPulseEl.style.opacity = 1;
+  }
+
+  // animate balance + change label
+  const from = dashCurrentBalance;
+  animateValue(dashBalanceEl, from, r.balance, { prefix:'$', duration:900, decimals:0 });
+  dashCurrentBalance = r.balance;
+  dashChangeEl.textContent = (r.change >= 0 ? '+' : '') + r.change.toFixed(1) + '% ' + (rangeKey === '1D' ? 'today' : rangeKey.toLowerCase());
+  dashChangeEl.className = 'dash__change ' + (r.change >= 0 ? 'up' : 'down');
+}
+
+document.getElementById('dashRanges').addEventListener('click', e => {
+  const btn = e.target.closest('.range-btn');
+  if(!btn) return;
+  document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('is-active'));
+  btn.classList.add('is-active');
+  renderChart(btn.dataset.range, true);
+});
+
+/* ---- positions table ---- */
+const POSITIONS = [
+  { name:'BTC &gt; $120K',          avg:34, cur:41, pts:[10,14,12,18,16,22,20,26] },
+  { name:'Fed cuts rates',           avg:52, cur:47, pts:[30,28,26,27,24,22,23,20] },
+  { name:'Nova wins finals',         avg:61, cur:78, pts:[18,20,24,26,30,32,34,36] },
+  { name:'Hottest year on record',   avg:58, cur:69, pts:[20,22,24,23,26,28,30,32] },
+];
+const posBody = document.getElementById('posBody');
+POSITIONS.forEach(p => {
+  const pnl = ((p.cur - p.avg) / p.avg * 100);
+  const dir = pnl >= 0 ? 'up' : 'down';
+  const path = sparkPath(p.pts, 56, 20);
+  const row = document.createElement('div');
+  row.className = 'pos-row';
+  row.innerHTML = `
+    <span class="pos-name">${p.name}</span>
+    <svg class="pos-spark" viewBox="0 0 56 20" preserveAspectRatio="none"><path d="${path}" stroke="${dir==='up' ? 'var(--pos)' : 'var(--neg)'}"></path></svg>
+    <span class="pos-val">${p.avg}¢</span>
+    <span class="pos-val">${p.cur}¢</span>
+    <span class="pos-pnl ${dir}">${pnl >= 0 ? '+' : ''}${pnl.toFixed(1)}%</span>
+  `;
+  posBody.appendChild(row);
+});
+
+/* ---- reveal the whole dashboard panel + stagger the position rows + draw the chart ---- */
+const dashIo = new IntersectionObserver(entries => {
+  entries.forEach(en => {
+    if(en.isIntersecting){
+      en.target.classList.add('is-visible');
+      renderChart('1D', true);
+      document.querySelectorAll('.pos-row').forEach((row, i) => {
+        setTimeout(() => row.classList.add('is-visible'), 200 + i*90);
+      });
+      dashIo.unobserve(en.target);
+    }
+  });
+}, { threshold:.2 });
+dashIo.observe(document.getElementById('dashPanel'));
+
+/* ================= MOBILE NAV ================= */
+document.querySelector('.nav__toggle').addEventListener('click', () => {
+  const links = document.querySelector('.nav__links');
+  const open = links.style.display === 'flex';
+  links.style.cssText = open ? '' : 'display:flex; position:absolute; top:68px; left:0; right:0; background:#fff; flex-direction:column; padding:18px 20px 24px; border-bottom:1px solid #E4E7EC; gap:16px;';
+});
+</script>
+
+</body>
+</html>

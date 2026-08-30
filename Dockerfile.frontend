@@ -1,0 +1,31 @@
+# Frontend image for the Ketsa Next.js app (multi-stage production build).
+# Uses Next's `output: 'standalone'` for a slim, self-contained runtime.
+FROM node:22-alpine AS deps
+WORKDIR /srv/app
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+
+# --- Build stage ---
+FROM node:22-alpine AS builder
+WORKDIR /srv/app
+COPY --from=deps /srv/app/node_modules ./node_modules
+COPY frontend/ ./
+# Server-side data fetching falls back to bundled data, so the build does not
+# require a running backend.
+RUN npm run build
+
+# --- Runtime stage (non-root) ---
+FROM node:22-alpine AS runner
+WORKDIR /srv/app
+ENV NODE_ENV=production
+
+RUN addgroup -S -g 1001 nodejs && adduser -S -g 1001 -u 1001 nextjs
+
+COPY --from=builder --chown=nextjs:nodejs /srv/app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /srv/app/.next/static ./.next/static
+# If the project adds a public/ dir later, copy it here.
+# COPY --from=builder --chown=nextjs:nodejs /srv/app/public ./public
+
+USER nextjs
+EXPOSE 3000
+CMD ["node", "server.js"]

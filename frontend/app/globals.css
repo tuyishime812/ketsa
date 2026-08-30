@@ -1,0 +1,108 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --ease-ketsa: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  @apply bg-paper text-ink antialiased;
+  font-family: var(--font-inter), 'Inter', sans-serif;
+  line-height: 1.55;
+}
+
+::selection {
+  background: theme('colors.brand');
+  color: #fff;
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-[7px] border border-transparent px-[18px] py-[10px] text-sm font-semibold transition-all duration-200 ease-ketsa;
+  }
+  .btn--ghost {
+    @apply border-line-strong text-ink hover:border-ink hover:bg-paper-alt;
+  }
+  .btn--brand {
+    @apply bg-ink text-white hover:bg-brand-ink hover:-translate-y-[1px];
+  }
+  .btn--lg {
+    @apply rounded-lg px-6 py-[13px] text-[15px];
+  }
+  .tab {
+    @apply rounded-full border border-line-strong bg-paper px-[17px] py-[9px] text-[13.5px] font-medium leading-none text-ink-2 transition-all duration-200 ease-ketsa hover:border-ink-3 hover:bg-paper-alt hover:text-ink;
+  }
+  .tab.is-active {
+    @apply border-ink bg-ink font-semibold text-white;
+  }
+  .price-btn {
+    @apply flex flex-1 items-baseline justify-center gap-[6px] rounded-[6px] border border-line-strong px-2 py-[9px] transition-all duration-200 ease-ketsa;
+  }
+  .price-btn .lbl {
+    @apply text-[10.5px] font-semibold tracking-[.03em] text-ink-3;
+  }
+  .price-btn .val {
+    @apply font-mono text-[13.5px] font-semibold text-ink;
+  }
+  .price-btn--yes:hover {
+    @apply border-pos bg-pos-tint;
+  }
+  .price-btn--yes:hover .val {
+    @apply text-pos;
+  }
+  .price-btn--no:hover {
+    @apply border-neg bg-neg-tint;
+  }
+  .price-btn--no:hover .val {
+    @apply text-neg;
+  }
+  .stroke-line {
+    stroke: theme('colors.line');
+    stroke-width: 1;
+  }
+  .section {
+    @apply py-[88px];
+  }
+  .section--alt {
+    @apply bg-paper-alt;
+  }
+}
+
+@layer base {
+  a {
+    @apply text-inherit no-underline;
+  }
+  ul {
+    @apply list-none;
+  }
+  button {
+    font-family: inherit;
+    cursor: pointer;
+  }
+  svg {
+    display: block;
+  }
+}
+
+@layer utilities {
+  .wrap {
+    @apply mx-auto max-w-[1220px] px-8;
+  }
+  .reveal-init {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}

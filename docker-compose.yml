@@ -1,0 +1,38 @@
+# Ketsa local/dev orchestration.
+#
+#   docker compose up --build
+#
+# brings up the FastAPI backend (api:8000) and the Next.js frontend (web:3000).
+# Open http://localhost:3000 in your browser.
+#
+# Production notes:
+#   * Set KETSA_ALLOWED_ORIGINS to the real hosted frontend origin.
+#   * Put the services behind a TLS-terminating reverse proxy (Caddy/Nginx/Traefik).
+#   * The in-memory rate limiter is per-instance; put a shared limiter in front
+#     if you scale to multiple backend replicas.
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    environment:
+      - KETSA_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+      - KETSA_EXPOSE_DOCS=0
+      - KETSA_RATE_LIMIT_PER_MIN=120
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    environment:
+      # Next.js server fetches data from the api service over the compose network.
+      - KETSA_BACKEND_URL=http://api:8000
+    depends_on:
+      - api
+    ports:
+      - "3000:3000"
+    restart: unless-stopped

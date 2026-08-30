@@ -1,0 +1,26 @@
+# Backend image for the Ketsa FastAPI service.
+# Runs as a non-root user to follow least privilege.
+FROM python:3.14-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /srv/app
+
+# Install runtime dependencies first for better layer caching.
+COPY backend/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code.
+COPY backend/app ./app
+
+# Run as an unprivileged user (no shell/default shell for defense in depth).
+RUN useradd --create-home --shell /usr/sbin/nologin ketsa
+USER ketsa
+
+EXPOSE 8000
+
+# Single worker is fine for this IO-light, read-only service. If you scale it,
+# point a reverse proxy at it and enable a shared rate limiter if needed.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

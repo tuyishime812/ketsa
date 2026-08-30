@@ -1,0 +1,8 @@
+# Test / development-only dependencies for the Ketsa backend.
+# Install alongside the runtime deps:
+#   pip install -r requirements.txt -r requirements-dev.txt
+# The FastAPI TestClient (starlette 1.6) requires the httpx2 package.
+-r requirements.txt
+
+httpx2==2.12.0
+pytest==9.1.1
