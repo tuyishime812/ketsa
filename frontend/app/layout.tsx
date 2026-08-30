@@ -28,6 +28,20 @@ export const metadata: Metadata = {
   title: 'Ketsa — Trade on what happens next',
   description:
     'Ketsa is a real-time market for the outcomes that matter — politics, crypto, sport, and culture. Prices move with the crowd, not a bookmaker.',
+  metadataBase: new URL(process.env.KETSA_SITE_URL || 'http://localhost:3000'),
+  openGraph: {
+    title: 'Ketsa — Trade on what happens next',
+    description:
+      'A real-time market for the outcomes that matter. Prices move with the crowd, not a bookmaker.',
+    type: 'website',
+    siteName: 'Ketsa',
+  },
+  twitter: {
+    card: 'summary',
+    title: 'Ketsa — Trade on what happens next',
+    description:
+      'A real-time market for the outcomes that matter. Prices move with the crowd, not a bookmaker.',
+  },
 };
 
 export default function RootLayout({
