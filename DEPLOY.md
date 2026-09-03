@@ -38,6 +38,8 @@ Pick one host (Railway, Render, or Fly). All run the same FastAPI app.
    | `KETSA_ALLOWED_ORIGINS` | your real frontend origin → set in Step 2, e.g. `https://ketsa.vercel.app` (comma-separated for extras) |
    | `KETSA_EXPOSE_DOCS` | `0` (keep the public API schema hidden) |
    | `KETSA_RATE_LIMIT_PER_MIN` | `120` (or `0` if the provider's proxy handles throttling) |
+   | `KETSA_ADMIN_PASSWORD` | **required** — a strong, unique password for the `/admin` panel (see Step 2b) |
+   | `KETSA_DB_PATH` | **recommended** — point at a persistent disk/volume path so admin edits survive redeploys (see Step 2b) |
 5. Deploy → note the **public HTTPS URL** (e.g. `https://ketsa-api.onrender.com`).
    Sanity check: `curl https://<your-backend>/api/health` → `{"status":"ok"}`.
 
@@ -65,6 +67,45 @@ Pick one host (Railway, Render, or Fly). All run the same FastAPI app.
 
 ---
 
+## Step 2b — Admin panel and persistent data
+
+The `/admin` dashboard lets site owners edit all content (markets, hero,
+ticker, watch, dashboard, footer, CTA/steps/section copy) from the browser
+with no code changes. It lives on the **frontend** but talks to the backend's
+protected `/api/admin/*` through the same-origin `/api` path.
+
+**Make sure these backend env vars are set (see Step 1), then:**
+
+1. **Persistent storage (do this first).** `KETSA_DB_PATH` defaults to
+   `backend/ketsa.db`, which is wiped on every redeploy on most PaaS unless
+   you attach a volume. Add a persistent volume and set
+   `KETSA_DB_PATH=/data/ketsa.db` (or similar) so saved edits survive. Without
+   this, admin changes are lost whenever the backend restarts/redeploys.
+   - **Railway:** add a *Volume* on the service and mount it, then set the path
+     to a file inside the mount.
+   - **Render:** add a *Persistent Disk*, then set `KETSA_DB_PATH` to a path
+     under the disk mount (e.g. `/var/data/ketsa.db`).
+   - **Fly.io:** add a *volume* and reference it via the env var.
+2. **Set the password.** `KETSA_ADMIN_PASSWORD` must be a strong, unique
+   value. It is the only key to the whole site. The backend reads it from the
+   environment and **never** falls back to a committed secret. In production it
+   does **not** default to `ketsa-admin` — leave it unset only for local dev.
+3. **Log in.** Open `https://<your-frontend>/admin`, enter the password, and
+   you'll get the dashboard with a sidebar of editors. Changes save
+   immediately and appear on the public site.
+
+> **Note on the dev rewrite vs. production.** In local dev, `next.config.js`
+> rewrites `/api/*` → the backend so the browser calls it same-origin. In
+> **production**, the public page fetches the backend **server-side** directly
+> (see "How data gets from backend → page"), so `/admin` uses the frontend's
+> own `/api` path which Vercel routes as a serverless function that proxies to
+> `KETSA_BACKEND_URL`. Because the admin API is same-origin to the frontend,
+> the backend's CORS allowlist does not need to grant the admin origin, and the
+> CSP header (`default-src 'self'`) already permits `/api` calls. Admin
+> requests still require the bearer token from login.
+
+---
+
 ## Step 3 — Custom domain (optional)
 
 - **Frontend:** add the domain in Vercel → Project → Settings → Domains.
@@ -81,6 +122,10 @@ Pick one host (Railway, Render, or Fly). All run the same FastAPI app.
       `KETSA_SITE_URL` was set at build time).
 - [ ] `https://<frontend>/sitemap.xml` returns an XML urlset.
 - [ ] Backend health check returns `ok`.
+- [ ] `https://<frontend>/admin` loads the login page; a wrong password is
+      rejected and the correct `KETSA_ADMIN_PASSWORD` logs in.
+- [ ] Admin edit persists after a backend restart (i.e. `KETSA_DB_PATH` points
+      at a real persistent volume — see Step 2b).
 - [ ] Headers present in browser devtools on the homepage: `Content-Security-Policy`,
       `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`.
 
@@ -106,6 +151,14 @@ passes data down as props. The client components (`Markets`, `Dashboard`,
 "feel". This is exactly the design already in the repo — no extra proxy config
 is required.
 
+### Admin writes in production
+The **admin panel is the one place the browser does call `/api`** in production:
+`/admin` posts JSON to `/api/admin/*`, which Vercel's serverless functions
+route to `KETSA_BACKEND_URL` same-origin to the frontend origin. Auth is a
+bearer token from `POST /api/admin/login` (password = `KETSA_ADMIN_PASSWORD`),
+held in `localStorage`. Writes update the backend's SQLite, so a page refresh
+(and every subsequent visitor) sees the change.
+
 ---
 
 ## Alternative: run everything with Docker (no Vercel)
@@ -119,5 +172,7 @@ docker compose up --build -d
 ```
 
 Place a TLS-terminating reverse proxy (Caddy/Nginx/Traefik) in front. Set
-`KETSA_ALLOWED_ORIGINS` and `KETSA_BACKEND_URL` in `docker-compose.yml` (or the
-compose env). Both images run as non-root users.
+`KETSA_ALLOWED_ORIGINS`, `KETSA_BACKEND_URL`, and a strong
+`KETSA_ADMIN_PASSWORD` in `docker-compose.yml` (or the compose env), and mount
+the named volume to `KETSA_DB_PATH` so admin edits persist. Both images run as
+non-root users.
