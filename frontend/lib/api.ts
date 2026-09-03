@@ -37,3 +37,89 @@ export async function fetchWatch(): Promise<WatchItem[]> {
 export async function fetchMarket(id: string): Promise<Market> {
   return fetchJson<Market>(`${API_BASE}/api/markets/${encodeURIComponent(id)}`);
 }
+
+/**
+ * Admin API helpers.
+ *
+ * These talk to the same-origin `/api/*` proxy at runtime (see next.config.js),
+ * which forwards to FastAPI. All authenticated calls send the bearer token
+ * returned by `adminLogin`. Tokens are stored in localStorage by the UI.
+ */
+
+export interface AdminLoginResult {
+  token: string;
+}
+
+/** Path used client-side. Public read helper below uses API_BASE directly. */
+const ADMIN_BASE = '/api/admin';
+
+export async function adminLogin(password: string): Promise<string> {
+  const res = await fetch(`${ADMIN_BASE}/login`, {
+    method: 'POST',
+    credentials: 'omit',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password }),
+  });
+  if (!res.ok) {
+    // Surface the server's reason detail (e.g. invalid password).
+    let detail = 'Login failed';
+    try {
+      const body = await res.json();
+      detail = body?.detail || detail;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail);
+  }
+  const data = (await res.json()) as AdminLoginResult;
+  return data.token;
+}
+
+export class AdminApiError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+async function adminFetch<T>(
+  token: string,
+  path: string,
+  init?: RequestInit,
+): Promise<T> {
+  const res = await fetch(`${ADMIN_BASE}${path}`, {
+    ...init,
+    credentials: 'omit',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+      ...(init?.headers ?? {}),
+    },
+  });
+  if (res.status === 401) {
+    throw new AdminApiError(401, 'Unauthorized — please log in again');
+  }
+  if (!res.ok) {
+    throw new AdminApiError(res.status, `Request failed (${res.status}): ${path}`);
+  }
+  if (res.status === 204) return undefined as T;
+  return (await res.json()) as T;
+}
+
+export function adminGet<T>(token: string, path: string): Promise<T> {
+  return adminFetch<T>(token, path);
+}
+
+export function adminPost<T>(token: string, path: string, body: unknown): Promise<T> {
+  return adminFetch<T>(token, path, { method: 'POST', body: JSON.stringify(body) });
+}
+
+export function adminPut<T>(token: string, path: string, body: unknown): Promise<T> {
+  return adminFetch<T>(token, path, { method: 'PUT', body: JSON.stringify(body) });
+}
+
+export function adminDelete<T>(token: string, path: string): Promise<T> {
+  return adminFetch<T>(token, path, { method: 'DELETE' });
+}
+

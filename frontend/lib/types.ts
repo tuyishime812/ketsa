@@ -76,4 +76,68 @@ export interface HomeData {
   dashboard: DashboardData;
   stats: PortfolioStats;
   proof: Proof;
+  settings?: SiteSettings;
 }
+
+// ---------------------------------------------------------------------------
+// Admin + editable content types
+// ---------------------------------------------------------------------------
+
+export interface HeroContent {
+  headline_1: string;
+  headline_accent: string;
+  description: string;
+  badge: string;
+}
+
+export interface CtaContent {
+  title: string;
+  description: string;
+  button: string;
+}
+
+export interface StepItem {
+  num: string;
+  title: string;
+  body: string;
+}
+
+export interface StepsContent {
+  kicker: string;
+  title: string;
+  description: string;
+  items: StepItem[];
+}
+
+export interface FooterLink {
+  label: string;
+  href: string;
+}
+
+export interface FooterColumn {
+  title: string;
+  links: FooterLink[];
+}
+
+export interface FooterContent {
+  tagline: string;
+  columns: FooterColumn[];
+  copyright: string;
+  disclaimer: string;
+}
+
+export interface SectionCopy {
+  kicker: string;
+  title: string;
+  description: string;
+}
+
+export interface SiteSettings {
+  hero: HeroContent;
+  cta: CtaContent;
+  steps: StepsContent;
+  footer: FooterContent;
+  markets_section: SectionCopy;
+  dashboard_section: SectionCopy;
+}
+

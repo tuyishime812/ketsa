@@ -1,7 +1,93 @@
 // Bundled fallback data mirroring the FastAPI backend seed.
 // Used so the page renders even if the backend isn't running (dev convenience).
 
-import type { HomeData } from './types';
+import type { HomeData, SiteSettings } from './types';
+
+export const fallbackSettings: SiteSettings = {
+  hero: {
+    headline_1: 'Trade on ',
+    headline_accent: 'what happens next.',
+    description:
+      'Ketsa is a real-time market for the outcomes that matter — politics, crypto, sport, and culture. Prices move with the crowd, not a bookmaker, and you can exit the instant the odds turn your way.',
+    badge: '$97.4M traded this week',
+  },
+  cta: {
+    title: 'Markets are opinions with a price.',
+    description:
+      'Put a number on what you believe. Ketsa turns your read on the world into a position you can trade.',
+    button: 'Create an account',
+  },
+  steps: {
+    kicker: 'Mechanics',
+    title: 'Three steps, one price',
+    description:
+      'No order forms, no fine print. Shares trade between 1¢ and 99¢ based on what the market believes.',
+    items: [
+      {
+        num: '01',
+        title: 'Pick a market',
+        body: 'Browse thousands of questions on politics, crypto, sport, and culture — each priced by real trading, not a bookmaker\u2019s line.',
+      },
+      {
+        num: '02',
+        title: 'Buy Yes or No',
+        body: 'Shares cost between 1¢ and 99¢. If you\u2019re right, each share resolves to $1. If you\u2019re wrong, it resolves to zero.',
+      },
+      {
+        num: '03',
+        title: 'Cash out anytime',
+        body: 'Sell your position the moment the odds move your way — you don\u2019t have to wait for the market to resolve.',
+      },
+    ],
+  },
+  footer: {
+    tagline:
+      "A real-time market for the questions everyone's arguing about. Trade the odds, not the opinions.",
+    columns: [
+      {
+        title: 'Product',
+        links: [
+          { label: 'Markets', href: '#markets' },
+          { label: 'Dashboard', href: '#dashboard' },
+          { label: 'How it works', href: '#how' },
+          { label: 'Pricing', href: '#top' },
+        ],
+      },
+      {
+        title: 'Company',
+        links: [
+          { label: 'About', href: '#top' },
+          { label: 'Careers', href: '#top' },
+          { label: 'Blog', href: '#top' },
+          { label: 'Contact', href: '#top' },
+        ],
+      },
+      {
+        title: 'Resources',
+        links: [
+          { label: 'Docs', href: '#top' },
+          { label: 'API', href: '#top' },
+          { label: 'Status', href: '#top' },
+          { label: 'Support', href: '#top' },
+        ],
+      },
+    ],
+    copyright: '© 2026 Ketsa. All rights reserved.',
+    disclaimer: 'Trading involves risk. Markets resolve based on published rules.',
+  },
+  markets_section: {
+    kicker: 'Order book',
+    title: 'Markets moving right now',
+    description:
+      'Every price is a probability. Buy the side you believe, sell whenever the market catches up to you.',
+  },
+  dashboard_section: {
+    kicker: 'Dashboard',
+    title: 'Your positions, priced live',
+    description:
+      "Track performance across every market you're in, updated in real time as odds move.",
+  },
+};
 
 export const fallbackHomeData: HomeData = {
   markets: {
@@ -73,4 +159,5 @@ export const fallbackHomeData: HomeData = {
   },
   stats: { pnl: 3120, open_positions: 4, win_rate: 68 },
   proof: { traders_k: 412, live_markets: 1284, total_volume_m: 97.4 },
+  settings: fallbackSettings,
 };

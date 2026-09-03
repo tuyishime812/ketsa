@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import type { DashboardData, PortfolioStats, Position } from '@/lib/types';
+import type { DashboardData, PortfolioStats, Position, SectionCopy } from '@/lib/types';
 import { areaPath, fmt, sparkPath, trendColor } from '@/lib/utils';
 
 const RANGE_KEYS = ['1D', '1W', '1M', '1Y'] as const;
@@ -9,9 +9,11 @@ const RANGE_KEYS = ['1D', '1W', '1M', '1Y'] as const;
 export default function Dashboard({
   data,
   stats,
+  copy,
 }: {
   data: DashboardData;
   stats: PortfolioStats;
+  copy: SectionCopy;
 }) {
   const [range, setRange] = useState<'1D' | '1W' | '1M' | '1Y'>('1D');
   const [posRevealed, setPosRevealed] = useState(false);
@@ -65,9 +67,9 @@ export default function Dashboard({
     <section className="section section--alt" id="dashboard">
       <div className="wrap">
         <SectionHead
-          kicker="Dashboard"
-          title="Your positions, priced live"
-          sub="Track performance across every market you're in, updated in real time as odds move."
+          kicker={copy.kicker}
+          title={copy.title}
+          sub={copy.description}
         />
 
         <div

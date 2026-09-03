@@ -1,34 +1,6 @@
-const FOOT_LINKS: { title: string; links: { label: string; href: string }[] }[] = [
-  {
-    title: 'Product',
-    links: [
-      { label: 'Markets', href: '#markets' },
-      { label: 'Dashboard', href: '#dashboard' },
-      { label: 'How it works', href: '#how' },
-      { label: 'Pricing', href: '#top' },
-    ],
-  },
-  {
-    title: 'Company',
-    links: [
-      { label: 'About', href: '#top' },
-      { label: 'Careers', href: '#top' },
-      { label: 'Blog', href: '#top' },
-      { label: 'Contact', href: '#top' },
-    ],
-  },
-  {
-    title: 'Resources',
-    links: [
-      { label: 'Docs', href: '#top' },
-      { label: 'API', href: '#top' },
-      { label: 'Status', href: '#top' },
-      { label: 'Support', href: '#top' },
-    ],
-  },
-];
+import type { FooterContent } from '@/lib/types';
 
-export default function Footer() {
+export default function Footer({ copy }: { copy: FooterContent }) {
   return (
     <footer className="border-t border-line pb-[30px] pt-[52px]">
       <div className="wrap">
@@ -39,12 +11,11 @@ export default function Footer() {
               Ketsa
             </div>
             <p className="mt-[14px] max-w-[250px] text-[13px] leading-[1.6] text-ink-3">
-              A real-time market for the questions everyone's arguing about.
-              Trade the odds, not the opinions.
+              {copy.tagline}
             </p>
           </div>
 
-          {FOOT_LINKS.map((col) => (
+          {copy.columns.map((col) => (
             <div key={col.title}>
               <h4 className="mb-[15px] text-[11.5px] uppercase tracking-[.05em] text-ink-3">
                 {col.title}
@@ -66,8 +37,8 @@ export default function Footer() {
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-[10px] border-t border-line pt-[22px] text-xs text-ink-3">
-          <span>© 2026 Ketsa. All rights reserved.</span>
-          <span>Trading involves risk. Markets resolve based on published rules.</span>
+          <span>{copy.copyright}</span>
+          <span>{copy.disclaimer}</span>
         </div>
       </div>
     </footer>

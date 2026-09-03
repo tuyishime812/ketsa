@@ -89,3 +89,4 @@ class HomeData(BaseModel):
     dashboard: DashboardData
     stats: PortfolioStats
     proof: Proof
+    settings: dict[str, object] = {}  # editable site content (hero, cta, steps, footer, ...)

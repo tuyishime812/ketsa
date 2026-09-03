@@ -4,3 +4,8 @@ __pycache__/
 .venv/
 venv/
 .env
+
+# Local SQLite database (created at runtime; never commit live data)
+*.db
+*.sqlite
+*.sqlite3

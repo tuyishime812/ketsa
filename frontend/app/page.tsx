@@ -23,18 +23,20 @@ export default async function HomePage() {
     // Fall back to the bundled seed data so the page still renders.
   }
 
+  const settings = data.settings ?? fallbackHomeData.settings!;
+
   return (
     <>
       <Nav />
       <main id="top">
-        <Hero watch={data.watch} proof={data.proof} />
+        <Hero watch={data.watch} proof={data.proof} copy={settings.hero} />
         <Ticker items={data.ticker} />
-        <Markets markets={data.markets.all} />
-        <Dashboard data={data.dashboard} stats={data.stats} />
-        <Steps />
-        <CtaBand />
+        <Markets markets={data.markets.all} copy={settings.markets_section} />
+        <Dashboard data={data.dashboard} stats={data.stats} copy={settings.dashboard_section} />
+        <Steps copy={settings.steps} />
+        <CtaBand copy={settings.cta} />
       </main>
-      <Footer />
+      <Footer copy={settings.footer} />
       {!fromApi && (
         <div className="fixed bottom-4 right-4 z-[200] rounded-full bg-brand px-4 py-2 font-mono text-xs text-white shadow-lg">
           Demo using bundled data — start the FastAPI backend to go live

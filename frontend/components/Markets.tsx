@@ -1,7 +1,7 @@
 'use client';
 
 import { forwardRef, useEffect, useMemo, useRef, useState } from 'react';
-import type { Category, Market } from '@/lib/types';
+import type { Category, Market, SectionCopy } from '@/lib/types';
 import { randomChange, sparkPath, trendColor } from '@/lib/utils';
 
 const TABS: { key: 'all' | Category; label: string }[] = [
@@ -14,7 +14,13 @@ const TABS: { key: 'all' | Category; label: string }[] = [
   { key: 'climate', label: 'Climate' },
 ];
 
-export default function Markets({ markets }: { markets: Market[] }) {
+export default function Markets({
+  markets,
+  copy,
+}: {
+  markets: Market[];
+  copy: SectionCopy;
+}) {
   const [filter, setFilter] = useState<'all' | Category>('all');
 
   const filtered = useMemo(
@@ -26,9 +32,9 @@ export default function Markets({ markets }: { markets: Market[] }) {
     <section className="section" id="markets">
       <div className="wrap">
         <SectionHead
-          kicker="Order book"
-          title="Markets moving right now"
-          sub="Every price is a probability. Buy the side you believe, sell whenever the market catches up to you."
+          kicker={copy.kicker}
+          title={copy.title}
+          sub={copy.description}
         />
 
         <div className="mb-8 flex flex-wrap gap-[10px]">
