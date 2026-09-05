@@ -5,11 +5,11 @@ import { useMemo } from 'react';
 import type { Market, Outcome, WalletPosition } from '@/lib/types';
 import { useWallet } from '@/components/wallet/WalletProvider';
 import { liveOf, useMarketFeed } from '@/components/market/MarketFeed';
+import PaymentsPanel from '@/components/payments/PaymentsPanel';
 import {
+  fmtBalance,
   fmtCents,
   fmtShares,
-  fmtUsd,
-  fmtUsdFull,
   timeAgo,
 } from '@/lib/utils';
 
@@ -115,15 +115,15 @@ export default function Portfolio({
             </h1>
           </div>
           <div className="flex gap-5 text-right">
-            <Summary label="Equity" value={fmtUsd(wallet.equity)} strong />
+            <Summary label="Equity" value={fmtBalance(wallet.equity, wallet.currency)} strong />
             <Summary
               label="Total P&L"
-              value={`${totalPnl >= 0 ? '+' : ''}${fmtUsd(totalPnl)}`}
+              value={`${totalPnl >= 0 ? '+' : ''}${fmtBalance(totalPnl, wallet.currency)}`}
               strong
               tone={totalPnl >= 0 ? 'pos' : 'neg'}
             />
-            <Summary label="Realized" value={fmtUsd(wallet.realized_pnl)} />
-            <Summary label="Open" value={fmtUsd(unrealized)} />
+            <Summary label="Realized" value={fmtBalance(wallet.realized_pnl, wallet.currency)} />
+            <Summary label="Open" value={fmtBalance(unrealized, wallet.currency)} />
           </div>
         </div>
 
@@ -154,7 +154,7 @@ export default function Portfolio({
                         {r.p.outcome.toUpperCase()} · {r.p.question}
                       </span>
                       <span className="font-mono text-[11.5px] font-semibold text-ink">
-                        {fmtUsd(r.value)}
+                        {fmtBalance(r.value, wallet.currency)}
                       </span>
                     </div>
                     <div className="flex items-center gap-[8px]">
@@ -176,7 +176,7 @@ export default function Portfolio({
                 ))}
               </div>
               <p className="mt-5 border-t border-line pt-4 font-mono text-[10px] uppercase tracking-[.06em] text-ink-3">
-                USDC balance {fmtUsdFull(wallet.usdc)}
+                Balance {fmtBalance(wallet.balance, wallet.currency)}
               </p>
             </div>
 
@@ -212,7 +212,7 @@ export default function Portfolio({
                     </div>
                     <div className="text-right">
                       <div className="font-mono text-[19px] font-semibold text-ink">
-                        {fmtUsd(r.value)}
+                        {fmtBalance(r.value, wallet.currency)}
                       </div>
                       <div
                         className={`font-mono text-[12px] font-semibold ${
@@ -220,7 +220,7 @@ export default function Portfolio({
                         }`}
                       >
                         {fmtCents(r.price - r.p.avg_price)} ·{' '}
-                        {fmtUsd(r.value - r.cost)}
+                        {fmtBalance(r.value - r.cost, wallet.currency)}
                       </div>
                     </div>
                   </div>
@@ -260,13 +260,15 @@ export default function Portfolio({
                           </Link>
                           <span>{fmtCents(t.price)}</span>
                           <span className="text-right text-ink-2">
-                            {fmtUsd(t.notional)}
+                            {fmtBalance(t.notional, wallet.currency)}
                           </span>
                         </li>
                       ))}
                   </ul>
                 )}
               </div>
+
+              <PaymentsPanel />
             </div>
           </div>
         )}

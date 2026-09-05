@@ -77,7 +77,8 @@ class WalletPosition(BaseModel):
 class Wallet(BaseModel):
     id: str
     name: str
-    usdc: float
+    balance: float
+    currency: str = "MWK"
     equity: float
     realized_pnl: float
     positions: List[WalletPosition]
@@ -171,3 +172,33 @@ class HomeData(BaseModel):
     stats: PortfolioStats
     proof: Proof
     settings: dict[str, object] = {}  # editable site content (hero, cta, steps, footer, ...)
+
+
+class DepositRequest(BaseModel):
+    wallet_id: str
+    amount: float
+    number: str
+    correspondent: str  # AIRTEL_MWI | TNM_MWI
+
+
+class WithdrawalRequest(BaseModel):
+    wallet_id: str
+    amount: float
+    number: str
+    correspondent: str  # AIRTEL_MWI | TNM_MWI
+
+
+class Payment(BaseModel):
+    id: str
+    wallet_id: str
+    kind: str  # deposit | withdraw
+    amount: float
+    number: str
+    correspondent: str
+    status: str  # pending | completed | failed
+    credited: bool = False  # deposits only — idempotency guard
+    rolled_back: bool = False  # withdrawals only — refund guard if the payout fails
+    wande_id: str | None = None
+    message: str | None = None
+    created: float
+    updated: float

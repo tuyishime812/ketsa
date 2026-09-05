@@ -74,3 +74,31 @@ def get_proof() -> dict:
 
 def save_proof(p: dict) -> None:
     get_backend().save_proof(p)
+
+
+# --- Wallets ----------------------------------------------------------------
+
+def get_wallet(wallet_id: str) -> dict | None:
+    return get_backend().get_wallet(wallet_id)
+
+
+def upsert_wallet(wallet: dict) -> None:
+    get_backend().upsert_wallet(wallet)
+
+
+def list_wallets() -> list[dict]:
+    return get_backend().list_wallets()
+
+
+# --- Payments ---------------------------------------------------------------
+
+def upsert_payment(payment: dict) -> None:
+    get_backend().upsert_payment(payment)
+
+
+def get_payment(payment_id: str) -> dict | None:
+    return get_backend().get_payment(payment_id)
+
+
+def list_payments(wallet_id: str | None = None) -> list[dict]:
+    return get_backend().list_payments(wallet_id)

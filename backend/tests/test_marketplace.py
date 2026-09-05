@@ -5,7 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import store
-from app.engine import engine, WALLET_START_USDC
+from app.engine import engine, WALLET_START_BALANCE
 from app.main import create_app
 from app.storage import reset_backend
 
@@ -30,8 +30,9 @@ def client() -> TestClient:
 
 def test_wallet_create_and_reuse(client: TestClient) -> None:
     w = _wallet(client, "Alice")
-    assert w["usdc"] == WALLET_START_USDC
-    assert round(w["equity"], 2) == round(WALLET_START_USDC, 2)
+    assert w["balance"] == WALLET_START_BALANCE
+    assert w["currency"] == "MWK"
+    assert round(w["equity"], 2) == round(WALLET_START_BALANCE, 2)
     assert w["positions"] == []
     assert w["history"] == []
     # Same id -> same wallet (get-or-create).
@@ -116,7 +117,7 @@ def test_buy_yes_updates_wallet_and_market(client: TestClient) -> None:
     assert pos["outcome"] == "yes"
     assert pos["shares"] > 0
     wallet_now = client.get(f"/api/wallet/{w['id']}").json()
-    assert wallet_now["usdc"] == pytest.approx(WALLET_START_USDC - 25.0, abs=0.01)
+    assert wallet_now["balance"] == pytest.approx(WALLET_START_BALANCE - 25.0, abs=0.01)
     # Market price moved toward/at the ask, and the tape now has a trade.
     after = client.get("/api/markets/btc-120k").json()
     assert after["yes"] >= before["yes"]
@@ -166,7 +167,7 @@ def test_buy_exhausting_book_is_partial_and_never_overdraws(client: TestClient) 
         },
     ).json()
     assert res["market"]["volume"] < 1000  # partial fill, not the full request
-    assert res["wallet"]["usdc"] >= 0
+    assert res["wallet"]["balance"] >= 0
     assert res["trade"]["qty"] > 0
 
 
@@ -203,7 +204,7 @@ def test_buy_no_then_sell_no(client: TestClient) -> None:
     pos = buy["wallet"]["positions"][0]
     assert pos["outcome"] == "no"
     assert pos["shares"] > 0
-    assert buy["wallet"]["usdc"] == pytest.approx(WALLET_START_USDC - 30.0, abs=0.01)
+    assert buy["wallet"]["balance"] == pytest.approx(WALLET_START_BALANCE - 30.0, abs=0.01)
     shares = pos["shares"]
     sell = client.post(
         "/api/trade",
@@ -215,7 +216,7 @@ def test_buy_no_then_sell_no(client: TestClient) -> None:
             "shares": shares,
         },
     ).json()
-    assert sell["wallet"]["usdc"] > buy["wallet"]["usdc"]
+    assert sell["wallet"]["balance"] > buy["wallet"]["balance"]
     assert not any(p["outcome"] == "no" for p in sell["wallet"]["positions"])
 
 

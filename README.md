@@ -55,12 +55,14 @@ The backend's data layer (`app/storage.py`) is pluggable and selected with
 - **`memory` (default)** — a fresh, seed-data-filled store in each process. Zero
   setup, ideal for local dev and previews; edits are lost on restart.
 - **`firestore` (production)** — persists every market, watch/ticker row,
-  dashboard series, stats, proof, and the editable site settings in Google
-  Cloud Firestore via the Firebase Admin SDK, so admin edits survive restarts
-  and redeploys. Requires a Firebase service-account credential.
+  dashboard series, stats, proof, the editable site settings, **and the wallet
+  balances + payment ledger** in Google Cloud Firestore via the Firebase Admin
+  SDK, so admin edits survive restarts and redeploys. Requires a Firebase
+  service-account credential.
 
 The admin "reset content" endpoint re-seeds both backends to the original data
-(preserving any stored admin password).
+(preserving any stored admin password). Wallet balances and payment records are
+**never** wiped by a content reset.
 
 ---
 
@@ -111,21 +113,27 @@ With both services running, log in at **`http://localhost:3000/admin`**:
 
 With both services running you can trade each market for real on the site:
 
-- **Play money.** Every visitor gets a simulated wallet seeded with \$1,000 USDC
+- **Play money.** Every visitor gets a simulated wallet seeded with **MK 1,000**
   (stored in `localStorage`). Click **Connect wallet** in the nav to create one.
 - **Markets.** `/markets` lists all markets with search, category filters and
   sorting (volume, liquidity, ending soon, newest). `/markets/<id>` has a price
   chart, a live YES/NO order book, a trade widget and a recent-trades tape.
-- **Portfolio.** `/portfolio` tracks USDC balance, open positions, and realized
-  + unrealized P&L against live prices.
+- **Portfolio.** `/portfolio` tracks wallet balance, open positions, and realized
+  + unrealized P&L against live prices, plus a **payments** panel for deposits
+  and withdrawals via wandePay.
 - **Live updates.** A WebSocket feed (`ws://…/api/ws`) streams market ticks and
   fills to all open pages; order books and the trade tape refresh every few
   seconds as a fallback.
-- **How trading works.** Prices are integer cents (1–99) with YES+NO=100. A NO
-  buy/sell is executed against the complementary YES-side quote (Polymarket's
-  synthetic NO approach). Trading is decoupled from the storage backends: the
-  engine keeps books, wallets and the trade tape in memory per app instance, so
-  wallets reset when the backend restarts.
+- **Persistence.** Today the engine keeps books and the trade tape in memory,
+  but **wallets are persisted** through the storage backend — a funded balance
+  survives a backend restart (use `KETSA_DB_BACKEND=firestore` in production
+  when real money is involved).
+- **Payments (wandePay — MWK).** With `KETSA_WANDE_TOKEN` configured, the
+  portfolio lets users top up their balance with real money via Airtel Money /
+  TNM Mpamba and payout back to mobile money. Deposits are credited when the
+  wandePay order completes (idempotent — never double-credited); failed payouts
+  are refunded automatically. Without a token the payment endpoints return 503
+  and the site runs purely on play money.
 
 Note: when the backend is **not** reachable from the browser at the default
 `127.0.0.1:8000` (e.g. a Vercel frontend + hosted backend), set
@@ -140,9 +148,10 @@ The `/api/*` HTTP calls go through Next's rewrite proxy regardless.
 # Backend
 cd backend
 .venv\Scripts\python.exe -m pytest
-# 60 tests: endpoints, models/seed consistency, 404/405, CORS,
+# 70 tests: endpoints, models/seed consistency, 404/405, CORS,
 # security headers, OpenAPI gating, rate limiting, admin auth + CRUD,
-# and the marketplace engine (wallets, matching, order books, WS feed).
+# market engine (wallets, books, execution, WS feed), and wandePay payments
+# (deposits, withdrawals, idempotent crediting, refunds).
 
 # Frontend
 cd frontend
@@ -179,6 +188,8 @@ and wired through `docker-compose.yml`.
 | `GOOGLE_APPLICATION_CREDENTIALS` | backend | Path to the Firebase service-account JSON (Firestore only) | — |
 | `FIREBASE_CREDENTIALS_JSON`  | backend   | Inline Firebase service-account JSON (Firestore only) | — |
 | `FIREBASE_PROJECT_ID`        | backend   | Firestore project id override (Firestore only)       | — |
+| `KETSA_WANDE_TOKEN`          | backend   | wandePay API token for MWK deposits/withdrawals (secret; absent ⇒ payments 503) | — (payments off) |
+| `KETSA_WANDE_BASE_URL`       | backend   | wandePay API base URL                              | `https://apiv1.wandepay.site/api/` |
 
 ---
 
@@ -188,9 +199,17 @@ and wired through `docker-compose.yml`.
 (`allow_methods=["GET"]`, `allow_credentials=False`, CORS restricted to an
 allowlist). The trading features add two **public write** endpoints —
 `POST /api/wallet` and `POST /api/trade` — which run on a simulated-wallet
-ledger kept in memory (no real funds) and are gated by the per-IP rate
-limiter. **Content writes** live only under `/api/admin/*` and are protected
-by a bearer token obtained from `POST /api/admin/login` with
+ledger (no real funds unless payments are configured) and are gated by the
+per-IP rate limiter. The payments endpoints (`POST /api/payments/deposits`,
+`POST /api/payments/withdrawals`, `GET /api/payments/{id}`) move **real money
+in MWK** and require `KETSA_WANDE_TOKEN`; without it they respond `503` so the
+site degrades to play-money mode. Payment state is guarded: deposits are
+credited idempotently against the payment record and failed withdrawals are
+refunded, so restarting or double-polling cannot double-credit funds. Wallet
+balances and the payment ledger are persisted in the storage backend (memory
+in dev, Firestore in production). **Content writes** live only under
+`/api/admin/*` and are protected by a bearer token obtained from
+`POST /api/admin/login` with
 `KETSA_ADMIN_PASSWORD` (tokens last 12h with a sliding window). Admin
 endpoints are **not** covered by the CORS allowlist restriction in the same
 way as reads, but they require the token on every request. All dynamic content
@@ -255,6 +274,9 @@ Any Node + Python PaaS works:
   `KETSA_ADMIN_PASSWORD` to a strong value. For persistence across redeploys
   set `KETSA_DB_BACKEND=firestore` with a Firebase service account
   (`GOOGLE_APPLICATION_CREDENTIALS` or `FIREBASE_CREDENTIALS_JSON`).
+  To enable real-money payments, inject `KETSA_WANDE_TOKEN` via your host's
+  secret manager (never in code) — and keep `KETSA_DB_BACKEND=firestore` so
+  funded balances and the payment ledger persist.
 - **All-in-one** — use `docker compose up --build` behind a TLS proxy.
 
 See `DEPLOY.md` for the full admin + persistent-storage walkthrough.

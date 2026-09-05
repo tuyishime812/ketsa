@@ -74,13 +74,35 @@ export interface WalletPosition {
 export interface Wallet {
   id: string;
   name: string;
-  usdc: number;
+  balance: number;
+  currency: string; // e.g. MWK
   equity: number;
   realized_pnl: number;
   positions: WalletPosition[];
   history: Trade[];
   created: number;
 }
+
+export type PaymentKind = 'deposit' | 'withdraw';
+export type PaymentStatus = 'pending' | 'completed' | 'failed';
+
+export interface Payment {
+  id: string;
+  wallet_id: string;
+  kind: PaymentKind;
+  amount: number;
+  number: string;
+  correspondent: string; // AIRTEL_MWI | TNM_MWI
+  status: PaymentStatus;
+  credited: boolean;
+  rolled_back: boolean;
+  wande_id: string | null;
+  message: string | null;
+  created: number;
+  updated: number;
+}
+
+export type Correspondent = 'AIRTEL_MWI' | 'TNM_MWI';
 
 export interface TradeRequest {
   wallet_id: string;

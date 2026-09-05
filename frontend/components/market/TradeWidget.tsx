@@ -10,7 +10,7 @@ import type {
   Side,
   TradeResponse,
 } from '@/lib/types';
-import { fmtCents, fmtShares, fmtUsd, fmtUsdFull } from '@/lib/utils';
+import { fmtBalance, fmtCents, fmtShares, fmtUsd, fmtUsdFull } from '@/lib/utils';
 
 export interface EstimateSummary {
   avg: number;
@@ -18,7 +18,7 @@ export interface EstimateSummary {
   total: number;
 }
 
-/** Walk levels in best-first order to fill a buy budget (amount in USDC). */
+/** Walk levels in best-first order to fill a buy budget (amount in wallet currency). */
 function buySummary(
   levels: { price: number; size: number }[],
   budget: number,
@@ -105,7 +105,7 @@ export default function TradeWidget({
   const canAfford =
     wallet === null ||
     wallet === undefined ||
-    wallet.usdc >= (estimate?.total ?? 0);
+    wallet.balance >= (estimate?.total ?? 0);
 
   async function submit() {
     if (!wallet || !estimate) return;
@@ -175,7 +175,7 @@ export default function TradeWidget({
 
       <label className="mb-4 block">
         <span className="mb-2 block font-mono text-[10.5px] uppercase tracking-[.07em] text-ink-3">
-          {side === 'buy' ? `Amount (USDC · balance ${fmtUsdFull(wallet?.usdc ?? 0)})` : 'Shares to sell'}
+          {side === 'buy' ? `Amount (${wallet?.currency ?? 'MWK'} · balance ${fmtBalance(wallet?.balance ?? 0, wallet?.currency)})` : 'Shares to sell'}
         </span>
         <div className="flex items-center gap-2">
           <input
@@ -190,7 +190,7 @@ export default function TradeWidget({
             }
           />
           <span className="font-mono text-sm text-ink-3">
-            {side === 'buy' ? 'USDC' : 'shares'}
+            {side === 'buy' ? (wallet?.currency ?? 'MWK') : 'shares'}
           </span>
         </div>
       </label>

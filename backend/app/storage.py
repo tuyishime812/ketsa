@@ -21,6 +21,7 @@ so switching is transparent to the rest of the app.
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 from typing import Any, Protocol
@@ -196,6 +197,12 @@ class StoreBackend(Protocol):
     def get_setting(self, key: str) -> Any: ...
     def set_setting(self, key: str, value: Any) -> None: ...
     def reset_to_seed(self) -> None: ...
+    def get_wallet(self, wallet_id: str) -> dict | None: ...
+    def upsert_wallet(self, wallet: dict) -> None: ...
+    def list_wallets(self) -> list[dict]: ...
+    def upsert_payment(self, payment: dict) -> None: ...
+    def get_payment(self, payment_id: str) -> dict | None: ...
+    def list_payments(self, wallet_id: str | None = None) -> list[dict]: ...
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +227,8 @@ class MemoryBackend:
         self._stats: dict = {}
         self._proof: dict = {}
         self._settings: dict[str, Any] = json.loads(json.dumps(DEFAULT_SETTINGS))
+        self._wallets: dict[str, dict] = {}
+        self._payments: dict[str, dict] = {}
         self._initialized = False
 
     def init(self) -> None:
@@ -342,6 +351,37 @@ class MemoryBackend:
 
     def reset_to_seed(self) -> None:
         self.force_reseed()
+
+    # --- wallets (persisted outside reset) -----------------------------------
+    def get_wallet(self, wallet_id: str) -> dict | None:
+        self.init()
+        w = self._wallets.get(wallet_id)
+        return copy.deepcopy(w) if w else None
+
+    def upsert_wallet(self, wallet: dict) -> None:
+        self.init()
+        self._wallets[wallet["id"]] = copy.deepcopy(wallet)
+
+    def list_wallets(self) -> list[dict]:
+        self.init()
+        return [copy.deepcopy(w) for w in self._wallets.values()]
+
+    # --- payments -------------------------------------------------------------
+    def upsert_payment(self, payment: dict) -> None:
+        self.init()
+        self._payments[payment["id"]] = dict(payment)
+
+    def get_payment(self, payment_id: str) -> dict | None:
+        self.init()
+        p = self._payments.get(payment_id)
+        return dict(p) if p else None
+
+    def list_payments(self, wallet_id: str | None = None) -> list[dict]:
+        self.init()
+        items = self._payments.values()
+        if wallet_id:
+            items = [p for p in items if p.get("wallet_id") == wallet_id]
+        return [dict(p) for p in sorted(items, key=lambda p: p.get("created", 0), reverse=True)]
 
 
 # ---------------------------------------------------------------------------
@@ -603,6 +643,38 @@ class FirestoreBackend:
             self.db.collection("settings").document("admin_password").set(
                 {"value": keep_password}
             )
+
+    # --- wallets (persisted — never wiped by content reset) -------------------
+    def get_wallet(self, wallet_id: str) -> dict | None:
+        self.init()
+        doc = self.db.collection("wallets").document(wallet_id).get()
+        return dict(doc.to_dict()) if doc.exists else None
+
+    def upsert_wallet(self, wallet: dict) -> None:
+        self.init()
+        self.db.collection("wallets").document(wallet["id"]).set(wallet)
+
+    def list_wallets(self) -> list[dict]:
+        self.init()
+        return [dict(s.to_dict()) for s in self.db.collection("wallets").stream()]
+
+    # --- payments ------------------------------------------------------------
+    def upsert_payment(self, payment: dict) -> None:
+        self.init()
+        self.db.collection("payments").document(payment["id"]).set(payment)
+
+    def get_payment(self, payment_id: str) -> dict | None:
+        self.init()
+        doc = self.db.collection("payments").document(payment_id).get()
+        return dict(doc.to_dict()) if doc.exists else None
+
+    def list_payments(self, wallet_id: str | None = None) -> list[dict]:
+        self.init()
+        query = self.db.collection("payments")
+        if wallet_id:
+            query = query.where("wallet_id", "==", wallet_id)
+        items = [dict(s.to_dict()) for s in query.order_by("created", direction="DESCENDING").stream()]
+        return items
 
 
 # ---------------------------------------------------------------------------

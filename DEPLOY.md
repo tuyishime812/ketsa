@@ -39,9 +39,11 @@ Pick one host (Railway, Render, or Fly). All run the same FastAPI app.
    | `KETSA_EXPOSE_DOCS` | `0` (keep the public API schema hidden) |
    | `KETSA_RATE_LIMIT_PER_MIN` | `120` (or `0` if the provider's proxy handles throttling) |
    | `KETSA_ADMIN_PASSWORD` | **required** — a strong, unique password for the `/admin` panel (see Step 2b) |
-   | `KETSA_DB_BACKEND` | `firestore` if you want admin edits to persist across redeploys (see Step 2b). Defaults to `memory`, which resets on every restart. |
+   | `KETSA_DB_BACKEND` | `firestore` if you want admin edits to persist across redeploys (and — required for payments — wallet balances + ledger). Defaults to `memory`, which resets on every restart. |
    | `GOOGLE_APPLICATION_CREDENTIALS` / `FIREBASE_CREDENTIALS_JSON` | (**Firestore only**) the Firebase Admin service-account credential, either as a path or inline JSON |
    | `FIREBASE_PROJECT_ID` | (**Firestore only**) optional Firestore project override |
+   | `KETSA_WANDE_TOKEN` | (**payments** — see Step 2b) wandePay API token for MWK deposits/withdrawals; inject via secret manager, never in code. Absent ⇒ payments `503` |
+   | `KETSA_WANDE_BASE_URL` | (**payments**) wandePay API base URL (defaults to `https://apiv1.wandepay.site/api/`) |
 5. Deploy → note the **public HTTPS URL** (e.g. `https://ketsa-api.onrender.com`).
    Sanity check: `curl https://<your-backend>/api/health` → `{"status":"ok"}`.
 
@@ -89,8 +91,10 @@ protected `/api/admin/*` through the same-origin `/api` path.
    permanently, set `KETSA_DB_BACKEND=firestore` and provide a Firebase
    service-account credential (`GOOGLE_APPLICATION_CREDENTIALS` pointing at the
    JSON file, or `FIREBASE_CREDENTIALS_JSON` with its contents). The backend
-   then persists all markets/watch/ticker/dashboard/settings in Google Cloud
-   Firestore — no disk volume needed on your host.
+   then persists all markets/watch/ticker/dashboard/settings — **plus wallet
+   balances and the payment ledger** — in Google Cloud Firestore; no disk
+   volume needed on your host. Note: the "reset content" admin action re-seeds
+   markets/settings only and never touches wallets or payment records.
    - Create a Firestore database in the **Google Cloud Console** for the
      project, then download a **service-account key** (IAM → Service Accounts
      → Keys → Add key → JSON).
@@ -102,7 +106,14 @@ protected `/api/admin/*` through the same-origin `/api` path.
    value. It is the only key to the whole site. The backend reads it from the
    environment and **never** falls back to a committed secret. In production it
    does **not** default to `ketsa-admin` — leave it unset only for local dev.
-3. **Log in.** Open `https://<your-frontend>/admin`, enter the password, and
+3. **Enable payments (optional).** To let users fund their wallet with real
+   money (MWK) and withdraw to mobile money, set **`KETSA_WANDE_TOKEN`** (from
+   wandePay) via your host's secret manager — never in code — and
+   `KETSA_WANDE_BASE_URL` (defaults to the production API). Keep
+   `KETSA_DB_BACKEND=firestore` so funded balances and the payment ledger
+   survive restarts. Without the token the payment endpoints return `503` and
+   the site runs purely on play money.
+4. **Log in.** Open `https://<your-frontend>/admin`, enter the password, and
    you'll get the dashboard with a sidebar of editors. Changes save
    immediately and appear on the public site.
 
@@ -138,6 +149,9 @@ protected `/api/admin/*` through the same-origin `/api` path.
       rejected and the correct `KETSA_ADMIN_PASSWORD` logs in.
 - [ ] Admin edit persists after a backend restart (i.e. `KETSA_DB_BACKEND=firestore`
       with valid credentials — see Step 2b).
+- [ ] (If payments enabled) `/portfolio` shows the Payments panel and creating a
+      deposit/withdrawal does not error; `KETSA_WANDE_TOKEN` is set in the host's
+      secret manager and **not** committed to the repo.
 - [ ] Headers present in browser devtools on the homepage: `Content-Security-Policy`,
       `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`.
 
@@ -172,6 +186,14 @@ held in `localStorage`. Writes update the backend's storage (Firestore in
 production, memory in dev), so a page refresh (and every subsequent visitor)
 sees the change.
 
+### Payments are chosen + executed server-side
+The **browser never talks to wandePay**. The portfolio panel only submits
+intent to the backend (`POST /api/payments/deposits` / `withdrawals`); the
+backend calls wandePay's API with the token server-to-server, stores a payment
+record, and credits/refunds the wallet only after polling confirms completion.
+Deposits are idempotent (a completed record credits exactly once) and failed
+withdrawals are refunded automatically.
+
 ---
 
 ## Alternative: run everything with Docker (no Vercel)
@@ -188,5 +210,6 @@ Place a TLS-terminating reverse proxy (Caddy/Nginx/Traefik) in front. Set
 `KETSA_ALLOWED_ORIGINS`, `KETSA_BACKEND_URL`, and a strong
 `KETSA_ADMIN_PASSWORD` in `docker-compose.yml` (or the compose env). For
 persistent admin edits set `KETSA_DB_BACKEND=firestore` and pass the Firebase
-credentials; with the default memory backend, edits reset on restart. Both
-images run as non-root users.
+credentials; with the default memory backend, edits reset on restart. To enable
+payments add `KETSA_WANDE_TOKEN` (from a secret store) via the compose env.
+Both images run as non-root users.

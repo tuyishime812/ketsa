@@ -64,6 +64,15 @@ export function fmtUsdFull(n: number): string {
   })}`;
 }
 
+/** Wallet money with currency code: MK 1,234.56 */
+export function fmtBalance(n: number, currency = 'MWK'): string {
+  const label = (currency || 'MWK').toUpperCase() === 'USD' ? '$' : `MK `;
+  return `${label}${n.toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
 /** Percentage display for share prices: 41¢ */
 export function fmtCents(cents: number): string {
   return `${Math.round(cents)}¢`;

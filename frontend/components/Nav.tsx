@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useState } from 'react';
 import { useWallet } from '@/components/wallet/WalletProvider';
-import { fmtUsd } from '@/lib/utils';
+import { fmtBalance } from '@/lib/utils';
 
 const NAV_LINKS = [
   { href: '/markets', label: 'Markets' },
@@ -132,7 +132,7 @@ function WalletButton({
             {wallet.name}
           </span>
           <span className="mt-[3px] block font-mono text-[10.5px] text-brand">
-            {fmtUsd(wallet.equity)}
+            {fmtBalance(wallet.equity, wallet.currency)}
           </span>
         </span>
       </Link>

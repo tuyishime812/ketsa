@@ -18,12 +18,14 @@ import asyncio
 import json
 import os
 import time
+import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from . import payments as wande
 from . import store
 from .admin import router as admin_router
 from .engine import engine
@@ -31,11 +33,13 @@ from .storage import get_all_settings, init_db
 from .models import (
     DashboardData,
     DashboardSeries,
+    DepositRequest,
     HomeData,
     Market,
     MarketsByCategory,
     MarketsGroup,
     OrderBook,
+    Payment,
     PortfolioStats,
     Position,
     Proof,
@@ -46,6 +50,7 @@ from .models import (
     Wallet,
     WalletConnectRequest,
     WatchItem,
+    WithdrawalRequest,
 )
 
 CATEGORIES = ['politics', 'crypto', 'sports', 'culture', 'tech', 'climate']
@@ -238,6 +243,165 @@ def create_app() -> "FastAPI":
         if w is None:
             raise HTTPException(status_code=404, detail="Wallet not found")
         return Wallet(**w)
+
+    # --- Real-money payments (wandePay — MWK) -------------------------------
+
+    _TERMINAL_FAIL = ("FAILED", "DECLINED", "REVERSED", "CANCELLED", "ERROR")
+    _money_lock = asyncio.Lock()
+
+    def _require_payments() -> None:
+        if not wande.configured():
+            raise HTTPException(status_code=503, detail="Payments are not configured on this server")
+
+    def _require_wallet(wallet_id: str) -> None:
+        if engine.wallet_view(wallet_id) is None:
+            raise HTTPException(status_code=404, detail="Wallet not found")
+
+    def _payment_payload(rec: dict) -> dict:
+        return Payment(**rec).model_dump()
+
+    @app.post("/api/payments/deposits", response_model=Payment)
+    async def create_deposit(body: DepositRequest) -> Payment:
+        _require_payments()
+        _require_wallet(body.wallet_id)
+        try:
+            number = wande.normalize_number(body.number)
+        except wande.WandeError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        if body.correspondent not in wande.CORRESPONDENTS:
+            raise HTTPException(status_code=400, detail="Unknown correspondent")
+        if body.amount < wande.MIN_AMOUNT_MWK:
+            raise HTTPException(status_code=400, detail=f"Minimum deposit is {int(wande.MIN_AMOUNT_MWK)} MWK")
+        try:
+            payload = await asyncio.to_thread(
+                wande.create_deposit, body.amount, number, body.correspondent
+            )
+        except wande.WandeError as e:
+            raise HTTPException(status_code=502, detail=str(e))
+        tx = (payload.get("data") or {}).get("transaction") or {}
+        wande_id = tx.get("id")
+        if not wande_id:
+            raise HTTPException(status_code=502, detail="wandePay did not return a deposit id")
+        now = time.time()
+        record = {
+            "id": uuid.uuid4().hex,
+            "wallet_id": body.wallet_id,
+            "kind": "deposit",
+            "amount": round(float(body.amount), 2),
+            "number": number,
+            "correspondent": body.correspondent,
+            "status": "pending",
+            "credited": False,
+            "wande_id": str(wande_id),
+            "message": None,
+            "created": now,
+            "updated": now,
+        }
+        store.upsert_payment(record)
+        return _payment_payload(record)
+
+    @app.get("/api/payments", response_model=list[Payment])
+    async def list_payments(wallet_id: str | None = None) -> list[Payment]:
+        return [_payment_payload(p) for p in store.list_payments(wallet_id)]
+
+    @app.get("/api/payments/{payment_id}", response_model=Payment)
+    async def payment_status(payment_id: str) -> Payment:
+        _require_payments()
+        rec = store.get_payment(payment_id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="Payment not found")
+
+        async with _money_lock:
+            rec = store.get_payment(payment_id)  # re-read inside lock
+            if rec["status"] != "pending":
+                return _payment_payload(rec)
+
+            if rec["kind"] == "deposit":
+                try:
+                    payload = await asyncio.to_thread(wande.deposit_status, rec["wande_id"])
+                except wande.WandeError as e:
+                    raise HTTPException(status_code=502, detail=str(e))
+                ts = payload.get("transaction_status", "").upper()
+                if payload.get("status") != "success":
+                    rec["status"] = "failed"
+                    rec["message"] = str(payload.get("message") or "Deposit check failed")
+                elif ts == "COMPLETED":
+                    if not rec["credited"]:
+                        engine.credit_balance(rec["wallet_id"], rec["amount"])
+                        rec["credited"] = True
+                    rec["status"] = "completed"
+                elif ts in _TERMINAL_FAIL:
+                    rec["status"] = "failed"
+                    rec["message"] = payload.get("message") or ts
+            else:  # withdrawal
+                try:
+                    payload = await asyncio.to_thread(wande.withdrawal_status, rec["wande_id"])
+                except wande.WandeError as e:
+                    raise HTTPException(status_code=502, detail=str(e))
+                ts = payload.get("withdrawal_status", "").upper()
+                if payload.get("status") != "success":
+                    rec["status"] = "failed"
+                    rec["message"] = str(payload.get("message") or "Withdrawal check failed")
+                elif ts == "COMPLETED":
+                    rec["status"] = "completed"
+                elif ts in _TERMINAL_FAIL:
+                    rec["status"] = "failed"
+                    rec["message"] = payload.get("message") or ts
+                if rec["status"] == "failed" and not rec["rolled_back"]:
+                    engine.credit_balance(rec["wallet_id"], rec["amount"])
+                    rec["rolled_back"] = True
+
+            now = time.time()
+            rec["updated"] = now
+            store.upsert_payment(rec)
+            return _payment_payload(rec)
+
+    @app.post("/api/payments/withdrawals", response_model=Payment)
+    async def create_withdrawal(body: WithdrawalRequest) -> Payment:
+        _require_payments()
+        _require_wallet(body.wallet_id)
+        try:
+            number = wande.normalize_number(body.number)
+        except wande.WandeError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        if body.correspondent not in wande.CORRESPONDENTS:
+            raise HTTPException(status_code=400, detail="Unknown correspondent")
+        if body.amount < wande.MIN_AMOUNT_MWK:
+            raise HTTPException(status_code=400, detail=f"Minimum withdrawal is {int(wande.MIN_AMOUNT_MWK)} MWK")
+        try:
+            engine.debit_balance(body.wallet_id, body.amount)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        try:
+            payload = await asyncio.to_thread(
+                wande.create_withdrawal, body.amount, number, body.correspondent
+            )
+        except wande.WandeError as e:
+            engine.credit_balance(body.wallet_id, body.amount)
+            raise HTTPException(status_code=502, detail=str(e))
+        payout = (payload.get("data") or {})
+        payout_id = payout.get("payoutId")
+        if not payout_id:
+            engine.credit_balance(body.wallet_id, body.amount)
+            raise HTTPException(status_code=502, detail="wandePay did not return a payout id")
+        now = time.time()
+        record = {
+            "id": uuid.uuid4().hex,
+            "wallet_id": body.wallet_id,
+            "kind": "withdraw",
+            "amount": round(float(body.amount), 2),
+            "number": number,
+            "correspondent": body.correspondent,
+            "status": "pending",
+            "credited": False,
+            "rolled_back": False,
+            "wande_id": str(payout_id),
+            "message": payload.get("message"),
+            "created": now,
+            "updated": now,
+        }
+        store.upsert_payment(record)
+        return _payment_payload(record)
 
     @app.post("/api/trade", response_model=TradeResponse)
     async def place_trade(body: TradeRequest) -> TradeResponse:

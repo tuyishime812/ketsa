@@ -20,6 +20,7 @@ itself uses for NO tokens.
 
 from __future__ import annotations
 
+import copy
 import random
 import secrets
 import time
@@ -30,7 +31,8 @@ from . import store
 CENTS_MIN = 1
 CENTS_MAX = 99
 MAX_PTS = 48
-WALLET_START_USDC = 1000.0
+WALLET_START_BALANCE = 1000.0
+WALLET_CURRENCY = "MWK"
 BOOK_DEPTH = 5
 MIN_LIQUIDITY = 200.0
 REPLENISH_INTERVAL = 10.0
@@ -239,7 +241,7 @@ class Marketplace:
         if shares <= _EPS:
             return
         if side == "buy":
-            wallet["usdc"] -= proceeds
+            wallet["balance"] -= proceeds
             old_shares = entry["shares"]
             total = old_shares + shares
             entry["shares"] = _round4(total)
@@ -249,7 +251,7 @@ class Marketplace:
                 else round((old_shares * entry["avg"] + shares * avg_outcome) / total)
             )
         else:
-            wallet["usdc"] += proceeds
+            wallet["balance"] += proceeds
             old_shares = entry["shares"]
             basis = min(old_shares, shares) * entry["avg"] / 100.0
             wallet["realized"] += proceeds - basis
@@ -301,8 +303,8 @@ class Marketplace:
             spent = sum(f["notional"] for f in fills)
             if spent <= _EPS:
                 raise ValueError("Not enough liquidity to place this order")
-            if wallet["usdc"] + _EPS < spent:
-                raise ValueError("Insufficient USDC balance")
+            if wallet["balance"] + _EPS < spent:
+                raise ValueError("Insufficient balance for this order")
             bought_shares = sum(f["qty"] for f in fills)
             self._apply_wallet(wallet_id, market_id, question, outcome, "buy",
                                bought_shares, new_price, spent)
@@ -335,6 +337,7 @@ class Marketplace:
                         fills, last_yes, last_yes)
 
         trade = wallet["history"][-1]
+        self._persist(wallet_id)
         self._emit_market(market_id)
         self._emit({"type": "trade", "trade": trade, "market_id": market_id})
         return {
@@ -446,21 +449,54 @@ class Marketplace:
     # Wallets
     # ------------------------------------------------------------------
 
+    def _persist(self, wallet_id: str) -> None:
+        """Persist a wallet snapshot so real funds survive restarts."""
+        wallet = self._wallets.get(wallet_id)
+        if wallet is not None:
+            store.upsert_wallet(copy.deepcopy(wallet))
+
     def connect_wallet(self, wallet_id: str | None = None, name: str = "Trader") -> dict:
         wallet_id = (wallet_id or "").strip() or ("0x" + secrets.token_hex(20))
-        existing = self._wallets.get(wallet_id)
-        if existing is not None:
+        if wallet_id in self._wallets:
+            return self.wallet_view(wallet_id)
+        persisted = store.get_wallet(wallet_id)
+        if persisted is not None:
+            # Restore a funded wallet (e.g. after a backend restart).
+            self._wallets[wallet_id] = persisted
             return self.wallet_view(wallet_id)
         self._wallets[wallet_id] = {
             "id": wallet_id,
             "name": (name or "Trader").strip() or "Trader",
-            "usdc": WALLET_START_USDC,
+            "balance": WALLET_START_BALANCE,
             "realized": 0.0,
             "positions": {},
             "history": [],
             "created": time.time(),
         }
+        self._persist(wallet_id)
         return self.wallet_view(wallet_id)
+
+    def credit_balance(self, wallet_id: str, amount: float) -> None:
+        """Add funds to a wallet's available balance (e.g. a completed deposit).
+
+        Callers are responsible for gating on idempotency (a payment record
+        must only credit once).
+        """
+        wallet = self._wallets.get(wallet_id)
+        if wallet is None:
+            raise ValueError("Unknown wallet")
+        wallet["balance"] = _round2(wallet["balance"] + amount)
+        self._persist(wallet_id)
+
+    def debit_balance(self, wallet_id: str, amount: float) -> None:
+        """Reserve funds for a withdrawal; raises if the balance is short."""
+        wallet = self._wallets.get(wallet_id)
+        if wallet is None:
+            raise ValueError("Unknown wallet")
+        if wallet["balance"] + _EPS < amount:
+            raise ValueError("Insufficient balance for this withdrawal")
+        wallet["balance"] = _round2(wallet["balance"] - amount)
+        self._persist(wallet_id)
 
     def wallet_view(self, wallet_id: str) -> dict | None:
         wallet = self._wallets.get(wallet_id)
@@ -504,11 +540,12 @@ class Marketplace:
         history = []
         for t in wallet["history"]:
             history.append({k: (t[k] if k != "qty" else _round4(t[k])) for k in t})
-        equity = wallet["usdc"] + position_value
+        equity = wallet["balance"] + position_value
         return {
             "id": wallet["id"],
             "name": wallet["name"],
-            "usdc": _round2(wallet["usdc"]),
+            "balance": _round2(wallet["balance"]),
+            "currency": WALLET_CURRENCY,
             "equity": _round2(equity),
             "realized_pnl": _round2(wallet["realized"]),
             "positions": positions,

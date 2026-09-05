@@ -60,8 +60,8 @@ export default function ConnectWalletModal({
 
         <p className="mb-5 text-sm text-ink-2">
           Markets run on a simulated wallet funded with a starting balance — no
-          real money, no sign-up. You get a play address and a $1,000 USDC
-          balance to start trading.
+          sign-up. You get a play wallet and a starting balance of MK 1,000 to
+          begin trading. Top up with real money later through wandePay.
         </p>
 
         <label className="mb-1 block font-mono text-[11px] uppercase tracking-[.06em] text-ink-3">

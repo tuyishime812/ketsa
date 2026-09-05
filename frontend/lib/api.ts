@@ -6,9 +6,11 @@
 // data server-side via `fetchHomeData()`.
 
 import type {
+  Correspondent,
   HomeData,
   Market,
   OrderBook,
+  Payment,
   Trade,
   TradeRequest,
   TradeResponse,
@@ -142,6 +144,41 @@ export async function fetchTradesSession(id: string, limit = 30): Promise<Trade[
   return clientJson<Trade[]>(
     `/markets/${encodeURIComponent(id)}/trades?limit=${limit}`,
   );
+}
+
+export async function createDepositSession(
+  walletId: string,
+  amount: number,
+  number: string,
+  correspondent: Correspondent,
+): Promise<Payment> {
+  return clientJson<Payment>('/payments/deposits', {
+    method: 'POST',
+    body: JSON.stringify({ wallet_id: walletId, amount, number, correspondent }),
+  });
+}
+
+export async function createWithdrawalSession(
+  walletId: string,
+  amount: number,
+  number: string,
+  correspondent: Correspondent,
+): Promise<Payment> {
+  return clientJson<Payment>('/payments/withdrawals', {
+    method: 'POST',
+    body: JSON.stringify({ wallet_id: walletId, amount, number, correspondent }),
+  });
+}
+
+export async function fetchPaymentsSession(walletId: string): Promise<Payment[]> {
+  return clientJson<Payment[]>(
+    `/payments?wallet_id=${encodeURIComponent(walletId)}`,
+  );
+}
+
+/** Poll a payment; the backend credits deposits / refunds on polling. */
+export async function refreshPaymentSession(id: string): Promise<Payment> {
+  return clientJson<Payment>(`/payments/${encodeURIComponent(id)}`);
 }
 
 export async function fetchWallet(id: string): Promise<Wallet> {
