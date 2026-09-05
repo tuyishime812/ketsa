@@ -39,9 +39,8 @@ Pick one host (Railway, Render, or Fly). All run the same FastAPI app.
    | `KETSA_EXPOSE_DOCS` | `0` (keep the public API schema hidden) |
    | `KETSA_RATE_LIMIT_PER_MIN` | `120` (or `0` if the provider's proxy handles throttling) |
    | `KETSA_ADMIN_PASSWORD` | **required** — a strong, unique password for the `/admin` panel (see Step 2b) |
-   | `KETSA_DB_BACKEND` | `firestore` if you want admin edits to persist across redeploys (and — required for payments — wallet balances + ledger). Defaults to `memory`, which resets on every restart. |
-   | `GOOGLE_APPLICATION_CREDENTIALS` / `FIREBASE_CREDENTIALS_JSON` | (**Firestore only**) the Firebase Admin service-account credential, either as a path or inline JSON |
-   | `FIREBASE_PROJECT_ID` | (**Firestore only**) optional Firestore project override |
+   | `KETSA_DB_BACKEND` | `supabase` if you want admin edits to persist across redeploys (and — required for payments — wallet balances + ledger). Defaults to `memory`, which resets on every restart. |
+   | `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` | (**Supabase only** — see Step 2b) the project URL and secret service-role key |
    | `KETSA_WANDE_TOKEN` | (**payments** — see Step 2b) wandePay API token for MWK deposits/withdrawals; inject via secret manager, never in code. Absent ⇒ payments `503` |
    | `KETSA_WANDE_BASE_URL` | (**payments**) wandePay API base URL (defaults to `https://apiv1.wandepay.site/api/`) |
 5. Deploy → note the **public HTTPS URL** (e.g. `https://ketsa-api.onrender.com`).
@@ -88,20 +87,19 @@ protected `/api/admin/*` through the same-origin `/api` path.
 1. **Persistent storage (do this first).** The backend defaults to an
    in-process **memory** store seeded from the static content: admin edits work,
    but everything resets whenever the backend restarts/redeploys. To keep edits
-   permanently, set `KETSA_DB_BACKEND=firestore` and provide a Firebase
-   service-account credential (`GOOGLE_APPLICATION_CREDENTIALS` pointing at the
-   JSON file, or `FIREBASE_CREDENTIALS_JSON` with its contents). The backend
-   then persists all markets/watch/ticker/dashboard/settings — **plus wallet
-   balances and the payment ledger** — in Google Cloud Firestore; no disk
-   volume needed on your host. Note: the "reset content" admin action re-seeds
-   markets/settings only and never touches wallets or payment records.
-   - Create a Firestore database in the **Google Cloud Console** for the
-     project, then download a **service-account key** (IAM → Service Accounts
-     → Keys → Add key → JSON).
-   - Compose the raw JSON into the `FIREBASE_CREDENTIALS_JSON` env var, or host
-     the file and reference it via `GOOGLE_APPLICATION_CREDENTIALS`.
-   - No schema setup is required: the backend seeds collections idempotently on
-     first boot.
+   permanently, set `KETSA_DB_BACKEND=supabase` and provide
+   `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` (Settings → API in the Supabase
+   dashboard; keep the key in your host's secret manager — the service role
+   bypasses Row Level Security). The backend then persists all
+   markets/watch/ticker/dashboard/settings — **plus wallet balances and the
+   payment ledger** — in Supabase Postgres; no disk volume needed on your host.
+   Note: the "reset content" admin action re-seeds markets/settings only and
+   never touches wallets or payment records.
+   - Create a free Supabase project (supabase.com), then in the **SQL editor**
+     run the checked-in schema **once**:
+     `backend/db/schema.sql` (creates `ketsa_kv`, `ketsa_wallets` and
+     `ketsa_payments`). The backend seeds the content idempotently on first
+     boot — no further schema setup is required.
 2. **Set the password.** `KETSA_ADMIN_PASSWORD` must be a strong, unique
    value. It is the only key to the whole site. The backend reads it from the
    environment and **never** falls back to a committed secret. In production it
@@ -110,7 +108,7 @@ protected `/api/admin/*` through the same-origin `/api` path.
    money (MWK) and withdraw to mobile money, set **`KETSA_WANDE_TOKEN`** (from
    wandePay) via your host's secret manager — never in code — and
    `KETSA_WANDE_BASE_URL` (defaults to the production API). Keep
-   `KETSA_DB_BACKEND=firestore` so funded balances and the payment ledger
+   `KETSA_DB_BACKEND=supabase` so funded balances and the payment ledger
    survive restarts. Without the token the payment endpoints return `503` and
    the site runs purely on play money.
 4. **Log in.** Open `https://<your-frontend>/admin`, enter the password, and
@@ -147,7 +145,7 @@ protected `/api/admin/*` through the same-origin `/api` path.
 - [ ] Backend health check returns `ok`.
 - [ ] `https://<frontend>/admin` loads the login page; a wrong password is
       rejected and the correct `KETSA_ADMIN_PASSWORD` logs in.
-- [ ] Admin edit persists after a backend restart (i.e. `KETSA_DB_BACKEND=firestore`
+- [ ] Admin edit persists after a backend restart (i.e. `KETSA_DB_BACKEND=supabase`
       with valid credentials — see Step 2b).
 - [ ] (If payments enabled) `/portfolio` shows the Payments panel and creating a
       deposit/withdrawal does not error; `KETSA_WANDE_TOKEN` is set in the host's
@@ -182,7 +180,7 @@ The **admin panel is the one place the browser does call `/api`** in production:
 `/admin` posts JSON to `/api/admin/*`, which Vercel's serverless functions
 route to `KETSA_BACKEND_URL` same-origin to the frontend origin. Auth is a
 bearer token from `POST /api/admin/login` (password = `KETSA_ADMIN_PASSWORD`),
-held in `localStorage`. Writes update the backend's storage (Firestore in
+held in `localStorage`. Writes update the backend's storage (Supabase in
 production, memory in dev), so a page refresh (and every subsequent visitor)
 sees the change.
 
@@ -209,7 +207,9 @@ docker compose up --build -d
 Place a TLS-terminating reverse proxy (Caddy/Nginx/Traefik) in front. Set
 `KETSA_ALLOWED_ORIGINS`, `KETSA_BACKEND_URL`, and a strong
 `KETSA_ADMIN_PASSWORD` in `docker-compose.yml` (or the compose env). For
-persistent admin edits set `KETSA_DB_BACKEND=firestore` and pass the Firebase
-credentials; with the default memory backend, edits reset on restart. To enable
+persistent admin edits set `KETSA_DB_BACKEND=supabase` and supply
+`SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` (run `backend/db/schema.sql`
+once in the Supabase SQL editor); with the default memory backend, edits reset
+on restart. To enable
 payments add `KETSA_WANDE_TOKEN` (from a secret store) via the compose env.
 Both images run as non-root users.

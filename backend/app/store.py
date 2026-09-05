@@ -4,7 +4,7 @@ The public read API and the protected admin API both funnel through these
 functions so there is a single source of truth (the storage backend) and no
 drift between what the admin edits and what visitors see.
 
-The backend (memory or Firestore) is chosen via ``KETSA_DB_BACKEND`` — see
+The backend (memory or Supabase) is chosen via ``KETSA_DB_BACKEND`` — see
 `app/storage.py`.
 """
 

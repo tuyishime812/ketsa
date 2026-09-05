@@ -3,17 +3,18 @@
 The public read API and the protected admin API funnel through `store.py`,
 which delegates to whichever backend is active. Two backends are provided:
 
-  * ``MemoryBackend``  — the default. Seeds from the static ``data.py`` module
+  * ``MemoryBackend``   — the default. Seeds from the static ``data.py`` module
     and keeps everything in-process. Used for local dev previews and the test
     suite (no external services required).
-  * ``FirestoreBackend`` — reads/writes a Google Cloud Firestore project via
-    the Firebase Admin SDK. Used in production so all admin edits persist
-    (and survive restarts/redeploys) in a hosted, managed database.
+  * ``SupabaseBackend`` — reads/writes a Supabase Postgres database via the
+    Supabase REST API (PostgREST). Used in production so all admin edits
+    (and funded wallet balances + the payment ledger) persist across
+    restarts/redeploys in a hosted, managed database.
 
 Select the backend with the ``KETSA_DB_BACKEND`` env var:
 
     KETSA_DB_BACKEND=memory     # default
-    KETSA_DB_BACKEND=firestore  # production
+    KETSA_DB_BACKEND=supabase   # production
 
 Both backends expose the same operations and seed from the same source data,
 so switching is transparent to the rest of the app.
@@ -214,7 +215,7 @@ class MemoryBackend:
     """In-process store seeded from the static data module.
 
     A naive stand-in for the database so local previews and the test-suite run
-    with zero setup. Data is not persisted across restarts; use Firestore for
+    with zero setup. Data is not persisted across restarts; use Supabase for
     production.
     """
 
@@ -385,33 +386,36 @@ class MemoryBackend:
 
 
 # ---------------------------------------------------------------------------
-# Firestore backend (production) — uses Firebase Admin SDK
+# Supabase backend (production) — Postgres via Supabase REST (PostgREST)
 # ---------------------------------------------------------------------------
 
+KV_TABLE = "ketsa_kv"
+WALLETS_TABLE = "ketsa_wallets"
+PAYMENTS_TABLE = "ketsa_payments"
 
-def _firestore_import():
+
+def _supabase_import():
     try:
-        import firebase_admin  # type: ignore
-        from firebase_admin import credentials, firestore  # type: ignore
-        return firebase_admin, credentials, firestore
+        from supabase import create_client  # type: ignore
+        return create_client
     except ImportError as e:  # pragma: no cover - depends on optional dep
         raise RuntimeError(
-            "KETSA_DB_BACKEND=firestore requires the 'firebase-admin' package. "
-            "Install it with: pip install firebase-admin"
+            "KETSA_DB_BACKEND=supabase requires the 'supabase' package. "
+            "Install it with: pip install supabase"
         ) from e
 
 
-class FirestoreBackend:
-    """Persistent storage in Google Cloud Firestore.
+def _as_json(value: Any) -> Any:
+    """Round-trip a value through JSON so only JSON-safe types reach Postgres."""
+    return json.loads(json.dumps(value, default=str))
 
-    Requires a Firebase service-account credential. Provide it either as the
-    path to a service-account JSON via ``GOOGLE_APPLICATION_CREDENTIALS``, or
-    the JSON contents via ``FIREBASE_CREDENTIALS_JSON``. The project can be set
-    with ``FIREBASE_PROJECT_ID`` (otherwise the default from the credential is
-    used).
 
-    Collections: ``markets``, ``watch``, ``ticker``, ``dashboard_ranges``,
-    ``positions``, ``stats``, ``proof``, ``settings``.
+class SupabaseBackend:
+    """Persistent storage in a Supabase Postgres database.
+
+    Requires a Supabase project URL and a service-role key: set ``SUPABASE_URL``
+    and ``SUPABASE_SERVICE_ROLE_KEY``. The service role bypasses Row Level
+    Security, so the key must be kept secret (server-side only).
     """
 
     def __init__(self) -> None:
@@ -430,8 +434,10 @@ class FirestoreBackend:
             self._seed_markets[m.id] = _market_dict(m)
         self._seed_watch = [_watch_dict(w) for w in WATCH]
         self._seed_ticker = [_ticker_dict(t) for t in TICKER]
-        self._seed_ranges = {key: {"pts": list(s.pts), "balance": s.balance, "change": s.change}
-                             for key, s in DASHBOARD.ranges.items()}
+        self._seed_ranges = {
+            key: {"pts": list(s.pts), "balance": s.balance, "change": s.change}
+            for key, s in DASHBOARD.ranges.items()
+        }
         self._seed_positions = [
             {"name": p.name, "avg": p.avg, "cur": p.cur, "pts": list(p.pts)}
             for p in DASHBOARD.positions
@@ -448,234 +454,214 @@ class FirestoreBackend:
         }
 
     @property
-    def db(self) -> Any:
+    def client(self) -> Any:
         if self._client is None:
             self._client = self._connect()
         return self._client
 
     def _connect(self) -> Any:
-        firebase_admin, credentials, firestore = _firestore_import()
-        creds_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-        creds_json = os.getenv("FIREBASE_CREDENTIALS_JSON")
-        project = os.getenv("FIREBASE_PROJECT_ID")
-
-        options = {"projectId": project} if project else None
-        app = None
-        if creds_path:
-            app = firebase_admin.initialize_app(
-                credentials.Certificate(creds_path), options
+        create_client = _supabase_import()
+        url = os.getenv("SUPABASE_URL")
+        key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+        if not url or not key:
+            raise RuntimeError(
+                "KETSA_DB_BACKEND=supabase requires SUPABASE_URL and "
+                "SUPABASE_SERVICE_ROLE_KEY to be set"
             )
-        elif creds_json:
-            app = firebase_admin.initialize_app(
-                credentials.Certificate(creds_json), options
-            )
-        else:
-            # Fall back to Application Default Credentials.
-            app = firebase_admin.initialize_app(options)
-        return firestore.client(app)
+        return create_client(url, key)
 
+    # --- generic PostgREST helpers ------------------------------------------
+    def _get_row(self, table: str, row_id: str) -> dict | None:
+        data = self.client.table(table).select("*").eq("id", row_id).limit(1).execute().data
+        if not data:
+            return None
+        return _as_json(data[0].get("value"))
+
+    def _upsert_row(self, table: str, row_id: str, value: Any) -> None:
+        self.client.table(table).upsert({"id": row_id, "value": _as_json(value)}).execute()
+
+    def _delete_row(self, table: str, row_id: str) -> None:
+        self.client.table(table).delete().eq("id", row_id).execute()
+
+    def _list_rows(self, table: str) -> list[dict]:
+        data = self.client.table(table).select("*").execute().data or []
+        return [_as_json(r.get("value")) for r in data]
+
+    def _count_kind(self, kind: str) -> int:
+        res = self.client.table(KV_TABLE).select("id", count="exact").eq("kind", kind).execute()
+        return int(res.count or 0)
+
+    def _list_kind(self, kind: str) -> list[dict]:
+        data = self.client.table(KV_TABLE).select("*").eq("kind", kind).execute().data or []
+        return [_as_json(r.get("value")) for r in data]
+
+    def _get_kv(self, key: str) -> dict | None:
+        return self._get_row(KV_TABLE, key)
+
+    def _upsert_kv(self, key: str, kind: str, value: Any) -> None:
+        self.client.table(KV_TABLE).upsert(
+            {"id": key, "kind": kind, "value": _as_json(value)}
+        ).execute()
+
+    def _delete_kv(self, key: str) -> None:
+        self._delete_row(KV_TABLE, key)
+
+    # --- init / seed ---------------------------------------------------------
     def init(self) -> None:
         if self._initialized:
             return
         self._build_seed()
-        self._seed_if_empty()
-        self._seed_settings()
+        if self._count_kind("market") == 0:
+            for m in self._seed_markets.values():
+                self._upsert_kv(m["id"], "market", m)
+        if self._get_kv("watch") is None:
+            self._upsert_kv("watch", "content", self._seed_watch)
+        if self._get_kv("ticker") is None:
+            self._upsert_kv("ticker", "content", self._seed_ticker)
+        if self._get_kv("dashboard") is None:
+            self._upsert_kv(
+                "dashboard",
+                "content",
+                {"ranges": self._seed_ranges, "positions": self._seed_positions},
+            )
+        if self._get_kv("stats") is None:
+            self._upsert_kv("stats", "content", self._seed_stats)
+        if self._get_kv("proof") is None:
+            self._upsert_kv("proof", "content", self._seed_proof)
+        if self._get_kv("settings") is None:
+            self._upsert_kv("settings", "content", DEFAULT_SETTINGS)
         self._initialized = True
-
-    def _seed_if_empty(self) -> None:
-        for market_id, data in self._seed_markets.items():
-            doc = self.db.collection("markets").document(market_id)
-            if not doc.get().exists:
-                doc.set(data)
-        for w in self._seed_watch:
-            ref = self.db.collection("watch").document(w["name"])
-            if not ref.get().exists:
-                ref.set(w)
-        for i, t in enumerate(self._seed_ticker):
-            ref = self.db.collection("ticker").document(f"{i:03d}")
-            if not ref.get().exists:
-                ref.set({**t, "order": i})
-        for key, series in self._seed_ranges.items():
-            ref = self.db.collection("dashboard_ranges").document(key)
-            if not ref.get().exists:
-                ref.set(series)
-        for p in self._seed_positions:
-            ref = self.db.collection("positions").document(p["name"])
-            if not ref.get().exists:
-                ref.set(p)
-        for name, data in (
-            ("stats", self._seed_stats),
-            ("proof", self._seed_proof),
-        ):
-            ref = self.db.collection(name).document("singleton")
-            if not ref.get().exists:
-                ref.set(data)
-
-    def _seed_settings(self) -> None:
-        for key, value in DEFAULT_SETTINGS.items():
-            ref = self.db.collection("settings").document(key)
-            if not ref.get().exists:
-                ref.set({"value": value})
 
     # --- markets ---
     def list_markets(self) -> list[dict]:
         self.init()
-        snap = self.db.collection("markets").stream()
-        return [dict(s.to_dict()) for s in snap]
+        return self._list_kind("market")
 
     def get_market(self, market_id: str) -> dict | None:
         self.init()
-        doc = self.db.collection("markets").document(market_id).get()
-        return dict(doc.to_dict()) if doc.exists else None
+        return self._get_kv(market_id)
 
     def upsert_market(self, m: dict) -> None:
         self.init()
-        self.db.collection("markets").document(m["id"]).set(m)
+        self._upsert_kv(m["id"], "market", m)
 
     def delete_market(self, market_id: str) -> bool:
         self.init()
-        ref = self.db.collection("markets").document(market_id)
-        if not ref.get().exists:
+        if self._get_kv(market_id) is None:
             return False
-        ref.delete()
+        self._delete_kv(market_id)
         return True
 
     # --- watch ---
     def list_watch(self) -> list[dict]:
         self.init()
-        return [dict(s.to_dict()) for s in self.db.collection("watch").stream()]
+        return list(self._get_kv("watch") or [])
 
     def replace_watch(self, items: list[dict]) -> None:
         self.init()
-        for doc in self.db.collection("watch").list_documents():
-            doc.delete()
-        for it in items:
-            self.db.collection("watch").document(it["name"]).set(it)
+        self._upsert_kv("watch", "content", [dict(it) for it in items])
 
     # --- ticker ---
     def list_ticker(self) -> list[dict]:
         self.init()
-        items = [dict(s.to_dict()) for s in self.db.collection("ticker").stream()]
-        items.sort(key=lambda t: t.get("order", 0))
-        return items
+        return list(self._get_kv("ticker") or [])
 
     def replace_ticker(self, items: list[dict]) -> None:
         self.init()
-        for doc in self.db.collection("ticker").list_documents():
-            doc.delete()
-        for i, it in enumerate(items):
-            self.db.collection("ticker").document(f"{i:03d}").set({**it, "order": i})
+        self._upsert_kv("ticker", "content", [dict(it) for it in items])
 
     # --- dashboard ---
     def get_dashboard(self) -> dict:
         self.init()
-        ranges = {
-            s.id: dict(s.to_dict())
-            for s in self.db.collection("dashboard_ranges").stream()
-        }
-        positions = [
-            dict(s.to_dict()) for s in self.db.collection("positions").stream()
-        ]
-        return {"ranges": ranges, "positions": positions}
+        d = self._get_kv("dashboard") or {}
+        return {"ranges": d.get("ranges", {}), "positions": d.get("positions", [])}
 
     def save_dashboard(self, data: dict) -> None:
         self.init()
-        for doc in self.db.collection("dashboard_ranges").list_documents():
-            doc.delete()
-        for key, series in data.get("ranges", {}).items():
-            self.db.collection("dashboard_ranges").document(key).set(series)
-        for doc in self.db.collection("positions").list_documents():
-            doc.delete()
-        for p in data.get("positions", []):
-            self.db.collection("positions").document(p["name"]).set(p)
+        self._upsert_kv(
+            "dashboard",
+            "content",
+            {"ranges": data.get("ranges", {}), "positions": data.get("positions", [])},
+        )
 
     # --- stats / proof ---
     def get_stats(self) -> dict:
         self.init()
-        return dict(self.db.collection("stats").document("singleton").get().to_dict())
+        return dict(self._get_kv("stats") or {})
 
     def save_stats(self, s: dict) -> None:
         self.init()
-        self.db.collection("stats").document("singleton").set(s)
+        self._upsert_kv("stats", "content", s)
 
     def get_proof(self) -> dict:
         self.init()
-        return dict(self.db.collection("proof").document("singleton").get().to_dict())
+        return dict(self._get_kv("proof") or {})
 
     def save_proof(self, p: dict) -> None:
         self.init()
-        self.db.collection("proof").document("singleton").set(p)
+        self._upsert_kv("proof", "content", p)
 
     # --- settings ---
     def get_all_settings(self) -> dict[str, Any]:
         self.init()
         out: dict[str, Any] = dict(DEFAULT_SETTINGS)
-        for s in self.db.collection("settings").stream():
-            out[s.id] = s.to_dict().get("value")
+        stored = self._get_kv("settings") or {}
+        out.update({k: v for k, v in stored.items() if v is not None})
         return out
 
     def get_setting(self, key: str) -> Any:
         self.init()
-        doc = self.db.collection("settings").document(key).get()
-        if not doc.exists:
-            return DEFAULT_SETTINGS.get(key)
-        return doc.to_dict().get("value")
+        stored = self._get_kv("settings") or {}
+        if key in stored:
+            return stored.get(key)
+        return DEFAULT_SETTINGS.get(key)
 
     def set_setting(self, key: str, value: Any) -> None:
         self.init()
-        self.db.collection("settings").document(key).set({"value": value})
+        stored = dict(self._get_kv("settings") or {})
+        stored[key] = value
+        self._upsert_kv("settings", "content", stored)
 
     def reset_to_seed(self) -> None:
-        # Drop all content collections and re-seed (preserve admin_password).
+        # Preserve the admin password across the reset.
         keep_password = self.get_setting("admin_password")
-        for name in (
-            "markets", "watch", "ticker", "dashboard_ranges", "positions",
-            "stats", "proof",
-        ):
-            for doc in self.db.collection(name).list_documents():
-                doc.delete()
-        self._seed_if_empty()
-        # Reset all settings to defaults, then restore admin_password if stored.
-        for doc in self.db.collection("settings").list_documents():
-            doc.delete()
-        self._seed_settings()
+        # Drop all content + market rows; wallets/payments are never touched.
+        self.client.table(KV_TABLE).delete().eq("kind", "market").execute()
+        for key in ("watch", "ticker", "dashboard", "stats", "proof", "settings"):
+            self._delete_kv(key)
+        self._initialized = False
+        self.init()
         if keep_password is not None:
-            self.db.collection("settings").document("admin_password").set(
-                {"value": keep_password}
-            )
+            self.set_setting("admin_password", keep_password)
 
     # --- wallets (persisted — never wiped by content reset) -------------------
     def get_wallet(self, wallet_id: str) -> dict | None:
         self.init()
-        doc = self.db.collection("wallets").document(wallet_id).get()
-        return dict(doc.to_dict()) if doc.exists else None
+        return self._get_row(WALLETS_TABLE, wallet_id)
 
     def upsert_wallet(self, wallet: dict) -> None:
         self.init()
-        self.db.collection("wallets").document(wallet["id"]).set(wallet)
+        self._upsert_row(WALLETS_TABLE, wallet["id"], wallet)
 
     def list_wallets(self) -> list[dict]:
         self.init()
-        return [dict(s.to_dict()) for s in self.db.collection("wallets").stream()]
+        return self._list_rows(WALLETS_TABLE)
 
     # --- payments ------------------------------------------------------------
     def upsert_payment(self, payment: dict) -> None:
         self.init()
-        self.db.collection("payments").document(payment["id"]).set(payment)
+        self._upsert_row(PAYMENTS_TABLE, payment["id"], payment)
 
     def get_payment(self, payment_id: str) -> dict | None:
         self.init()
-        doc = self.db.collection("payments").document(payment_id).get()
-        return dict(doc.to_dict()) if doc.exists else None
+        return self._get_row(PAYMENTS_TABLE, payment_id)
 
     def list_payments(self, wallet_id: str | None = None) -> list[dict]:
         self.init()
-        query = self.db.collection("payments")
+        items = self._list_rows(PAYMENTS_TABLE)
         if wallet_id:
-            query = query.where("wallet_id", "==", wallet_id)
-        items = [dict(s.to_dict()) for s in query.order_by("created", direction="DESCENDING").stream()]
-        return items
-
+            items = [p for p in items if p.get("wallet_id") == wallet_id]
+        return sorted(items, key=lambda p: p.get("created", 0), reverse=True)
 
 # ---------------------------------------------------------------------------
 # Selection
@@ -686,8 +672,8 @@ _backend: StoreBackend | None = None
 
 def select_backend() -> StoreBackend:
     mode = os.getenv("KETSA_DB_BACKEND", "memory").strip().lower()
-    if mode == "firestore":
-        return FirestoreBackend()
+    if mode == "supabase":
+        return SupabaseBackend()
     if mode in ("memory", "sqlite", ""):
         return MemoryBackend()
     raise ValueError(f"Unknown KETSA_DB_BACKEND: {mode!r}")

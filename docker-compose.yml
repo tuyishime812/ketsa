@@ -12,8 +12,8 @@
 #     if you scale to multiple backend replicas.
 #   * Admin panel (/admin): set a strong KETSA_ADMIN_PASSWORD (default below is
 #     for local dev only). The backend seeds in-memory by default, so admin
-#     edits reset on restart; set KETSA_DB_BACKEND=firestore with Firebase
-#     credentials to persist them (see .env.example).
+#     edits reset on restart; set KETSA_DB_BACKEND=supabase with SUPABASE_URL/
+#     SUPABASE_SERVICE_ROLE_KEY to persist them (see .env.example).
 
 services:
   api:

@@ -21,7 +21,7 @@ ketsa/
 │   │   ├── main.py          App factory, routes, security headers, rate limit
 │   │   ├── models.py        Pydantic wire-format models
 │   │   ├── data.py          Seed market data
-│   │   ├── storage.py       Pluggable storage backends (memory / Firestore)
+│   │   ├── storage.py       Pluggable storage backends (memory / Supabase)
 │   │   ├── store.py         Read/write helpers over the active backend
 │   │   └── admin.py         Protected /api/admin router (auth + CRUD)
 │   ├── tests/               pytest suite (API, security, data, admin)
@@ -54,11 +54,12 @@ The backend's data layer (`app/storage.py`) is pluggable and selected with
 
 - **`memory` (default)** — a fresh, seed-data-filled store in each process. Zero
   setup, ideal for local dev and previews; edits are lost on restart.
-- **`firestore` (production)** — persists every market, watch/ticker row,
+- **`supabase` (production)** — persists every market, watch/ticker row,
   dashboard series, stats, proof, the editable site settings, **and the wallet
-  balances + payment ledger** in Google Cloud Firestore via the Firebase Admin
-  SDK, so admin edits survive restarts and redeploys. Requires a Firebase
-  service-account credential.
+  balances + payment ledger** in Supabase Postgres (via the `supabase` Python
+  SDK / PostgREST), so admin edits survive restarts and redeploys. Requires a
+  Supabase project: set `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` and run
+  `backend/db/schema.sql` once in the SQL editor.
 
 The admin "reset content" endpoint re-seeds both backends to the original data
 (preserving any stored admin password). Wallet balances and payment records are
@@ -126,7 +127,7 @@ With both services running you can trade each market for real on the site:
   seconds as a fallback.
 - **Persistence.** Today the engine keeps books and the trade tape in memory,
   but **wallets are persisted** through the storage backend — a funded balance
-  survives a backend restart (use `KETSA_DB_BACKEND=firestore` in production
+  survives a backend restart (use `KETSA_DB_BACKEND=supabase` in production
   when real money is involved).
 - **Payments (wandePay — MWK).** With `KETSA_WANDE_TOKEN` configured, the
   portfolio lets users top up their balance with real money via Airtel Money /
@@ -184,10 +185,9 @@ and wired through `docker-compose.yml`.
 | `NEXT_PUBLIC_KETSA_BACKEND_URL` | frontend | Public backend origin embedded in the client bundle (WebSocket feed) | `http://127.0.0.1:8000` |
 | `KETSA_CSP`                  | frontend  | Optional override for the emitted CSP header         | built-in policy |
 | `KETSA_ADMIN_PASSWORD`       | backend   | Password for the `/admin` panel (the only auth key)  | `ketsa-admin` |
-| `KETSA_DB_BACKEND`           | backend   | Storage backend: `memory` (default) or `firestore`   | `memory` |
-| `GOOGLE_APPLICATION_CREDENTIALS` | backend | Path to the Firebase service-account JSON (Firestore only) | — |
-| `FIREBASE_CREDENTIALS_JSON`  | backend   | Inline Firebase service-account JSON (Firestore only) | — |
-| `FIREBASE_PROJECT_ID`        | backend   | Firestore project id override (Firestore only)       | — |
+| `KETSA_DB_BACKEND`           | backend   | Storage backend: `memory` (default) or `supabase`   | `memory` |
+| `SUPABASE_URL`               | backend   | Supabase project URL (Supabase only)                | — |
+| `SUPABASE_SERVICE_ROLE_KEY`  | backend   | Supabase secret service-role key (Supabase only)    | — |
 | `KETSA_WANDE_TOKEN`          | backend   | wandePay API token for MWK deposits/withdrawals (secret; absent ⇒ payments 503) | — (payments off) |
 | `KETSA_WANDE_BASE_URL`       | backend   | wandePay API base URL                              | `https://apiv1.wandepay.site/api/` |
 
@@ -207,7 +207,7 @@ site degrades to play-money mode. Payment state is guarded: deposits are
 credited idempotently against the payment record and failed withdrawals are
 refunded, so restarting or double-polling cannot double-credit funds. Wallet
 balances and the payment ledger are persisted in the storage backend (memory
-in dev, Firestore in production). **Content writes** live only under
+in dev, Supabase in production). **Content writes** live only under
 `/api/admin/*` and are protected by a bearer token obtained from
 `POST /api/admin/login` with
 `KETSA_ADMIN_PASSWORD` (tokens last 12h with a sliding window). Admin
@@ -272,10 +272,11 @@ Any Node + Python PaaS works:
 - **Backend** — Railway/Render/Fly: run `uvicorn app.main:app`, expose `8000`,
   set `KETSA_ALLOWED_ORIGINS` to the real frontend origin and
   `KETSA_ADMIN_PASSWORD` to a strong value. For persistence across redeploys
-  set `KETSA_DB_BACKEND=firestore` with a Firebase service account
-  (`GOOGLE_APPLICATION_CREDENTIALS` or `FIREBASE_CREDENTIALS_JSON`).
+  set `KETSA_DB_BACKEND=supabase` with `SUPABASE_URL` +
+  `SUPABASE_SERVICE_ROLE_KEY` (run `backend/db/schema.sql` once in the
+  Supabase SQL editor).
   To enable real-money payments, inject `KETSA_WANDE_TOKEN` via your host's
-  secret manager (never in code) — and keep `KETSA_DB_BACKEND=firestore` so
+  secret manager (never in code) — and keep `KETSA_DB_BACKEND=supabase` so
   funded balances and the payment ledger persist.
 - **All-in-one** — use `docker compose up --build` behind a TLS proxy.
 
