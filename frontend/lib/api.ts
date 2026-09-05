@@ -5,7 +5,16 @@
 // and keeps the API URL out of client bundles). At build time we read the
 // data server-side via `fetchHomeData()`.
 
-import type { HomeData, Market, WatchItem } from './types';
+import type {
+  HomeData,
+  Market,
+  OrderBook,
+  Trade,
+  TradeRequest,
+  TradeResponse,
+  Wallet,
+  WatchItem,
+} from './types';
 
 const API_BASE = process.env.KETSA_BACKEND_URL || 'http://127.0.0.1:8000';
 
@@ -16,13 +25,53 @@ export async function fetchJson<T>(path: string, init?: RequestInit): Promise<T>
     credentials: 'omit',
     headers: {
       Accept: 'application/json',
+      'Content-Type': 'application/json',
       ...(init?.headers ?? {}),
     },
   });
   if (!res.ok) {
-    throw new Error(`API request failed (${res.status}): ${path}`);
+    let detail = `API request failed (${res.status}): ${path}`;
+    try {
+      const body = await res.json();
+      detail = body?.detail || detail;
+    } catch {
+      /* fall through to generic message */
+    }
+    throw new Error(detail);
   }
   return (await res.json()) as T;
+}
+
+/** A same-origin `/api/*` client helper — proxied to the backend by Next. */
+async function clientJson<T>(
+  path: string,
+  init?: RequestInit,
+): Promise<T> {
+  const res = await fetch(`/api${path}`, {
+    ...init,
+    credentials: 'omit',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      ...(init?.headers ?? {}),
+    },
+  });
+  if (!res.ok) {
+    let detail = `API request failed (${res.status}): ${path}`;
+    try {
+      const body = await res.json();
+      detail = body?.detail || detail;
+    } catch {
+      /* fall through to generic message */
+    }
+    throw new Error(detail);
+  }
+  return (await res.json()) as T;
+}
+
+export interface MarketsGroup {
+  all: Market[];
+  by_category: Record<string, Market[]>;
 }
 
 /** Fetch the full home bundle from the backend (server-side helper). */
@@ -36,6 +85,84 @@ export async function fetchWatch(): Promise<WatchItem[]> {
 
 export async function fetchMarket(id: string): Promise<Market> {
   return fetchJson<Market>(`${API_BASE}/api/markets/${encodeURIComponent(id)}`);
+}
+
+export async function fetchMarketBook(id: string): Promise<OrderBook> {
+  return fetchJson<OrderBook>(
+    `${API_BASE}/api/markets/${encodeURIComponent(id)}/book`,
+  );
+}
+
+export async function fetchMarketTrades(id: string, limit = 30): Promise<Trade[]> {
+  return fetchJson<Trade[]>(
+    `${API_BASE}/api/markets/${encodeURIComponent(id)}/trades?limit=${limit}`,
+  );
+}
+
+/** All markets as a group (used by server-side listings). */
+export async function fetchMarketsGroup(): Promise<MarketsGroup> {
+  return fetchJson<MarketsGroup>(`${API_BASE}/api/markets`);
+}
+
+// ---------------------------------------------------------------------------
+// Client-side (browser) helpers. These hit the same-origin `/api/*` rewrite so
+// no CORS configuration is required at runtime.
+// ---------------------------------------------------------------------------
+
+export async function fetchMarketsSession(): Promise<MarketsGroup> {
+  return clientJson<MarketsGroup>('/markets');
+}
+
+export async function fetchWalletSession(id: string): Promise<Wallet> {
+  return clientJson<Wallet>(`/wallet/${encodeURIComponent(id)}`);
+}
+
+export async function connectWalletSession(
+  name: string,
+  existingId?: string,
+): Promise<Wallet> {
+  return clientJson<Wallet>('/wallet', {
+    method: 'POST',
+    body: JSON.stringify({ id: existingId, name }),
+  });
+}
+
+export async function placeTradeSession(req: TradeRequest): Promise<TradeResponse> {
+  return clientJson<TradeResponse>('/trade', {
+    method: 'POST',
+    body: JSON.stringify(req),
+  });
+}
+
+export async function fetchBookSession(id: string): Promise<OrderBook> {
+  return clientJson<OrderBook>(`/markets/${encodeURIComponent(id)}/book`);
+}
+
+export async function fetchTradesSession(id: string, limit = 30): Promise<Trade[]> {
+  return clientJson<Trade[]>(
+    `/markets/${encodeURIComponent(id)}/trades?limit=${limit}`,
+  );
+}
+
+export async function fetchWallet(id: string): Promise<Wallet> {
+  return fetchJson<Wallet>(`${API_BASE}/api/wallet/${encodeURIComponent(id)}`);
+}
+
+export async function connectWallet(
+  name: string,
+  existingId?: string,
+): Promise<Wallet> {
+  return fetchJson<Wallet>(`${API_BASE}/api/wallet`, {
+    method: 'POST',
+    body: JSON.stringify({ id: existingId, name }),
+  });
+}
+
+export async function placeTrade(req: TradeRequest): Promise<TradeResponse> {
+  return fetchJson<TradeResponse>(`${API_BASE}/api/trade`, {
+    method: 'POST',
+    body: JSON.stringify(req),
+  });
 }
 
 /**

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 interface CountUpProps {
   target: number;
@@ -23,6 +23,17 @@ export function CountUp({
 }: CountUpProps) {
   const ref = useRef<HTMLSpanElement>(null);
   const [display, setDisplay] = useState('0');
+
+  const format = useCallback(
+    (n: number) =>
+      prefix +
+      n.toLocaleString('en-US', {
+        minimumFractionDigits: decimals,
+        maximumFractionDigits: decimals,
+      }) +
+      suffix,
+    [prefix, suffix, decimals],
+  );
 
   useEffect(() => {
     const el = ref.current;
@@ -59,15 +70,7 @@ export function CountUp({
       io.disconnect();
       cancelAnimationFrame(raf);
     };
-  }, [target, duration]);
-
-  const format = (n: number) =>
-    prefix +
-    n.toLocaleString('en-US', {
-      minimumFractionDigits: decimals,
-      maximumFractionDigits: decimals,
-    }) +
-    suffix;
+  }, [target, duration, format]);
 
   return (
     <span ref={ref} className="tabular-nums">

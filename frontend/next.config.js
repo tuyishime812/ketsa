@@ -1,11 +1,15 @@
 /** @type {import('next').NextConfig} */
+const backendUrl = process.env.KETSA_BACKEND_URL || 'http://127.0.0.1:8000';
+// ws/wss variant of the backend origin for the live market feed.
+const backendWs = backendUrl.replace(/^http/, 'ws');
+
 const nextConfig = {
   reactStrictMode: true,
   // Self-contained server output for a slim Docker runtime (Dockerfile.frontend).
   output: 'standalone',
   async rewrites() {
     // In development, proxy /api calls to the FastAPI backend.
-    const backend = process.env.KETSA_BACKEND_URL || 'http://127.0.0.1:8000';
+    const backend = backendUrl;
     return [
       {
         source: '/api/:path*',
@@ -26,15 +30,17 @@ const nextConfig = {
     //     user-controlled HTML is ever injected.
     //   * `style-src 'unsafe-inline'` is required for React inline `style`
     //     attributes used throughout the UI (animations, progress widths).
-    //   * No cross-origin resource loads are used; fonts are self-hosted by
-    //     next/font, so `default-src 'self'` is safe.
+    //   * `connect-src` additionally lists the backend HTTP + WS origins so the
+    //     trading API and the live order-book feed can be reached directly from
+    //     the browser (the same-origin /api rewrite proxies most HTTP calls,
+    //     but WebSockets must connect to the backend directly).
     const csp = process.env.KETSA_CSP || [
       "default-src 'self'",
       "script-src 'self' 'unsafe-inline'",
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data:",
       "font-src 'self'",
-      "connect-src 'self'",
+      `connect-src 'self' ${backendUrl} ${backendWs}`,
       "base-uri 'self'",
       "form-action 'self'",
       "frame-ancestors 'none'",

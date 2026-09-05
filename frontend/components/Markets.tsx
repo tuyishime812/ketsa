@@ -1,8 +1,10 @@
 'use client';
 
 import { forwardRef, useEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
 import type { Category, Market, SectionCopy } from '@/lib/types';
 import { randomChange, sparkPath, trendColor } from '@/lib/utils';
+import { liveOf, useMarketFeed } from '@/components/market/MarketFeed';
 
 const TABS: { key: 'all' | Category; label: string }[] = [
   { key: 'all', label: 'All' },
@@ -22,11 +24,12 @@ export default function Markets({
   copy: SectionCopy;
 }) {
   const [filter, setFilter] = useState<'all' | Category>('all');
+  const feed = useMarketFeed();
 
-  const filtered = useMemo(
-    () => (filter === 'all' ? markets : markets.filter((m) => m.cat === filter)),
-    [markets, filter],
-  );
+  const filtered = useMemo(() => {
+    const live = markets.map((m) => liveOf(m, feed.markets));
+    return filter === 'all' ? live : live.filter((m) => m.cat === filter);
+  }, [markets, filter, feed.markets]);
 
   return (
     <section className="section" id="markets">
@@ -37,16 +40,34 @@ export default function Markets({
           sub={copy.description}
         />
 
-        <div className="mb-8 flex flex-wrap gap-[10px]">
-          {TABS.map((t) => (
-            <button
-              key={t.key}
-              onClick={() => setFilter(t.key)}
-              className={`tab ${filter === t.key ? 'is-active' : ''}`}
+        <div className="mb-8 flex flex-wrap items-center justify-between gap-4">
+          <div className="flex flex-wrap gap-[10px]">
+            {TABS.map((t) => (
+              <button
+                key={t.key}
+                onClick={() => setFilter(t.key)}
+                className={`tab ${filter === t.key ? 'is-active' : ''}`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-[16px]">
+            <span className="flex items-center gap-[7px] font-mono text-[11px] uppercase tracking-[.06em] text-ink-3">
+              <span
+                className={`h-2 w-2 rounded-full ${
+                  feed.connected ? 'bg-pos animate-pulse-dot' : 'bg-line-strong'
+                }`}
+              />
+              {feed.connected ? 'Live' : 'Syncing'}
+            </span>
+            <Link
+              href="/markets"
+              className="font-mono text-[11.5px] font-semibold text-brand transition-colors hover:text-ink"
             >
-              {t.label}
-            </button>
-          ))}
+              View all markets →
+            </Link>
+          </div>
         </div>
 
         <div className="grid gap-px overflow-hidden rounded-m border border-line bg-line sm:grid-cols-2 lg:grid-cols-3">
@@ -65,7 +86,7 @@ export default function Markets({
  * enters the viewport, staggered by index.
  */
 function RevealCard({ market, index }: { market: Market; index: number }) {
-  const ref = useRef<HTMLElement>(null);
+  const ref = useRef<HTMLAnchorElement>(null);
   const [visible, setVisible] = useState(false);
   const [drawn, setDrawn] = useState(false);
 
@@ -115,11 +136,12 @@ interface MarketCardProps {
   delay: number;
 }
 
-const MarketCard = forwardRef<HTMLElement, MarketCardProps>(
+const MarketCard = forwardRef<HTMLAnchorElement, MarketCardProps>(
   function MarketCard({ market: m, visible, drawn, delay }, ref) {
     return (
-      <article
+      <Link
         ref={ref}
+        href={`/markets/${m.id}`}
         className={`group flex flex-col gap-[15px] bg-paper p-6 transition-transform duration-200 ease-ketsa hover:bg-paper-alt ${
           visible
             ? 'translate-y-0 opacity-100 transition-[opacity,transform] duration-[550ms] ease-ketsa'
@@ -183,7 +205,7 @@ const MarketCard = forwardRef<HTMLElement, MarketCardProps>(
           <span>{m.meta[0]}</span>
           <span>{m.meta[1]}</span>
         </div>
-      </article>
+      </Link>
     );
   },
 );

@@ -33,7 +33,20 @@ type Draft = Omit<Market, 'meta'> & {
   isNew?: boolean;
 };
 
+/** Convert an ISO string to the `datetime-local` input format (local time). */
+function toLocalInput(iso?: string | null): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
+    d.getHours(),
+  )}:${pad(d.getMinutes())}`;
+}
+
 function emptyDraft(): Draft {
+  const now = new Date();
+  const future = new Date(now.getTime() + 30 * 24 * 3600 * 1000);
   return {
     id: '',
     cat: 'politics',
@@ -44,6 +57,12 @@ function emptyDraft(): Draft {
     meta: ['', ''],
     trend: 'up',
     pts: [10, 14, 12, 18, 16, 22, 20, 26],
+    description: '',
+    end_date: future.toISOString(),
+    volume: 0,
+    liquidity: 500,
+    status: 'open',
+    last_price: 50,
     isNew: true,
   };
 }
@@ -58,7 +77,6 @@ export default function MarketsEditor({
   const [list, setList] = useState<Market[]>(markets);
   const [editing, setEditing] = useState<Draft | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [savedTick, setSavedTick] = useState(0);
 
   const dirty = editing !== null;
 
@@ -95,6 +113,11 @@ export default function MarketsEditor({
       meta: editing.meta,
       trend: editing.trend as Market['trend'],
       pts: editing.pts,
+      description: editing.description ?? '',
+      end_date: editing.end_date ? new Date(editing.end_date).toISOString() : null,
+      volume: Number(editing.volume ?? 0),
+      liquidity: Number(editing.liquidity ?? 0),
+      status: (editing.status ?? 'open') as Market['status'],
     };
 
     try {
@@ -111,7 +134,6 @@ export default function MarketsEditor({
         : [payload, ...prev];
     });
     setEditing(null);
-    setSavedTick((t) => t + 1);
   }
 
   async function removeMarket(id: string) {
@@ -122,7 +144,6 @@ export default function MarketsEditor({
       return;
     }
     setList((prev) => prev.filter((m) => m.id !== id));
-    setSavedTick((t) => t + 1);
   }
 
   return (
@@ -204,6 +225,14 @@ export default function MarketsEditor({
             />
           </Field>
 
+          <Field label="Description" hint="Shown on the market detail page">
+            <TextArea
+              value={editing.description ?? ''}
+              onChange={(v) => patch({ description: v })}
+              rows={3}
+            />
+          </Field>
+
           <div className="admin-grid admin-grid--3">
             <Field label="Category">
               <SelectInput
@@ -229,6 +258,44 @@ export default function MarketsEditor({
                 min={1}
                 max={99}
                 onChange={(v) => patch({ no: v })}
+              />
+            </Field>
+          </div>
+
+          <div className="admin-grid admin-grid--2">
+            <Field label="End date" hint="When the market resolves">
+              <TextInput
+                type="datetime-local"
+                value={toLocalInput(editing.end_date)}
+                onChange={(v) => patch({ end_date: v || null })}
+              />
+            </Field>
+            <Field label="Status">
+              <SelectInput
+                value={editing.status ?? 'open'}
+                onChange={(v) => patch({ status: v as Market['status'] })}
+                options={[
+                  { value: 'open', label: 'Open' },
+                  { value: 'closed', label: 'Closed' },
+                  { value: 'resolved', label: 'Resolved' },
+                ]}
+              />
+            </Field>
+          </div>
+
+          <div className="admin-grid admin-grid--2">
+            <Field label="Volume (USDC)">
+              <NumberInput
+                value={editing.volume ?? 0}
+                min={0}
+                onChange={(v) => patch({ volume: v })}
+              />
+            </Field>
+            <Field label="Liquidity (USDC)" hint="Resting book value; seeds the depth">
+              <NumberInput
+                value={editing.liquidity ?? 0}
+                min={0}
+                onChange={(v) => patch({ liquidity: v })}
               />
             </Field>
           </div>

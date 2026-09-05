@@ -6,7 +6,7 @@ from unittest import mock
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import make_client
+from app.storage import reset_backend
 
 
 def _import_app():
@@ -15,18 +15,18 @@ def _import_app():
 
 
 @pytest.fixture()
-def admin_client(tmp_path) -> TestClient:
-    """Admin client with a fresh SQLite DB and a known admin password.
+def admin_client() -> TestClient:
+    """Admin client with a fresh in-memory store and a known admin password.
 
     The env patch (which includes the admin password) stays active for the whole
     test so login requests can read it at request time.
     """
+    reset_backend()
     with mock.patch.dict(
         os.environ,
         {
             "KETSA_RATE_LIMIT_PER_MIN": "0",
             "KETSA_ADMIN_PASSWORD": "pw123",
-            "KETSA_DB_PATH": str(tmp_path / "test-admin.db"),
         },
         clear=False,
     ):
@@ -136,3 +136,74 @@ def test_proof_save(admin_client: TestClient) -> None:
     proof = {"traders_k": 500, "live_markets": 1500, "total_volume_m": 120.5}
     assert admin_client.put("/api/admin/proof", json=proof, headers=headers).status_code == 200
     assert make_public().get("/api/proof").json() == proof
+
+
+def test_logout_revokes_token(admin_client: TestClient) -> None:
+    headers = _auth(admin_client)
+    assert admin_client.get("/api/admin/me", headers=headers).status_code == 200
+    assert admin_client.post("/api/admin/logout", headers=headers).status_code == 200
+    assert admin_client.get("/api/admin/me", headers=headers).status_code == 401
+
+
+def test_change_password(admin_client: TestClient) -> None:
+    headers = _auth(admin_client)
+    # Wrong current password rejected.
+    resp = admin_client.post(
+        "/api/admin/password",
+        json={"current": "wrong", "new": "newpassword123"},
+        headers=headers,
+    )
+    assert resp.status_code == 401
+    # Too-short new password rejected.
+    resp = admin_client.post(
+        "/api/admin/password",
+        json={"current": "pw123", "new": "short"},
+        headers=headers,
+    )
+    assert resp.status_code == 400
+    # Valid change.
+    resp = admin_client.post(
+        "/api/admin/password",
+        json={"current": "pw123", "new": "newpassword123"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    # Old password no longer works; new one does (persisted in the store).
+    assert admin_client.post("/api/admin/login", json={"password": "pw123"}).status_code == 401
+    assert admin_client.post("/api/admin/login", json={"password": "newpassword123"}).status_code == 200
+
+
+def test_reset_restores_seed(admin_client: TestClient) -> None:
+    headers = _auth(admin_client)
+    # Mutate: create a custom market, change a setting, change hero.
+    market = {
+        "id": "custom-market",
+        "cat": "tech",
+        "tag": "Tech",
+        "q": "Custom?",
+        "yes": 30,
+        "no": 70,
+        "meta": ["a", "b"],
+        "trend": "up",
+        "pts": [10, 12],
+    }
+    assert admin_client.put("/api/admin/markets", json=market, headers=headers).status_code == 200
+    assert admin_client.put(
+        "/api/admin/settings/hero",
+        json={"headline_1": "X", "headline_accent": "Y", "description": "Z", "badge": "B"},
+        headers=headers,
+    ).status_code == 200
+
+    public_before = make_public()
+    assert public_before.get("/api/markets/custom-market").status_code == 200
+    assert public_before.get("/api/home").json()["settings"]["hero"]["badge"] == "B"
+
+    # Reset to seed.
+    assert admin_client.post("/api/admin/reset", headers=headers).status_code == 200
+
+    public_after = make_public()
+    assert public_after.get("/api/markets/custom-market").status_code == 404
+    home_after = public_after.get("/api/home").json()
+    assert home_after["settings"]["hero"]["badge"] == "$97.4M traded this week"
+    # Seed data restored (all original markets present).
+    assert len(home_after["markets"]["all"]) == 9

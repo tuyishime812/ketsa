@@ -11,6 +11,9 @@ export type Category =
 
 export type Trend = 'up' | 'down';
 
+export type Outcome = 'yes' | 'no';
+export type Side = 'buy' | 'sell';
+
 export interface Market {
   id: string;
   cat: Category;
@@ -21,6 +24,78 @@ export interface Market {
   meta: [string, string];
   trend: Trend;
   pts: number[]; // sparkline points
+  description?: string;
+  end_date?: string | null; // ISO-8601 resolution time
+  created?: string | null; // ISO-8601 listing time
+  volume?: number; // traded notional, dollars
+  liquidity?: number; // resting book value, dollars
+  status?: 'open' | 'closed' | 'resolved';
+  last_price?: number | null; // most recent YES fill price in cents
+}
+
+export interface OrderLevel {
+  price: number; // cents
+  size: number; // shares
+}
+
+export interface OrderBook {
+  yes: number;
+  no: number;
+  bids: OrderLevel[]; // YES bids, descending
+  asks: OrderLevel[]; // YES asks, ascending
+  no_bids: OrderLevel[]; // NO bids, descending
+  no_asks: OrderLevel[]; // NO asks, ascending
+  spread: number;
+  last?: number | null;
+}
+
+export interface Trade {
+  ts: number;
+  market_id: string;
+  question?: string;
+  outcome: Outcome;
+  side: Side;
+  price: number; // cents for the traded outcome
+  qty: number; // shares
+  notional: number; // dollars
+}
+
+export interface WalletPosition {
+  market_id: string;
+  question: string;
+  outcome: Outcome;
+  shares: number;
+  avg_price: number;
+  current_price: number;
+  value: number;
+  pnl_value: number;
+}
+
+export interface Wallet {
+  id: string;
+  name: string;
+  usdc: number;
+  equity: number;
+  realized_pnl: number;
+  positions: WalletPosition[];
+  history: Trade[];
+  created: number;
+}
+
+export interface TradeRequest {
+  wallet_id: string;
+  market_id: string;
+  outcome: Outcome;
+  side: Side;
+  amount?: number; // dollars — for buys
+  shares?: number; // shares — for sells
+}
+
+export interface TradeResponse {
+  wallet: Wallet;
+  market: Market;
+  book: OrderBook;
+  trade: Trade;
 }
 
 export interface WatchItem {

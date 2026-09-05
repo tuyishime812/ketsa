@@ -11,11 +11,15 @@ from unittest import mock
 import pytest
 from fastapi.testclient import TestClient
 
+from app.engine import engine
 from app.main import create_app
+from app.storage import reset_backend
 
 
 def make_client(rate_limit: int = 0, expose_docs: bool = True) -> TestClient:
     """Return a TestClient for an app built with the given env overrides."""
+    reset_backend()  # fresh seeded store per test run
+    engine.reset()   # fresh wallet/book runtime per test run
     with mock.patch.dict(
         os.environ,
         {

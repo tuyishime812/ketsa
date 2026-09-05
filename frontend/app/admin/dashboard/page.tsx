@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { adminGet } from '@/lib/api';
+import { adminGet, adminPost } from '@/lib/api';
 import { getStoredToken, clearStoredToken } from '../login-client';
 import type {
   HomeData,
@@ -16,6 +16,7 @@ import TickerEditor from '@/components/admin/TickerEditor';
 import WatchEditor from '@/components/admin/WatchEditor';
 import DashboardEditor from '@/components/admin/DashboardEditor';
 import FooterEditor from '@/components/admin/FooterEditor';
+import ManageEditor from '@/components/admin/ManageEditor';
 
 type TabKey =
   | 'markets'
@@ -23,7 +24,8 @@ type TabKey =
   | 'ticker'
   | 'watch'
   | 'dashboard'
-  | 'content';
+  | 'content'
+  | 'manage';
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: 'markets', label: 'Markets' },
@@ -32,6 +34,7 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'watch', label: 'Watch' },
   { key: 'dashboard', label: 'Dashboard' },
   { key: 'content', label: 'Content' },
+  { key: 'manage', label: 'Manage' },
 ];
 
 export default function AdminDashboard() {
@@ -79,7 +82,14 @@ export default function AdminDashboard() {
     })();
   }, [router]);
 
-  function handleLogout() {
+  async function handleLogout() {
+    if (token) {
+      try {
+        await adminPost(token, '/logout', {});
+      } catch {
+        // Token already invalid locally is fine — clear it regardless.
+      }
+    }
     clearStoredToken();
     router.replace('/admin');
   }
@@ -150,6 +160,7 @@ export default function AdminDashboard() {
           {!loading && settings && tab === 'content' && (
             <FooterEditor token={token} settings={settings} />
           )}
+          {!loading && tab === 'manage' && <ManageEditor token={token} />}
         </div>
       </main>
     </div>

@@ -11,7 +11,9 @@
 #   * The in-memory rate limiter is per-instance; put a shared limiter in front
 #     if you scale to multiple backend replicas.
 #   * Admin panel (/admin): set a strong KETSA_ADMIN_PASSWORD (default below is
-#     for local dev only) and uncomment the volume so saved edits persist.
+#     for local dev only). The backend seeds in-memory by default, so admin
+#     edits reset on restart; set KETSA_DB_BACKEND=firestore with Firebase
+#     credentials to persist them (see .env.example).
 
 services:
   api:
@@ -23,11 +25,8 @@ services:
       - KETSA_EXPOSE_DOCS=0
       - KETSA_RATE_LIMIT_PER_MIN=120
       - KETSA_ADMIN_PASSWORD=ketsa-admin
-      # - KETSA_DB_PATH=/data/ketsa.db
     ports:
       - "8000:8000"
-    # volumes:
-    #   - ketsa_data:/data
     restart: unless-stopped
 
   web:
@@ -42,6 +41,3 @@ services:
     ports:
       - "3000:3000"
     restart: unless-stopped
-
-# volumes:
-#   ketsa_data:

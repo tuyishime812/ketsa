@@ -11,7 +11,6 @@ system.
 """
 
 import hashlib
-import json
 import os
 import secrets
 import time
@@ -20,7 +19,8 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 
 from . import store
-from .database import get_conn, get_setting, set_setting
+from .engine import engine
+from .storage import get_all_settings, get_setting, reset_db, set_setting
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -28,9 +28,41 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 _tokens: dict[str, float] = {}
 TOKEN_TTL = 12 * 3600
 
+# Password hashing (PBKDF2-HMAC-SHA256) for the optional stored admin password.
+_SALT_LEN = 16
+_PBKDF2_ITER = 100_000
 
-def _get_admin_password() -> str:
+
+def _env_password() -> str:
     return os.getenv("KETSA_ADMIN_PASSWORD") or "ketsa-admin"
+
+
+def _stored_password_hash() -> str | None:
+    return get_setting("admin_password")
+
+
+def _set_stored_password(password: str) -> None:
+    salt = os.urandom(_SALT_LEN)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, _PBKDF2_ITER)
+    set_setting("admin_password", f"{salt.hex()}${dk.hex()}")
+
+
+def _verify_stored_password(password: str, stored: str) -> bool:
+    try:
+        salt_hex, hash_hex = stored.split("$", 1)
+        salt = bytes.fromhex(salt_hex)
+        dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, _PBKDF2_ITER)
+    except (ValueError, TypeError):
+        return False
+    return secrets.compare_digest(dk.hex(), hash_hex)
+
+
+def _check_password(password: str) -> bool:
+    stored = _stored_password_hash()
+    if stored is not None:
+        return _verify_stored_password(password, stored)
+    # No stored password yet: fall back to the env/default value.
+    return secrets.compare_digest(password.encode(), _env_password().encode())
 
 
 def _hash_token(token: str) -> str:
@@ -61,6 +93,11 @@ class LoginResponse(BaseModel):
     token: str
 
 
+class ChangePasswordRequest(BaseModel):
+    current: str
+    new: str
+
+
 class MessageResponse(BaseModel):
     ok: bool = True
     detail: str | None = None
@@ -71,13 +108,40 @@ class MessageResponse(BaseModel):
 @router.post("/login", response_model=LoginResponse)
 async def login(body: LoginRequest) -> LoginResponse:
     # Constant-time-ish comparison to reduce trivial timing signal.
-    expected = _get_admin_password().encode()
-    supplied = body.password.encode()
-    if not secrets.compare_digest(supplied, expected):
+    if not _check_password(body.password):
         raise HTTPException(status_code=401, detail="Invalid password")
     token = secrets.token_urlsafe(32)
     _tokens[_hash_token(token)] = time.time() + TOKEN_TTL
     return LoginResponse(token=token)
+
+
+@router.post("/logout", response_model=MessageResponse, dependencies=[Depends(require_admin)])
+async def logout(authorization: str | None = Header(default=None)) -> MessageResponse:
+    token = authorization.removeprefix("Bearer ").strip()
+    _tokens.pop(_hash_token(token), None)
+    return MessageResponse()
+
+
+@router.get("/me", dependencies=[Depends(require_admin)])
+async def me() -> dict:
+    return {"authenticated": True}
+
+
+@router.post("/password", response_model=MessageResponse, dependencies=[Depends(require_admin)])
+async def change_password(body: ChangePasswordRequest) -> MessageResponse:
+    if not _check_password(body.current):
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+    if len(body.new) < 8:
+        raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
+    _set_stored_password(body.new)
+    return MessageResponse()
+
+
+@router.post("/reset", response_model=MessageResponse, dependencies=[Depends(require_admin)])
+async def reset_content() -> MessageResponse:
+    reset_db()
+    engine.reset()
+    return MessageResponse(detail="Content reset to defaults")
 
 
 # --- Markets ----------------------------------------------------------------
@@ -88,6 +152,7 @@ async def admin_markets_create(m: dict) -> MessageResponse:
         store.upsert_market(m)
     except Exception:
         raise HTTPException(status_code=400, detail="Could not save market")
+    engine.reseed_market(m["id"])
     return MessageResponse()
 
 
@@ -97,12 +162,14 @@ async def admin_markets_update(m: dict) -> MessageResponse:
         store.upsert_market(m)
     except Exception:
         raise HTTPException(status_code=400, detail="Could not save market")
+    engine.reseed_market(m["id"])
     return MessageResponse()
 
 
 @router.delete("/markets/{market_id}", response_model=MessageResponse, dependencies=[Depends(require_admin)])
 async def admin_markets_delete(market_id: str) -> MessageResponse:
     deleted = store.delete_market(market_id)
+    engine.remove_market(market_id)
     return MessageResponse(ok=True, detail=("deleted" if deleted else "not found"))
 
 
@@ -146,9 +213,7 @@ async def admin_proof_save(body: dict) -> MessageResponse:
 
 @router.get("/settings", dependencies=[Depends(require_admin)])
 async def admin_settings_get() -> dict:
-    with get_conn() as conn:
-        rows = conn.execute("SELECT key, value FROM settings").fetchall()
-    return {r["key"]: json.loads(r["value"]) for r in rows}
+    return get_all_settings()
 
 
 @router.put("/settings", response_model=MessageResponse, dependencies=[Depends(require_admin)])

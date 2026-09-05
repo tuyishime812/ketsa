@@ -43,3 +43,70 @@ export function randomChange(t: Trend): string {
 export function fmt(n: number): string {
   return n.toLocaleString('en-US');
 }
+
+// ---------------------------------------------------------------------------
+// Marketplace formatting helpers
+// ---------------------------------------------------------------------------
+
+/** Compact dollar formatting: $2.4M, $98K, $640. */
+export function fmtUsd(n: number): string {
+  const abs = Math.abs(n);
+  if (abs >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
+  if (abs >= 1_000) return `$${(n / 1_000).toFixed(1)}K`;
+  return `$${n.toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
+}
+
+/** Full dollar amount with cents: $1,234.56 */
+export function fmtUsdFull(n: number): string {
+  return `$${n.toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+/** Percentage display for share prices: 41¢ */
+export function fmtCents(cents: number): string {
+  return `${Math.round(cents)}¢`;
+}
+
+/** Number / shares display with grouping + up to 2 decimals. */
+export function fmtShares(n: number): string {
+  return n.toLocaleString('en-US', {
+    maximumFractionDigits: n < 10 ? 2 : 0,
+  });
+}
+
+/** Render a raw epoch (seconds) timestamp as a short relative "4s ago". */
+export function timeAgo(ts: number): string {
+  const s = Math.floor((Date.now() / 1000 - ts) / 1000);
+  if (!isFinite(s) || s < 0) return 'now';
+  if (s < 5) return 'now';
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  return `${d}d ago`;
+}
+
+/** Format an ISO end_date into a readable date. */
+export function fmtEndDate(iso?: string | null): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString('en-US', {
+    timeZone: 'UTC',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
+/** Whole days until an ISO date (from now, UTC). */
+export function daysUntil(iso?: string | null): number {
+  if (!iso) return 0;
+  const target = new Date(iso).getTime() / 1000;
+  if (!isFinite(target)) return 0;
+  return Math.max(0, Math.ceil((target - Date.now() / 1000) / 86400));
+}

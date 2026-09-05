@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { adminLogin } from '@/lib/api';
 
@@ -32,11 +32,11 @@ export default function AdminLogin() {
   const [loading, setLoading] = useState(false);
 
   // If already logged in, go straight to the dashboard.
-  useState(() => {
+  useEffect(() => {
     if (readStoredToken()) {
       router.replace('/admin/dashboard');
     }
-  });
+  }, [router]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();

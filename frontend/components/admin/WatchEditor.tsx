@@ -6,7 +6,6 @@ import type { WatchItem } from '@/lib/types';
 import {
   Card,
   DangerButton,
-  Field,
   NumberInput,
   SaveButton,
   SelectInput,
@@ -85,7 +84,7 @@ export default function WatchEditor({
 
       <div className="admin-row-between">
         <p className="admin-muted">
-          Items shown in the live "Market watch" panel in the hero. Prices jitter
+          Items shown in the live &ldquo;Market watch&rdquo; panel in the hero. Prices jitter
           automatically; you set the label, category and starting price.
         </p>
         <button type="button" className="admin-btn admin-btn--primary" onClick={addRow}>

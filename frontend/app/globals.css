@@ -65,6 +65,24 @@ body {
     stroke: theme('colors.line');
     stroke-width: 1;
   }
+  .field {
+    @apply rounded-[7px] border border-line-strong bg-paper px-[13px] py-[10px] text-sm text-ink placeholder:text-ink-3/70 outline-none transition-colors duration-200 ease-ketsa focus:border-ink;
+  }
+  .segment {
+    @apply flex gap-[4px] rounded-[9px] border border-line bg-paper-alt p-[4px];
+  }
+  .segment-btn {
+    @apply flex-1 rounded-[6px] px-3 py-[8px] text-[12.5px] font-semibold text-ink-2 transition-all duration-200 ease-ketsa;
+  }
+  .segment-btn.is-active {
+    @apply bg-ink text-white;
+  }
+  .segment-btn--yes.is-active {
+    @apply bg-pos text-white;
+  }
+  .segment-btn--no.is-active {
+    @apply bg-neg text-white;
+  }
   .section {
     @apply py-[88px];
   }

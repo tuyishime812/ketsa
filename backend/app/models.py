@@ -5,12 +5,15 @@ Next.js frontend consumes. Keep field names/types in sync with
 `frontend/lib/types.ts`.
 """
 
-from typing import List, Literal, Tuple
+from typing import List, Literal, Optional, Tuple
 
 from pydantic import BaseModel
 
 Category = Literal['politics', 'crypto', 'sports', 'culture', 'tech', 'climate']
 Trend = Literal['up', 'down']
+Outcome = Literal['yes', 'no']
+Side = Literal['buy', 'sell']
+MarketStatus = Literal['open', 'closed', 'resolved']
 
 
 class Market(BaseModel):
@@ -23,6 +26,84 @@ class Market(BaseModel):
     meta: Tuple[str, str]
     trend: Trend
     pts: List[int]
+    # Marketplace / detail fields (edited+served by the trading engine).
+    description: str = ''
+    end_date: Optional[str] = None  # ISO-8601 resolution time
+    created: Optional[str] = None   # ISO-8601 market listing time
+    volume: float = 0.0             # total traded notional, dollars
+    liquidity: float = 0.0          # resting book value, dollars
+    status: MarketStatus = 'open'
+    last_price: Optional[int] = None  # most recent YES fill price in cents
+
+
+class OrderLevel(BaseModel):
+    price: int
+    size: float
+
+
+class OrderBook(BaseModel):
+    yes: int             # current YES price
+    no: int
+    bids: List[OrderLevel]      # YES bids (buy YES), descending
+    asks: List[OrderLevel]      # YES asks (sell YES), ascending
+    no_bids: List[OrderLevel]   # NO bids, descending
+    no_asks: List[OrderLevel]   # NO asks, ascending
+    spread: int
+    last: Optional[int] = None
+
+
+class Trade(BaseModel):
+    ts: float
+    market_id: str
+    question: str = ''
+    outcome: Outcome
+    side: Side
+    price: int   # cents for the traded outcome (YES or NO)
+    qty: float   # shares of the traded outcome
+    notional: float  # dollars
+
+
+class WalletPosition(BaseModel):
+    market_id: str
+    question: str
+    outcome: Outcome
+    shares: float
+    avg_price: int
+    current_price: int
+    value: float
+    pnl_value: float
+
+
+class Wallet(BaseModel):
+    id: str
+    name: str
+    usdc: float
+    equity: float
+    realized_pnl: float
+    positions: List[WalletPosition]
+    history: List[Trade]
+    created: float
+
+
+class WalletConnectRequest(BaseModel):
+    id: Optional[str] = None
+    name: str = 'Trader'
+
+
+class TradeRequest(BaseModel):
+    wallet_id: str
+    market_id: str
+    outcome: Outcome
+    side: Side
+    amount: Optional[float] = None  # dollars — required for buys
+    shares: Optional[float] = None  # shares — required for sells
+
+
+class TradeResponse(BaseModel):
+    wallet: Wallet
+    market: Market
+    book: OrderBook
+    trade: Trade
 
 
 class WatchItem(BaseModel):

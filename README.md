@@ -21,8 +21,8 @@ ketsa/
 │   │   ├── main.py          App factory, routes, security headers, rate limit
 │   │   ├── models.py        Pydantic wire-format models
 │   │   ├── data.py          Seed market data
-│   │   ├── database.py      SQLite schema + idempotent seeding + settings store
-│   │   ├── store.py         Read/write helpers over SQLite
+│   │   ├── storage.py       Pluggable storage backends (memory / Firestore)
+│   │   ├── store.py         Read/write helpers over the active backend
 │   │   └── admin.py         Protected /api/admin router (auth + CRUD)
 │   ├── tests/               pytest suite (API, security, data, admin)
 │   └── requirements*.txt
@@ -46,6 +46,21 @@ ketsa/
    "using bundled data" badge.
 3. In local dev, `next.config.js` **rewrites** `/api/*` to the backend, so the
    browser only ever talks to the Next.js origin.
+
+### Storage
+
+The backend's data layer (`app/storage.py`) is pluggable and selected with
+`KETSA_DB_BACKEND`:
+
+- **`memory` (default)** — a fresh, seed-data-filled store in each process. Zero
+  setup, ideal for local dev and previews; edits are lost on restart.
+- **`firestore` (production)** — persists every market, watch/ticker row,
+  dashboard series, stats, proof, and the editable site settings in Google
+  Cloud Firestore via the Firebase Admin SDK, so admin edits survive restarts
+  and redeploys. Requires a Firebase service-account credential.
+
+The admin "reset content" endpoint re-seeds both backends to the original data
+(preserving any stored admin password).
 
 ---
 
@@ -85,9 +100,37 @@ With both services running, log in at **`http://localhost:3000/admin`**:
 - The dashboard has a sidebar with editors for **Markets, Hero, Ticker,
   Watch, Dashboard, and Content** (hero/CTA copy, steps, footer, section
   headings).
-- Edits are saved to SQLite immediately and appear on the public site right
-  away — no code changes or redeploys required. Markets created here also show
-  up on `/api/markets`.
+- Edits are saved to the storage backend immediately and appear on the public
+  site right away — no code changes or redeploys required. Markets created
+  here also show up on `/api/markets`.
+- The backend also supports changing the admin password and resetting all
+  content back to the seed defaults (see `DEPLOY.md` for the persistence
+  story).
+
+### 4. Trading (Polymarket-style simulation)
+
+With both services running you can trade each market for real on the site:
+
+- **Play money.** Every visitor gets a simulated wallet seeded with \$1,000 USDC
+  (stored in `localStorage`). Click **Connect wallet** in the nav to create one.
+- **Markets.** `/markets` lists all markets with search, category filters and
+  sorting (volume, liquidity, ending soon, newest). `/markets/<id>` has a price
+  chart, a live YES/NO order book, a trade widget and a recent-trades tape.
+- **Portfolio.** `/portfolio` tracks USDC balance, open positions, and realized
+  + unrealized P&L against live prices.
+- **Live updates.** A WebSocket feed (`ws://…/api/ws`) streams market ticks and
+  fills to all open pages; order books and the trade tape refresh every few
+  seconds as a fallback.
+- **How trading works.** Prices are integer cents (1–99) with YES+NO=100. A NO
+  buy/sell is executed against the complementary YES-side quote (Polymarket's
+  synthetic NO approach). Trading is decoupled from the storage backends: the
+  engine keeps books, wallets and the trade tape in memory per app instance, so
+  wallets reset when the backend restarts.
+
+Note: when the backend is **not** reachable from the browser at the default
+`127.0.0.1:8000` (e.g. a Vercel frontend + hosted backend), set
+`NEXT_PUBLIC_KETSA_BACKEND_URL` so the WebSocket feed knows where to connect.
+The `/api/*` HTTP calls go through Next's rewrite proxy regardless.
 
 ---
 
@@ -97,8 +140,9 @@ With both services running, log in at **`http://localhost:3000/admin`**:
 # Backend
 cd backend
 .venv\Scripts\python.exe -m pytest
-# 42 tests: endpoints, models/seed consistency, 404/405, CORS,
-# security headers, OpenAPI gating, rate limiting, admin auth + CRUD.
+# 60 tests: endpoints, models/seed consistency, 404/405, CORS,
+# security headers, OpenAPI gating, rate limiting, admin auth + CRUD,
+# and the marketplace engine (wallets, matching, order books, WS feed).
 
 # Frontend
 cd frontend
@@ -128,9 +172,13 @@ and wired through `docker-compose.yml`.
 | `KETSA_EXPOSE_DOCS`          | backend   | `1` to enable `/docs` `/redoc` `/openapi.json`       | `0` (off) |
 | `KETSA_RATE_LIMIT_PER_MIN`   | backend   | Requests/IP/60s fixed window (`0` disables)          | `120` |
 | `KETSA_BACKEND_URL`          | frontend  | Base URL of the FastAPI service (server-side fetch)  | `http://127.0.0.1:8000` |
+| `NEXT_PUBLIC_KETSA_BACKEND_URL` | frontend | Public backend origin embedded in the client bundle (WebSocket feed) | `http://127.0.0.1:8000` |
 | `KETSA_CSP`                  | frontend  | Optional override for the emitted CSP header         | built-in policy |
 | `KETSA_ADMIN_PASSWORD`       | backend   | Password for the `/admin` panel (the only auth key)  | `ketsa-admin` |
-| `KETSA_DB_PATH`              | backend   | Path to the SQLite database file                     | `backend/ketsa.db` |
+| `KETSA_DB_BACKEND`           | backend   | Storage backend: `memory` (default) or `firestore`   | `memory` |
+| `GOOGLE_APPLICATION_CREDENTIALS` | backend | Path to the Firebase service-account JSON (Firestore only) | — |
+| `FIREBASE_CREDENTIALS_JSON`  | backend   | Inline Firebase service-account JSON (Firestore only) | — |
+| `FIREBASE_PROJECT_ID`        | backend   | Firestore project id override (Firestore only)       | — |
 
 ---
 
@@ -138,19 +186,24 @@ and wired through `docker-compose.yml`.
 
 **Posture.** The API is public and **read-only** for site visitors
 (`allow_methods=["GET"]`, `allow_credentials=False`, CORS restricted to an
-allowlist). **Writes** live only under `/api/admin/*` and are protected by a
-bearer token obtained from `POST /api/admin/login` with `KETSA_ADMIN_PASSWORD`
-(tokens last 12h with a sliding window). Admin endpoints are **not** covered by
-the CORS allowlist restriction in the same way as reads, but they require the
-token on every request. All dynamic content flows through React's escaping; a
-codebase grep found **no** `dangerouslySetInnerHTML`, `eval`, or raw-HTML sinks
-in app code.
+allowlist). The trading features add two **public write** endpoints —
+`POST /api/wallet` and `POST /api/trade` — which run on a simulated-wallet
+ledger kept in memory (no real funds) and are gated by the per-IP rate
+limiter. **Content writes** live only under `/api/admin/*` and are protected
+by a bearer token obtained from `POST /api/admin/login` with
+`KETSA_ADMIN_PASSWORD` (tokens last 12h with a sliding window). Admin
+endpoints are **not** covered by the CORS allowlist restriction in the same
+way as reads, but they require the token on every request. All dynamic content
+flows through React's escaping; a codebase grep found **no**
+`dangerouslySetInnerHTML`, `eval`, or raw-HTML sinks in app code.
 
 **Admin password.** `KETSA_ADMIN_PASSWORD` is the only key to the whole site.
 It is read from the environment (does **not** fall back to a committed secret),
 defaults to `ketsa-admin` for local dev, and **must** be set to a strong,
-unique value in production. Tokens are held in memory (no persistence), so a
-backend restart revokes all sessions.
+unique value in production. If set from the `/api/admin/password` endpoint the
+new password is hashed (PBKDF2-HMAC-SHA256) and stored in the backend, taking
+precedence over the environment value. Tokens are held in memory (no
+persistence), so a backend restart revokes all sessions.
 
 **HTTP security headers (both services).**
 - `Content-Security-Policy`: `default-src 'self'` plus the allowances Next.js
@@ -199,8 +252,9 @@ Any Node + Python PaaS works:
   as a purely static/standalone site, though live data needs the API.
 - **Backend** — Railway/Render/Fly: run `uvicorn app.main:app`, expose `8000`,
   set `KETSA_ALLOWED_ORIGINS` to the real frontend origin and
-  `KETSA_ADMIN_PASSWORD` to a strong value. Point `KETSA_DB_PATH` at a
-  **persistent volume** so admin-edited content survives redeploys.
+  `KETSA_ADMIN_PASSWORD` to a strong value. For persistence across redeploys
+  set `KETSA_DB_BACKEND=firestore` with a Firebase service account
+  (`GOOGLE_APPLICATION_CREDENTIALS` or `FIREBASE_CREDENTIALS_JSON`).
 - **All-in-one** — use `docker compose up --build` behind a TLS proxy.
 
 See `DEPLOY.md` for the full admin + persistent-storage walkthrough.

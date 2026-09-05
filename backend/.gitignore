@@ -5,7 +5,7 @@ __pycache__/
 venv/
 .env
 
-# Local SQLite database (created at runtime; never commit live data)
+# Local database files (legacy SQLite runtime data — never commit live data)
 *.db
 *.sqlite
 *.sqlite3
