@@ -38,3 +38,47 @@ export function clearStoredWallet(): void {
     /* ignore */
   }
 }
+
+// --- Auth session persistence ----------------------------------------------
+// An authenticated session is a bearer token + the owning user. The wallet
+// identity is still stored under `ketsa:wallet` so the rest of the app is
+// oblivious to whether the wallet is guest-created or account-owned.
+
+export interface StoredSession {
+  token: string;
+  userId: string;
+  email: string;
+  name: string;
+}
+
+const SESSION_KEY = 'ketsa:session';
+
+export function loadStoredSession(): StoredSession | null {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<StoredSession>;
+    if (typeof parsed.token === 'string' && parsed.token && parsed.userId) {
+      return parsed as StoredSession;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export function storeSession(s: StoredSession): void {
+  try {
+    localStorage.setItem(SESSION_KEY, JSON.stringify(s));
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+export function clearStoredSession(): void {
+  try {
+    localStorage.removeItem(SESSION_KEY);
+  } catch {
+    /* ignore */
+  }
+}

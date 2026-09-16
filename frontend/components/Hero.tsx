@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import Reveal from './Reveal';
 import { CountUp } from './CountUp';
 import WatchPanel from './WatchPanel';
@@ -13,24 +14,24 @@ export default function Hero({
   copy: HeroContent;
 }) {
   return (
-    <section className="border-b border-line pb-16 pt-20">
-      <div className="wrap grid items-start gap-16 md:grid-cols-[1fr_.92fr]">
+    <section className="border-b border-line pb-16 pt-16">
+      <div className="wrap grid items-center gap-12 lg:grid-cols-[1fr_.95fr]">
         <div>
           <Reveal delay={40}>
-            <span className="mb-6 inline-flex items-center gap-[7px] rounded-full border border-[#D6E0FB] bg-brand-tint px-[11px] py-[6px] font-mono text-xs tracking-[.03em] text-brand">
-              <span className="h-[5px] w-[5px] animate-pulse-dot rounded-full bg-pos" />
-              {copy.badge}
+            <span className="mb-6 inline-flex items-center gap-[8px] rounded-full border border-line bg-white px-[12px] py-[6px] font-mono text-xs font-semibold tracking-[.03em] text-ink-2 shadow-[0_1px_2px_rgba(12,21,38,.04)]">
+              <span className="h-[6px] w-[6px] animate-pulse-dot rounded-full bg-pos" />
+              {copy.badge}<span className="text-ink-3">· live</span>
             </span>
           </Reveal>
 
           <Reveal delay={120}>
-            <h1 className="font-serif text-[clamp(38px,4.4vw,58px)] font-medium leading-[1.08] tracking-[-.01em] text-ink">
+            <h1 className="font-serif text-[clamp(34px,4.2vw,52px)] font-medium leading-[1.08] tracking-[-.01em] text-ink">
               {copy.headline_1}<em className="italic text-brand">{copy.headline_accent}</em>
             </h1>
           </Reveal>
 
           <Reveal delay={200}>
-            <p className="mt-[22px] max-w-[460px] text-[17px] leading-[1.65] text-ink-2">
+            <p className="mt-[20px] max-w-[460px] text-[16px] leading-[1.65] text-ink-2">
               {copy.description}
             </p>
           </Reveal>
@@ -40,14 +41,14 @@ export default function Hero({
               <a href="#markets" className="btn btn--brand btn--lg">
                 Explore markets
               </a>
-              <a href="#how" className="btn btn--ghost btn--lg">
-                How it works
-              </a>
+              <Link href="/markets" className="btn btn--ghost btn--lg">
+                Browse all markets
+              </Link>
             </div>
           </Reveal>
 
           <Reveal delay={360}>
-            <div className="mt-12 flex flex-wrap gap-y-4 border-t border-line pt-[26px]">
+            <div className="mt-10 flex flex-wrap gap-x-8 gap-y-4 border-t border-line pt-[24px]">
               <ProofStat num={proof.traders_k} suffix="K" label="Traders onboard" />
               <ProofStat num={proof.live_markets} label="Live markets" />
               <ProofStat num={proof.total_volume_m} suffix="M" label="Total volume" decimals={1} />

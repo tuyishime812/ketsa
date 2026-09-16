@@ -91,6 +91,57 @@ class WalletConnectRequest(BaseModel):
     name: str = 'Trader'
 
 
+class User(BaseModel):
+    id: str
+    email: str
+    name: str
+    wallet_id: str
+    created: float
+
+
+class ChangePasswordRequest(BaseModel):
+    current: str
+    new: str
+
+
+class AdminUserView(BaseModel):
+    """A user record enriched with live wallet stats for the admin panel."""
+    id: str
+    email: str
+    name: str
+    wallet_id: str
+    created: float
+    wallet_equity: Optional[float] = None
+    wallet_balance: Optional[float] = None
+    positions: int = 0
+    trades: int = 0
+    last_seen: Optional[float] = None
+
+
+class LeaderboardEntry(BaseModel):
+    rank: int
+    wallet_id: str
+    name: str
+    equity: float
+    realized_pnl: float
+    positions: int
+    currency: str = "MWK"
+
+
+class Notification(BaseModel):
+    id: str
+    wallet_id: str
+    type: str  # fill | deposit | withdraw | system
+    title: str
+    message: str
+    ts: float
+    read: bool = False
+
+
+class MarkReadRequest(BaseModel):
+    ids: list[str] = []
+
+
 class TradeRequest(BaseModel):
     wallet_id: str
     market_id: str

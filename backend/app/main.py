@@ -21,13 +21,15 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from . import payments as wande
 from . import store
 from .admin import router as admin_router
+from .auth import resolve_optional_user, router as auth_router
+from .config import load_env_file
 from .engine import engine
 from .storage import get_all_settings, init_db
 from .models import (
@@ -35,9 +37,12 @@ from .models import (
     DashboardSeries,
     DepositRequest,
     HomeData,
+    LeaderboardEntry,
     Market,
     MarketsByCategory,
     MarketsGroup,
+    MarkReadRequest,
+    Notification,
     OrderBook,
     Payment,
     PortfolioStats,
@@ -129,7 +134,45 @@ def _public_settings() -> dict:
     return get_all_settings()
 
 
+def _leaderboard(limit: int = 20) -> list[dict]:
+    """Rank wallets by equity (balance + live position value).
+
+    Wallets held in the live engine are valued accurately; wallets only present
+    in storage (restored) are valued from their cash balance + realized P&L so
+    the board never misses funded accounts.
+    """
+    rows = []
+    for w in store.list_wallets():
+        wallet_id = w["id"]
+        name = (w.get("name") or "").strip() or (wallet_id[:8] if wallet_id else "Trader")
+        live = engine.wallet_view(wallet_id)
+        if live is not None:
+            rows.append({
+                "wallet_id": wallet_id,
+                "name": name,
+                "equity": live["equity"],
+                "realized_pnl": live["realized_pnl"],
+                "positions": len(live["positions"]),
+            })
+        else:
+            balance = float(w.get("balance") or 0.0)
+            realized = float(w.get("realized") or 0.0)
+            rows.append({
+                "wallet_id": wallet_id,
+                "name": name,
+                "equity": round(balance + realized, 2),
+                "realized_pnl": round(realized, 2),
+                "positions": 0,
+            })
+    rows.sort(key=lambda r: r["equity"], reverse=True)
+    return rows[:limit]
+
+
 def create_app() -> "FastAPI":
+    # Load backend/.env (gitignored) so local secrets resolve before the
+    # storage backend is selected; real env vars always take precedence.
+    load_env_file()
+
     # Ensure the active storage backend is initialised and seeded before
     # serving requests.
     init_db()
@@ -200,6 +243,7 @@ def create_app() -> "FastAPI":
         return response
 
     app.include_router(admin_router)
+    app.include_router(auth_router)
 
     @app.get("/api/health")
     async def health() -> dict[str, str]:
@@ -257,13 +301,28 @@ def create_app() -> "FastAPI":
         if engine.wallet_view(wallet_id) is None:
             raise HTTPException(status_code=404, detail="Wallet not found")
 
+    def _gate_wallet_owner(authorization: str | None, wallet_id: str) -> None:
+        """Account-owned wallets require the owning user's bearer token.
+
+        Guests (no Authorization header) keep the simulated-wallet flow as-is.
+        A supplied but invalid token raises 401; a token for a different
+        account raises 403 so account wallets can't be drained by anyone who
+        guesses/leaks the wallet id.
+        """
+        user = resolve_optional_user(authorization)
+        if user is not None and user["wallet_id"] != wallet_id:
+            raise HTTPException(status_code=403, detail="This wallet belongs to another account")
+
     def _payment_payload(rec: dict) -> dict:
         return Payment(**rec).model_dump()
 
     @app.post("/api/payments/deposits", response_model=Payment)
-    async def create_deposit(body: DepositRequest) -> Payment:
+    async def create_deposit(
+        body: DepositRequest, authorization: str | None = Header(default=None)
+    ) -> Payment:
         _require_payments()
         _require_wallet(body.wallet_id)
+        _gate_wallet_owner(authorization, body.wallet_id)
         try:
             number = wande.normalize_number(body.number)
         except wande.WandeError as e:
@@ -330,6 +389,12 @@ def create_app() -> "FastAPI":
                         engine.credit_balance(rec["wallet_id"], rec["amount"])
                         rec["credited"] = True
                     rec["status"] = "completed"
+                    engine.notify(
+                        rec["wallet_id"],
+                        "deposit",
+                        "Deposit received",
+                        f"{rec['amount']:.2f} {rec['correspondent']} credited to your balance.",
+                    )
                 elif ts in _TERMINAL_FAIL:
                     rec["status"] = "failed"
                     rec["message"] = payload.get("message") or ts
@@ -344,12 +409,24 @@ def create_app() -> "FastAPI":
                     rec["message"] = str(payload.get("message") or "Withdrawal check failed")
                 elif ts == "COMPLETED":
                     rec["status"] = "completed"
+                    engine.notify(
+                        rec["wallet_id"],
+                        "withdraw",
+                        "Withdrawal paid out",
+                        f"{rec['amount']:.2f} sent to {rec['number']}.",
+                    )
                 elif ts in _TERMINAL_FAIL:
                     rec["status"] = "failed"
                     rec["message"] = payload.get("message") or ts
                 if rec["status"] == "failed" and not rec["rolled_back"]:
                     engine.credit_balance(rec["wallet_id"], rec["amount"])
                     rec["rolled_back"] = True
+                    engine.notify(
+                        rec["wallet_id"],
+                        "withdraw",
+                        "Withdrawal refunded",
+                        f"Your {rec['amount']:.2f} withdrawal failed and was refunded.",
+                    )
 
             now = time.time()
             rec["updated"] = now
@@ -357,9 +434,12 @@ def create_app() -> "FastAPI":
             return _payment_payload(rec)
 
     @app.post("/api/payments/withdrawals", response_model=Payment)
-    async def create_withdrawal(body: WithdrawalRequest) -> Payment:
+    async def create_withdrawal(
+        body: WithdrawalRequest, authorization: str | None = Header(default=None)
+    ) -> Payment:
         _require_payments()
         _require_wallet(body.wallet_id)
+        _gate_wallet_owner(authorization, body.wallet_id)
         try:
             number = wande.normalize_number(body.number)
         except wande.WandeError as e:
@@ -401,10 +481,19 @@ def create_app() -> "FastAPI":
             "updated": now,
         }
         store.upsert_payment(record)
+        engine.notify(
+            record["wallet_id"],
+            "withdraw",
+            "Withdrawal initiated",
+            f"{record['amount']:.2f} MWK is being sent to {number}.",
+        )
         return _payment_payload(record)
 
     @app.post("/api/trade", response_model=TradeResponse)
-    async def place_trade(body: TradeRequest) -> TradeResponse:
+    async def place_trade(
+        body: TradeRequest, authorization: str | None = Header(default=None)
+    ) -> TradeResponse:
+        _gate_wallet_owner(authorization, body.wallet_id)
         try:
             result = engine.place_trade(
                 body.wallet_id,
@@ -418,6 +507,30 @@ def create_app() -> "FastAPI":
             raise HTTPException(status_code=400, detail=str(e))
         await _pump_events(manager)
         return TradeResponse(**result)
+
+    @app.get("/api/leaderboard", response_model=list[LeaderboardEntry])
+    async def leaderboard(limit: int = 25) -> list[LeaderboardEntry]:
+        rows = _leaderboard(max(1, min(limit, 100)))
+        return [
+            LeaderboardEntry(rank=i + 1, currency="MWK", **row)
+            for i, row in enumerate(rows)
+        ]
+
+    # --- In-app notifications ---------------------------------------------
+
+    @app.get("/api/wallet/{wallet_id}/notifications", response_model=list[Notification])
+    async def wallet_notifications(wallet_id: str, limit: int = 25) -> list[Notification]:
+        if engine.wallet_view(wallet_id) is None:
+            raise HTTPException(status_code=404, detail="Wallet not found")
+        items = store.list_notifications(wallet_id, max(1, min(limit, 100)))
+        return [Notification(**n) for n in items]
+
+    @app.post("/api/wallet/{wallet_id}/notifications/read", response_model=dict)
+    async def wallet_notifications_read(wallet_id: str, body: MarkReadRequest) -> dict:
+        if engine.wallet_view(wallet_id) is None:
+            raise HTTPException(status_code=404, detail="Wallet not found")
+        marked = store.mark_notifications_read(wallet_id, body.ids or None)
+        return {"ok": True, "marked": marked}
 
     @app.websocket("/api/ws")
     async def market_ws(websocket: WebSocket) -> None:

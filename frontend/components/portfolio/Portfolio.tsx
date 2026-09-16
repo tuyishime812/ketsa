@@ -5,6 +5,7 @@ import { useMemo } from 'react';
 import type { Market, Outcome, WalletPosition } from '@/lib/types';
 import { useWallet } from '@/components/wallet/WalletProvider';
 import { liveOf, useMarketFeed } from '@/components/market/MarketFeed';
+import AccountSettings from '@/components/portfolio/AccountSettings';
 import PaymentsPanel from '@/components/payments/PaymentsPanel';
 import {
   fmtBalance,
@@ -35,7 +36,7 @@ export default function Portfolio({
 }: {
   initialMarkets: Market[];
 }) {
-  const { wallet, loading, openConnect } = useWallet();
+  const { wallet, loading, openConnect, user } = useWallet();
   const feed = useMarketFeed();
 
   const rows = useMemo(() => {
@@ -141,11 +142,12 @@ export default function Portfolio({
           </div>
         ) : (
           <div className="grid gap-6 lg:grid-cols-[340px_1fr]">
-            {/* Holdings breakdown */}
-            <div className="rounded-m border border-line bg-white p-5">
-              <h3 className="mb-4 font-serif text-[17px] font-medium">
-                Holdings
-              </h3>
+            {/* Left column: holdings + account */}
+            <div className="flex flex-col gap-6">
+              <div className="rounded-m border border-line bg-white p-5">
+                <h3 className="mb-4 font-serif text-[17px] font-medium">
+                  Holdings
+                </h3>
               <div className="flex flex-col gap-4">
                 {rows.map((r) => (
                   <div key={`${r.p.market_id}:${r.p.outcome}`}>
@@ -176,8 +178,11 @@ export default function Portfolio({
                 ))}
               </div>
               <p className="mt-5 border-t border-line pt-4 font-mono text-[10px] uppercase tracking-[.06em] text-ink-3">
-                Balance {fmtBalance(wallet.balance, wallet.currency)}
-              </p>
+Balance {fmtBalance(wallet.balance, wallet.currency)}
+                </p>
+              </div>
+
+              {user && <AccountSettings />}
             </div>
 
             {/* Positions list */}

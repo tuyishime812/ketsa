@@ -55,8 +55,9 @@ The backend's data layer (`app/storage.py`) is pluggable and selected with
 - **`memory` (default)** — a fresh, seed-data-filled store in each process. Zero
   setup, ideal for local dev and previews; edits are lost on restart.
 - **`supabase` (production)** — persists every market, watch/ticker row,
-  dashboard series, stats, proof, the editable site settings, **and the wallet
-  balances + payment ledger** in Supabase Postgres (via the `supabase` Python
+  dashboard series, stats, proof, the editable site settings, **wallet
+  balances + payment ledger**, **user accounts**, and the **per-wallet
+  notification feed** in Supabase Postgres (via the `supabase` Python
   SDK / PostgREST), so admin edits survive restarts and redeploys. Requires a
   Supabase project: set `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` and run
   `backend/db/schema.sql` once in the SQL editor.
@@ -68,6 +69,11 @@ The admin "reset content" endpoint re-seeds both backends to the original data
 ---
 
 ## Local development
+
+> **One command (recommended).** From the repo root, `npm run dev` starts the
+> FastAPI backend (port 8000) and the Next.js frontend (port 3000) together,
+> so the site runs on the live demo data served by the API — no need to start
+> two terminals. Ctrl+C stops both.
 
 ### 1. Backend (FastAPI)
 
@@ -101,8 +107,10 @@ With both services running, log in at **`http://localhost:3000/admin`**:
 - The first login uses the password from `KETSA_ADMIN_PASSWORD`
   (default `ketsa-admin` for local dev — **set a real one for production**).
 - The dashboard has a sidebar with editors for **Markets, Hero, Ticker,
-  Watch, Dashboard, and Content** (hero/CTA copy, steps, footer, section
-  headings).
+  Watch, Dashboard, Content, Users**, and **Manage** (hero/CTA copy, steps,
+  footer, section headings). The **Users** tab lists every account with live
+  wallet equity and lets you reset a user's password (revokes their sessions)
+  or delete the account entirely.
 - Edits are saved to the storage backend immediately and appear on the public
   site right away — no code changes or redeploys required. Markets created
   here also show up on `/api/markets`.
@@ -116,6 +124,19 @@ With both services running you can trade each market for real on the site:
 
 - **Play money.** Every visitor gets a simulated wallet seeded with **MK 1,000**
   (stored in `localStorage`). Click **Connect wallet** in the nav to create one.
+- **Accounts.** Optional email accounts (`/api/auth/register`) let you keep a
+  name and email on a wallet. The wallet's **equity and positions live on the
+  storage backend** and your `Authorization: Bearer` token (30-day sliding)
+  locks the account to its own wallet — trading or paying into another wallet
+  returns `403`. Failed logins are throttled per email (`KETSA_AUTH_MAX_FAILURES`
+  / `KETSA_AUTH_LOCKOUT_SECONDS`); you can change your password from the
+  Portfolio ("Account" card), which revokes all other sessions and issues a
+  fresh token.
+- **Leaderboard.** `/leaderboard` ranks every wallet that has traded by live
+  equity (P&L shown per row); refresh every 30s.
+- **Notifications.** The bell in the nav (when a wallet is connected) lists the
+  latest fills, deposits and withdrawal events per wallet, with unread badges
+  and "mark all read".
 - **Markets.** `/markets` lists all markets with search, category filters and
   sorting (volume, liquidity, ending soon, newest). `/markets/<id>` has a price
   chart, a live YES/NO order book, a trade widget and a recent-trades tape.
@@ -149,10 +170,12 @@ The `/api/*` HTTP calls go through Next's rewrite proxy regardless.
 # Backend
 cd backend
 .venv\Scripts\python.exe -m pytest
-# 70 tests: endpoints, models/seed consistency, 404/405, CORS,
-# security headers, OpenAPI gating, rate limiting, admin auth + CRUD,
-# market engine (wallets, books, execution, WS feed), and wandePay payments
-# (deposits, withdrawals, idempotent crediting, refunds).
+# 104 tests: endpoints, models/seed consistency, 404/405, CORS,
+# security headers, OpenAPI gating, rate limiting, admin auth + CRUD + user
+# management, the matching engine (wallets, books, execution, WS feed),
+# account auth (register/login, sessions, throttling, change password,
+# wallet-binding on writes), leaderboard + notifications, and wandePay
+# payments (deposits, withdrawals, idempotent crediting, refunds).
 
 # Frontend
 cd frontend
@@ -190,6 +213,8 @@ and wired through `docker-compose.yml`.
 | `SUPABASE_SERVICE_ROLE_KEY`  | backend   | Supabase secret service-role key (Supabase only)    | — |
 | `KETSA_WANDE_TOKEN`          | backend   | wandePay API token for MWK deposits/withdrawals (secret; absent ⇒ payments 503) | — (payments off) |
 | `KETSA_WANDE_BASE_URL`       | backend   | wandePay API base URL                              | `https://apiv1.wandepay.site/api/` |
+| `KETSA_AUTH_MAX_FAILURES`    | backend   | Failed logins per email before a temporary lockout  | `5` |
+| `KETSA_AUTH_LOCKOUT_SECONDS` | backend   | Lockout window after too many failed logins         | `900` |
 
 ---
 

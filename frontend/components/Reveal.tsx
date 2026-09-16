@@ -17,9 +17,11 @@ export default function Reveal({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(false);
+  const [ready, setReady] = useState(false);
 
   useEffect(() => {
     const el = ref.current;
+    setReady(true);
     if (!el) return;
     if (typeof IntersectionObserver === 'undefined') {
       setVisible(true);
@@ -40,13 +42,16 @@ export default function Reveal({
     return () => io.disconnect();
   }, []);
 
+  // Content is visible by default (SSR/no-JS safe). We only hide it once the
+  // client has mounted so the reveal animation can run; if the observer never
+  // fires, the section still stays visible instead of being blank.
+  const hidden = ready && !visible;
+
   return (
     <div
       ref={ref}
       className={`transition-all duration-700 ease-ketsa ${className} ${
-        visible
-          ? 'opacity-100 translate-y-0'
-          : 'opacity-0 translate-y-[14px]'
+        hidden ? 'opacity-0 translate-y-[14px]' : 'opacity-100 translate-y-0'
       }`}
       style={{ transitionDelay: `${delay}ms` }}
     >

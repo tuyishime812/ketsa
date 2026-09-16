@@ -83,6 +83,67 @@ export interface Wallet {
   created: number;
 }
 
+export interface User {
+  id: string;
+  email: string;
+  name: string;
+  wallet_id: string;
+  created: number;
+}
+
+export interface AuthSession {
+  token: string;
+  user: User;
+  wallet: Wallet;
+}
+
+export interface AuthCredentials {
+  email: string;
+  password: string;
+}
+
+export interface RegisterCredentials {
+  name: string;
+  email: string;
+  password: string;
+}
+
+export interface LeaderboardEntry {
+  rank: number;
+  wallet_id: string;
+  name: string;
+  equity: number;
+  realized_pnl: number;
+  positions: number;
+  currency: string;
+}
+
+export type NotificationType = 'fill' | 'deposit' | 'withdraw' | 'system';
+
+export interface NotificationItem {
+  id: string;
+  wallet_id: string;
+  type: NotificationType;
+  title: string;
+  message: string;
+  ts: number;
+  read: boolean;
+}
+
+/** User record enriched with live wallet stats, exposed to the admin panel. */
+export interface AdminUserView {
+  id: string;
+  email: string;
+  name: string;
+  wallet_id: string;
+  created: number;
+  wallet_equity?: number | null;
+  wallet_balance?: number | null;
+  positions: number;
+  trades: number;
+  last_seen?: number | null;
+}
+
 export type PaymentKind = 'deposit' | 'withdraw';
 export type PaymentStatus = 'pending' | 'completed' | 'failed';
 

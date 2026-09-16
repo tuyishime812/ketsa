@@ -48,8 +48,8 @@ export const fallbackSettings: SiteSettings = {
         title: 'Product',
         links: [
           { label: 'Markets', href: '#markets' },
-          { label: 'Dashboard', href: '#dashboard' },
-          { label: 'How it works', href: '#how' },
+          { label: 'Portfolio', href: '/portfolio' },
+          { label: 'All markets', href: '/markets' },
           { label: 'Pricing', href: '#top' },
         ],
       },
@@ -76,7 +76,7 @@ export const fallbackSettings: SiteSettings = {
     disclaimer: 'Trading involves risk. Markets resolve based on published rules.',
   },
   markets_section: {
-    kicker: 'Order book',
+    kicker: 'Live',
     title: 'Markets moving right now',
     description:
       'Every price is a probability. Buy the side you believe, sell whenever the market catches up to you.',

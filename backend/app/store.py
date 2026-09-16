@@ -90,6 +90,42 @@ def list_wallets() -> list[dict]:
     return get_backend().list_wallets()
 
 
+# --- Users ------------------------------------------------------------------
+
+def get_user(user_id: str) -> dict | None:
+    return get_backend().get_user(user_id)
+
+
+def get_user_by_email(email: str) -> dict | None:
+    return get_backend().get_user_by_email(email)
+
+
+def upsert_user(user: dict) -> None:
+    get_backend().upsert_user(user)
+
+
+def list_users() -> list[dict]:
+    return get_backend().list_users()
+
+
+def delete_user(user_id: str) -> bool:
+    return get_backend().delete_user(user_id)
+
+
+# --- Notifications -----------------------------------------------------------
+
+def upsert_notification(notification: dict) -> None:
+    get_backend().upsert_notification(notification)
+
+
+def list_notifications(wallet_id: str | None = None, limit: int = 50) -> list[dict]:
+    return get_backend().list_notifications(wallet_id, limit)
+
+
+def mark_notifications_read(wallet_id: str, ids: list[str] | None = None) -> int:
+    return get_backend().mark_notifications_read(wallet_id, ids)
+
+
 # --- Payments ---------------------------------------------------------------
 
 def upsert_payment(payment: dict) -> None:

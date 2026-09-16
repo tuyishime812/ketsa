@@ -19,7 +19,9 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 
 from . import store
+from .auth import hash_password, revoke_user_sessions
 from .engine import engine
+from .models import AdminUserView
 from .storage import get_all_settings, get_setting, reset_db, set_setting
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -227,3 +229,58 @@ async def admin_settings_put(body: dict) -> MessageResponse:
 async def admin_settings_section(section: str, body: dict) -> MessageResponse:
     set_setting(section, body)
     return MessageResponse()
+
+
+# --- Users ------------------------------------------------------------------
+
+class AdminUserResetPassword(BaseModel):
+    email: str
+    new_password: str
+
+
+@router.get("/users", response_model=list[AdminUserView], dependencies=[Depends(require_admin)])
+async def admin_users_list() -> list[AdminUserView]:
+    views: list[AdminUserView] = []
+    for u in store.list_users():
+        w = engine.wallet_view(u["wallet_id"])
+        if w is None:
+            w = store.get_wallet(u["wallet_id"])
+        views.append(
+            AdminUserView(
+                id=u["id"],
+                email=u["email"],
+                name=u.get("name") or u["id"],
+                wallet_id=u["wallet_id"],
+                created=float(u.get("created") or 0.0),
+                wallet_equity=(w or {}).get("equity"),
+                wallet_balance=(w or {}).get("balance"),
+                positions=len((w or {}).get("positions") or []),
+                trades=len((w or {}).get("history") or []),
+            )
+        )
+    views.sort(key=lambda v: -(v.wallet_equity or 0.0))
+    return views
+
+
+@router.post(
+    "/users/reset-password",
+    response_model=MessageResponse,
+    dependencies=[Depends(require_admin)],
+)
+async def admin_user_reset_password(body: AdminUserResetPassword) -> MessageResponse:
+    user = store.get_user_by_email(body.email.strip().lower())
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    if len(body.new_password) < 8:
+        raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
+    user["password"] = hash_password(body.new_password)
+    store.upsert_user(user)
+    revoke_user_sessions(user["id"])
+    return MessageResponse(detail="Password reset — the user must log in again")
+
+
+@router.delete("/users/{user_id}", response_model=MessageResponse, dependencies=[Depends(require_admin)])
+async def admin_user_delete(user_id: str) -> MessageResponse:
+    deleted = store.delete_user(user_id)
+    revoke_user_sessions(user_id)
+    return MessageResponse(ok=deleted, detail=("deleted" if deleted else "not found"))

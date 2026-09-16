@@ -5,8 +5,6 @@ import Hero from '@/components/Hero';
 import Ticker from '@/components/Ticker';
 import Markets from '@/components/Markets';
 import { MarketFeedProvider } from '@/components/market/MarketFeed';
-import Dashboard from '@/components/Dashboard';
-import Steps from '@/components/Steps';
 import CtaBand from '@/components/CtaBand';
 import Footer from '@/components/Footer';
 
@@ -33,10 +31,8 @@ export default async function HomePage() {
         <Hero watch={data.watch} proof={data.proof} copy={settings.hero} />
         <Ticker items={data.ticker} />
         <MarketFeedProvider initial={data.markets.all}>
-        <Markets markets={data.markets.all} copy={settings.markets_section} />
-      </MarketFeedProvider>
-        <Dashboard data={data.dashboard} stats={data.stats} copy={settings.dashboard_section} />
-        <Steps copy={settings.steps} />
+          <Markets markets={data.markets.all} copy={settings.markets_section} />
+        </MarketFeedProvider>
         <CtaBand copy={settings.cta} />
       </main>
       <Footer copy={settings.footer} />

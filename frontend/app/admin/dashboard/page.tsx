@@ -17,6 +17,7 @@ import WatchEditor from '@/components/admin/WatchEditor';
 import DashboardEditor from '@/components/admin/DashboardEditor';
 import FooterEditor from '@/components/admin/FooterEditor';
 import ManageEditor from '@/components/admin/ManageEditor';
+import UsersEditor from '@/components/admin/UsersEditor';
 
 type TabKey =
   | 'markets'
@@ -25,6 +26,7 @@ type TabKey =
   | 'watch'
   | 'dashboard'
   | 'content'
+  | 'users'
   | 'manage';
 
 const TABS: { key: TabKey; label: string }[] = [
@@ -34,6 +36,7 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'watch', label: 'Watch' },
   { key: 'dashboard', label: 'Dashboard' },
   { key: 'content', label: 'Content' },
+  { key: 'users', label: 'Users' },
   { key: 'manage', label: 'Manage' },
 ];
 
@@ -160,6 +163,7 @@ export default function AdminDashboard() {
           {!loading && settings && tab === 'content' && (
             <FooterEditor token={token} settings={settings} />
           )}
+          {!loading && tab === 'users' && <UsersEditor token={token} />}
           {!loading && tab === 'manage' && <ManageEditor token={token} />}
         </div>
       </main>

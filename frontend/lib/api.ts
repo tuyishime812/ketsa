@@ -6,17 +6,23 @@
 // data server-side via `fetchHomeData()`.
 
 import type {
+  AuthCredentials,
+  AuthSession,
   Correspondent,
   HomeData,
+  LeaderboardEntry,
   Market,
+  NotificationItem,
   OrderBook,
   Payment,
+  RegisterCredentials,
   Trade,
   TradeRequest,
   TradeResponse,
   Wallet,
   WatchItem,
 } from './types';
+import { loadStoredSession } from './wallet';
 
 const API_BASE = process.env.KETSA_BACKEND_URL || 'http://127.0.0.1:8000';
 
@@ -44,6 +50,13 @@ export async function fetchJson<T>(path: string, init?: RequestInit): Promise<T>
   return (await res.json()) as T;
 }
 
+/** Attach the authenticated user's bearer token to a client request, if signed in. */
+function sessionAuthHeaders(): Record<string, string> {
+  const session = loadStoredSession();
+  if (!session?.token) return {};
+  return { Authorization: `Bearer ${session.token}` };
+}
+
 /** A same-origin `/api/*` client helper — proxied to the backend by Next. */
 async function clientJson<T>(
   path: string,
@@ -55,6 +68,7 @@ async function clientJson<T>(
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
+      ...sessionAuthHeaders(),
       ...(init?.headers ?? {}),
     },
   });
@@ -200,6 +214,111 @@ export async function placeTrade(req: TradeRequest): Promise<TradeResponse> {
     method: 'POST',
     body: JSON.stringify(req),
   });
+}
+
+// ---------------------------------------------------------------------------
+// User auth (register / login / session).
+// These hit the same-origin `/api/*` rewrite at runtime, like the client
+// helpers above.
+// ---------------------------------------------------------------------------
+
+const AUTH_BASE = '/api/auth';
+
+async function authRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${AUTH_BASE}${path}`, {
+    ...init,
+    credentials: 'omit',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      ...(init?.headers ?? {}),
+    },
+  });
+  if (!res.ok) {
+    let detail = `Auth request failed (${res.status})`;
+    try {
+      const body = await res.json();
+      detail = body?.detail || detail;
+    } catch {
+      /* fall through */
+    }
+    throw new Error(detail);
+  }
+  return (await res.json()) as T;
+}
+
+export function registerSession(body: RegisterCredentials): Promise<AuthSession> {
+  return authRequest<AuthSession>('/register', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export function loginSession(body: AuthCredentials): Promise<AuthSession> {
+  return authRequest<AuthSession>('/login', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export function logoutSession(token: string): Promise<{ ok: boolean }> {
+  return authRequest<{ ok: boolean }>('/logout', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+/** Validate a stored token and refresh the user + wallet. */
+export function fetchAuthMe(token: string): Promise<AuthSession> {
+  return authRequest<AuthSession>('/me', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+/** Change the authenticated account's password (returns a fresh token). */
+export function changePasswordSession(
+  current: string,
+  next: string,
+): Promise<AuthSession> {
+  const session = loadStoredSession();
+  return authRequest<AuthSession>('/password', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(session?.token ? { Authorization: `Bearer ${session.token}` } : {}),
+    },
+    body: JSON.stringify({ current, new: next }),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Leaderboard + notifications (client helpers)
+// ---------------------------------------------------------------------------
+
+export function fetchLeaderboard(limit = 25): Promise<LeaderboardEntry[]> {
+  return clientJson<LeaderboardEntry[]>(`/leaderboard?limit=${limit}`);
+}
+
+export function fetchNotificationsSession(
+  walletId: string,
+  limit = 25,
+): Promise<NotificationItem[]> {
+  return clientJson<NotificationItem[]>(
+    `/wallet/${encodeURIComponent(walletId)}/notifications?limit=${limit}`,
+  );
+}
+
+export function markNotificationsReadSession(
+  walletId: string,
+  ids?: string[],
+): Promise<{ ok: boolean; marked: number }> {
+  return clientJson<{ ok: boolean; marked: number }>(
+    `/wallet/${encodeURIComponent(walletId)}/notifications/read`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ ids: ids ?? [] }),
+    },
+  );
 }
 
 /**

@@ -35,31 +35,41 @@ body {
     @apply rounded-lg px-6 py-[13px] text-[15px];
   }
   .tab {
-    @apply rounded-full border border-line-strong bg-paper px-[17px] py-[9px] text-[13.5px] font-medium leading-none text-ink-2 transition-all duration-200 ease-ketsa hover:border-ink-3 hover:bg-paper-alt hover:text-ink;
+    @apply rounded-full border border-line bg-paper px-[16px] py-[9px] text-[13px] font-semibold leading-none text-ink-2 shadow-[0_1px_1px_rgba(12,21,38,.04)] transition-all duration-200 ease-ketsa hover:-translate-y-px hover:border-ink-3 hover:bg-paper-alt hover:text-ink;
   }
   .tab.is-active {
-    @apply border-ink bg-ink font-semibold text-white;
+    @apply border-ink bg-ink font-semibold text-white shadow-[0_6px_16px_-6px_rgba(12,21,38,.55)];
   }
   .price-btn {
-    @apply flex flex-1 items-baseline justify-center gap-[6px] rounded-[6px] border border-line-strong px-2 py-[9px] transition-all duration-200 ease-ketsa;
+    @apply flex flex-1 cursor-pointer select-none items-center justify-center gap-[8px] rounded-[10px] border px-[12px] py-[11px] transition-all duration-200 ease-ketsa;
   }
   .price-btn .lbl {
-    @apply text-[10.5px] font-semibold tracking-[.03em] text-ink-3;
+    @apply font-mono text-[10px] font-bold uppercase tracking-[.1em];
   }
   .price-btn .val {
-    @apply font-mono text-[13.5px] font-semibold text-ink;
+    @apply font-mono text-[16px] font-bold tabular-nums;
   }
-  .price-btn--yes:hover {
-    @apply border-pos bg-pos-tint;
+  .price-btn--yes {
+    @apply border-pos/20 bg-pos-tint text-pos hover:-translate-y-[1px] hover:bg-pos hover:shadow-[0_10px_24px_-12px_rgba(15,143,95,.6)];
   }
-  .price-btn--yes:hover .val {
+  .price-btn--yes .lbl,
+  .price-btn--yes .val {
     @apply text-pos;
   }
-  .price-btn--no:hover {
-    @apply border-neg bg-neg-tint;
+  .price-btn--yes:hover .lbl,
+  .price-btn--yes:hover .val {
+    @apply text-white;
   }
-  .price-btn--no:hover .val {
+  .price-btn--no {
+    @apply border-neg/20 bg-neg-tint text-neg hover:-translate-y-[1px] hover:bg-neg hover:shadow-[0_10px_24px_-12px_rgba(193,51,51,.6)];
+  }
+  .price-btn--no .lbl,
+  .price-btn--no .val {
     @apply text-neg;
+  }
+  .price-btn--no:hover .lbl,
+  .price-btn--no:hover .val {
+    @apply text-white;
   }
   .stroke-line {
     stroke: theme('colors.line');
@@ -69,19 +79,34 @@ body {
     @apply rounded-[7px] border border-line-strong bg-paper px-[13px] py-[10px] text-sm text-ink placeholder:text-ink-3/70 outline-none transition-colors duration-200 ease-ketsa focus:border-ink;
   }
   .segment {
-    @apply flex gap-[4px] rounded-[9px] border border-line bg-paper-alt p-[4px];
+    @apply flex gap-[4px] rounded-[10px] border border-line bg-paper-alt p-[4px] shadow-[0_1px_2px_rgba(12,21,38,.04)];
   }
   .segment-btn {
-    @apply flex-1 rounded-[6px] px-3 py-[8px] text-[12.5px] font-semibold text-ink-2 transition-all duration-200 ease-ketsa;
+    @apply flex-1 rounded-[7px] px-3 py-[9px] text-[12.5px] font-semibold text-ink-2 transition-all duration-200 ease-ketsa;
   }
   .segment-btn.is-active {
-    @apply bg-ink text-white;
+    @apply bg-ink text-white shadow-[0_4px_12px_-6px_rgba(12,21,38,.6)];
   }
   .segment-btn--yes.is-active {
     @apply bg-pos text-white;
   }
   .segment-btn--no.is-active {
     @apply bg-neg text-white;
+  }
+  .trade-side {
+    @apply flex-1 rounded-[7px] border px-[14px] py-[9px] text-[12.5px] font-semibold transition-all duration-200 ease-ketsa;
+  }
+  .trade-side.is-buy {
+    @apply border-pos/20 bg-pos-tint text-pos;
+  }
+  .trade-side.is-sell {
+    @apply border-neg/20 bg-neg-tint text-neg;
+  }
+  .trade-side.is-buy.is-active {
+    @apply border-pos bg-pos text-white shadow-[0_6px_16px_-8px_rgba(15,143,95,.7)];
+  }
+  .trade-side.is-sell.is-active {
+    @apply border-neg bg-neg text-white shadow-[0_6px_16px_-8px_rgba(193,51,51,.7)];
   }
   .section {
     @apply py-[88px];

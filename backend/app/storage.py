@@ -99,8 +99,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
                 "title": "Product",
                 "links": [
                     {"label": "Markets", "href": "#markets"},
-                    {"label": "Dashboard", "href": "#dashboard"},
-                    {"label": "How it works", "href": "#how"},
+                    {"label": "Portfolio", "href": "/portfolio"},
+                    {"label": "All markets", "href": "/markets"},
                     {"label": "Pricing", "href": "#top"},
                 ],
             },
@@ -127,7 +127,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "disclaimer": "Trading involves risk. Markets resolve based on published rules.",
     },
     "markets_section": {
-        "kicker": "Order book",
+        "kicker": "Live",
         "title": "Markets moving right now",
         "description": (
             "Every price is a probability. Buy the side you believe, sell whenever "
@@ -201,9 +201,17 @@ class StoreBackend(Protocol):
     def get_wallet(self, wallet_id: str) -> dict | None: ...
     def upsert_wallet(self, wallet: dict) -> None: ...
     def list_wallets(self) -> list[dict]: ...
+    def get_user(self, user_id: str) -> dict | None: ...
+    def get_user_by_email(self, email: str) -> dict | None: ...
+    def upsert_user(self, user: dict) -> None: ...
+    def list_users(self) -> list[dict]: ...
+    def delete_user(self, user_id: str) -> bool: ...
     def upsert_payment(self, payment: dict) -> None: ...
     def get_payment(self, payment_id: str) -> dict | None: ...
     def list_payments(self, wallet_id: str | None = None) -> list[dict]: ...
+    def upsert_notification(self, notification: dict) -> None: ...
+    def list_notifications(self, wallet_id: str | None = None, limit: int = 50) -> list[dict]: ...
+    def mark_notifications_read(self, wallet_id: str, ids: list[str] | None = None) -> int: ...
 
 
 # ---------------------------------------------------------------------------
@@ -229,7 +237,9 @@ class MemoryBackend:
         self._proof: dict = {}
         self._settings: dict[str, Any] = json.loads(json.dumps(DEFAULT_SETTINGS))
         self._wallets: dict[str, dict] = {}
+        self._users: dict[str, dict] = {}
         self._payments: dict[str, dict] = {}
+        self._notifications: dict[str, dict] = {}
         self._initialized = False
 
     def init(self) -> None:
@@ -367,6 +377,31 @@ class MemoryBackend:
         self.init()
         return [copy.deepcopy(w) for w in self._wallets.values()]
 
+    # --- users ---------------------------------------------------------------
+    def get_user(self, user_id: str) -> dict | None:
+        self.init()
+        u = self._users.get(user_id)
+        return copy.deepcopy(u) if u else None
+
+    def get_user_by_email(self, email: str) -> dict | None:
+        self.init()
+        for u in self._users.values():
+            if u.get("email", "").lower() == (email or "").lower():
+                return copy.deepcopy(u)
+        return None
+
+    def upsert_user(self, user: dict) -> None:
+        self.init()
+        self._users[user["id"]] = copy.deepcopy(user)
+
+    def list_users(self) -> list[dict]:
+        self.init()
+        return [copy.deepcopy(u) for u in self._users.values()]
+
+    def delete_user(self, user_id: str) -> bool:
+        self.init()
+        return self._users.pop(user_id, None) is not None
+
     # --- payments -------------------------------------------------------------
     def upsert_payment(self, payment: dict) -> None:
         self.init()
@@ -384,6 +419,31 @@ class MemoryBackend:
             items = [p for p in items if p.get("wallet_id") == wallet_id]
         return [dict(p) for p in sorted(items, key=lambda p: p.get("created", 0), reverse=True)]
 
+    # --- notifications --------------------------------------------------------
+    def upsert_notification(self, notification: dict) -> None:
+        self.init()
+        self._notifications[notification["id"]] = dict(notification)
+
+    def list_notifications(self, wallet_id: str | None = None, limit: int = 50) -> list[dict]:
+        self.init()
+        items = self._notifications.values()
+        if wallet_id:
+            items = [n for n in items if n.get("wallet_id") == wallet_id]
+        return [dict(n) for n in sorted(items, key=lambda n: n.get("ts", 0), reverse=True)[:limit]]
+
+    def mark_notifications_read(self, wallet_id: str, ids: list[str] | None = None) -> int:
+        self.init()
+        marked = 0
+        for n in self._notifications.values():
+            if n.get("wallet_id") != wallet_id:
+                continue
+            if ids is not None and n["id"] not in ids:
+                continue
+            if not n.get("read"):
+                n["read"] = True
+                marked += 1
+        return marked
+
 
 # ---------------------------------------------------------------------------
 # Supabase backend (production) — Postgres via Supabase REST (PostgREST)
@@ -392,6 +452,8 @@ class MemoryBackend:
 KV_TABLE = "ketsa_kv"
 WALLETS_TABLE = "ketsa_wallets"
 PAYMENTS_TABLE = "ketsa_payments"
+USERS_TABLE = "ketsa_users"
+NOTIFICATIONS_TABLE = "ketsa_notifications"
 
 
 def _supabase_import():
@@ -647,6 +709,36 @@ class SupabaseBackend:
         self.init()
         return self._list_rows(WALLETS_TABLE)
 
+    # --- users ---------------------------------------------------------------
+    def get_user(self, user_id: str) -> dict | None:
+        self.init()
+        return self._get_row(USERS_TABLE, user_id)
+
+    def get_user_by_email(self, email: str) -> dict | None:
+        self.init()
+        if not email:
+            return None
+        needle = email.lower()
+        for u in self._list_rows(USERS_TABLE):
+            if (u.get("email") or "").lower() == needle:
+                return u
+        return None
+
+    def upsert_user(self, user: dict) -> None:
+        self.init()
+        self._upsert_row(USERS_TABLE, user["id"], user)
+
+    def list_users(self) -> list[dict]:
+        self.init()
+        return self._list_rows(USERS_TABLE)
+
+    def delete_user(self, user_id: str) -> bool:
+        self.init()
+        if self._get_row(USERS_TABLE, user_id) is None:
+            return False
+        self._delete_row(USERS_TABLE, user_id)
+        return True
+
     # --- payments ------------------------------------------------------------
     def upsert_payment(self, payment: dict) -> None:
         self.init()
@@ -662,6 +754,32 @@ class SupabaseBackend:
         if wallet_id:
             items = [p for p in items if p.get("wallet_id") == wallet_id]
         return sorted(items, key=lambda p: p.get("created", 0), reverse=True)
+
+    # --- notifications --------------------------------------------------------
+    def upsert_notification(self, notification: dict) -> None:
+        self.init()
+        self._upsert_row(NOTIFICATIONS_TABLE, notification["id"], notification)
+
+    def list_notifications(self, wallet_id: str | None = None, limit: int = 50) -> list[dict]:
+        self.init()
+        items = self._list_rows(NOTIFICATIONS_TABLE)
+        if wallet_id:
+            items = [n for n in items if n.get("wallet_id") == wallet_id]
+        return sorted(items, key=lambda n: n.get("ts", 0), reverse=True)[:limit]
+
+    def mark_notifications_read(self, wallet_id: str, ids: list[str] | None = None) -> int:
+        self.init()
+        marked = 0
+        for n in self._list_rows(NOTIFICATIONS_TABLE):
+            if n.get("wallet_id") != wallet_id:
+                continue
+            if ids is not None and n.get("id") not in ids:
+                continue
+            if not n.get("read"):
+                n["read"] = True
+                self._upsert_row(NOTIFICATIONS_TABLE, n["id"], n)
+                marked += 1
+        return marked
 
 # ---------------------------------------------------------------------------
 # Selection

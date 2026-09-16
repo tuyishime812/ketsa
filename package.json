@@ -1,0 +1,12 @@
+{
+  "name": "ketsa",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Ketsa prediction market — FastAPI backend + Next.js frontend monorepo.",
+  "scripts": {
+    "dev": "node scripts/dev.js",
+    "build": "npm --prefix frontend run build",
+    "start": "npm --prefix frontend run start",
+    "test:api": "python -m pytest"
+  }
+}

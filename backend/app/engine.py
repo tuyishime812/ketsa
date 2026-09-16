@@ -338,6 +338,16 @@ class Marketplace:
 
         trade = wallet["history"][-1]
         self._persist(wallet_id)
+        verb = "Bought" if trade["side"] == "buy" else "Sold"
+        self.notify(
+            wallet_id,
+            "fill",
+            "Order filled",
+            (
+                f"{verb} {_round4(trade['qty'])} {trade['outcome'].upper()} @ "
+                f"{trade['price']}¢ for {_round2(trade['notional'])} — {question}"
+            ),
+        )
         self._emit_market(market_id)
         self._emit({"type": "trade", "trade": trade, "market_id": market_id})
         return {
@@ -454,6 +464,21 @@ class Marketplace:
         wallet = self._wallets.get(wallet_id)
         if wallet is not None:
             store.upsert_wallet(copy.deepcopy(wallet))
+
+    def notify(self, wallet_id: str, ntype: str, title: str, message: str) -> None:
+        """Record an in-app notification for a wallet (fill / payment / system)."""
+        self._wallets.get(wallet_id)  # ensure the wallet exists in memory
+        store.upsert_notification(
+            {
+                "id": secrets.token_hex(16),
+                "wallet_id": wallet_id,
+                "type": ntype if ntype in ("fill", "deposit", "withdraw", "system") else "system",
+                "title": title,
+                "message": message,
+                "ts": time.time(),
+                "read": False,
+            }
+        )
 
     def connect_wallet(self, wallet_id: str | None = None, name: str = "Trader") -> dict:
         wallet_id = (wallet_id or "").strip() or ("0x" + secrets.token_hex(20))

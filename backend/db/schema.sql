@@ -31,6 +31,16 @@ create table if not exists public.ketsa_payments (
   value jsonb not null default '{}'::jsonb
 );
 
+create table if not exists public.ketsa_users (
+  id    text primary key,
+  value jsonb not null default '{}'::jsonb
+);
+
+create table if not exists public.ketsa_notifications (
+  id    text primary key,
+  value jsonb not null default '{}'::jsonb
+);
+
 -- The service-role key operates server-side and bypasses RLS. If you enable
 -- row-level security, allow the service role (permissions are set by default
 -- when tables are created). For an extra lock-down you can grant/revoke:

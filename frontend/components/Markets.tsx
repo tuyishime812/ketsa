@@ -70,7 +70,7 @@ export default function Markets({
           </div>
         </div>
 
-        <div className="grid gap-px overflow-hidden rounded-m border border-line bg-line sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid gap-[14px] md:grid-cols-2 xl:grid-cols-3">
           {filtered.map((m, i) => (
             <RevealCard key={m.id} market={m} index={i} />
           ))}
@@ -81,20 +81,18 @@ export default function Markets({
 }
 
 /**
- * Wraps a market card with the original scroll/stagger reveal, sparkline
- * draw-in and progress-bar animation. Each card fades/slides in once it
- * enters the viewport, staggered by index.
+ * Wraps a market card. Cards are always visible (never hidden at SSR) so the
+ * grid renders instantly; only the sparkline + progress bar draw in once the
+ * card scrolls into view, staggered by index.
  */
 function RevealCard({ market, index }: { market: Market; index: number }) {
   const ref = useRef<HTMLAnchorElement>(null);
-  const [visible, setVisible] = useState(false);
   const [drawn, setDrawn] = useState(false);
 
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     if (typeof IntersectionObserver === 'undefined') {
-      setVisible(true);
       setDrawn(true);
       return;
     }
@@ -103,14 +101,12 @@ function RevealCard({ market, index }: { market: Market; index: number }) {
         entries.forEach((entry) => {
           if (entry.isIntersecting) {
             io.unobserve(entry.target);
-            setVisible(true);
-            // Let the card fade in before drawing the sparkline, mirroring
-            // the original `stroke-dashoffset` transition.
+            // Small stagger so cards feel alive without hiding content.
             window.setTimeout(() => setDrawn(true), 550);
           }
         });
       },
-      { threshold: 0.16 },
+      { threshold: 0.12 },
     );
     io.observe(el);
     return () => io.disconnect();
@@ -122,7 +118,6 @@ function RevealCard({ market, index }: { market: Market; index: number }) {
     <MarketCard
       ref={ref}
       market={market}
-      visible={visible}
       drawn={drawn}
       delay={delay}
     />
@@ -131,30 +126,24 @@ function RevealCard({ market, index }: { market: Market; index: number }) {
 
 interface MarketCardProps {
   market: Market;
-  visible: boolean;
   drawn: boolean;
   delay: number;
 }
 
 const MarketCard = forwardRef<HTMLAnchorElement, MarketCardProps>(
-  function MarketCard({ market: m, visible, drawn, delay }, ref) {
+  function MarketCard({ market: m, drawn, delay }, ref) {
     return (
       <Link
         ref={ref}
         href={`/markets/${m.id}`}
-        className={`group flex flex-col gap-[15px] bg-paper p-6 transition-transform duration-200 ease-ketsa hover:bg-paper-alt ${
-          visible
-            ? 'translate-y-0 opacity-100 transition-[opacity,transform] duration-[550ms] ease-ketsa'
-            : 'translate-y-4 opacity-0'
-        }`}
-        style={{ transitionDelay: visible ? `${delay}ms` : '0ms' }}
+        className="group flex flex-col gap-[13px] rounded-m border border-line bg-white p-[18px] transition-all duration-200 ease-ketsa hover:-translate-y-[1px] hover:border-ink-3 hover:shadow-[0_12px_32px_-16px_rgba(12,21,38,.22)]"
       >
         <div className="flex items-center justify-between">
-          <span className="font-mono text-[10px] uppercase tracking-[.05em] text-ink-3">
+          <span className="rounded-[5px] bg-brand-tint px-[8px] py-[3px] font-mono text-[10px] font-semibold uppercase tracking-[.05em] text-brand">
             {m.tag}
           </span>
           <span
-            className={`font-mono text-xs font-semibold ${
+            className={`font-mono text-xs font-bold ${
               m.trend === 'up' ? 'text-pos' : 'text-neg'
             }`}
           >
@@ -162,21 +151,27 @@ const MarketCard = forwardRef<HTMLAnchorElement, MarketCardProps>(
           </span>
         </div>
 
-        <h3 className="min-h-[48px] font-serif text-[17px] font-medium leading-[1.4] text-ink">
+        <h3 className="line-clamp-2 font-serif text-[16.5px] font-medium leading-[1.4] text-ink">
           {m.q}
         </h3>
 
-        <svg className="h-[38px] w-full" viewBox="0 0 200 38" preserveAspectRatio="none">
+        <svg
+          className="h-[36px] w-full"
+          viewBox="0 0 200 36"
+          preserveAspectRatio="none"
+        >
           <path
-            d={sparkPath(m.pts, 200, 38)}
+            d={sparkPath(m.pts, 200, 36)}
             fill="none"
             stroke={trendColor(m.trend)}
-            strokeWidth="1.6"
+            strokeWidth="1.8"
             strokeLinecap="round"
             strokeLinejoin="round"
             strokeDasharray="300"
             strokeDashoffset={drawn ? '0' : '300'}
-            style={{ transition: 'stroke-dashoffset 1s cubic-bezier(.2,.7,.2,1)' }}
+            style={{
+              transition: `stroke-dashoffset 1s cubic-bezier(.2,.7,.2,1) ${delay}ms`,
+            }}
           />
         </svg>
 
@@ -184,13 +179,13 @@ const MarketCard = forwardRef<HTMLAnchorElement, MarketCardProps>(
           <div
             className="h-full bg-ink"
             style={{
-              width: visible ? `${m.yes}%` : '0%',
-              transition: 'width .9s cubic-bezier(.2,.7,.2,1) .15s',
+              width: `${m.yes}%`,
+              transition: `width .9s cubic-bezier(.2,.7,.2,1) ${delay}ms`,
             }}
           />
         </div>
 
-        <div className="flex gap-2">
+        <div className="flex gap-2 pt-[2px]">
           <div className="price-btn price-btn--yes">
             <span className="lbl">YES</span>
             <span className="val">{m.yes}¢</span>
@@ -201,7 +196,7 @@ const MarketCard = forwardRef<HTMLAnchorElement, MarketCardProps>(
           </div>
         </div>
 
-        <div className="flex justify-between font-mono text-[11px] text-ink-3">
+        <div className="flex justify-between border-t border-line pt-[11px] font-mono text-[11px] text-ink-3">
           <span>{m.meta[0]}</span>
           <span>{m.meta[1]}</span>
         </div>
@@ -222,7 +217,8 @@ function SectionHead({
   return (
     <div className="mb-[38px] flex flex-wrap items-end justify-between gap-6">
       <div>
-        <div className="mb-[9px] font-mono text-[11.5px] uppercase tracking-[.06em] text-brand">
+        <div className="mb-[9px] flex items-center gap-[7px] font-mono text-[11.5px] uppercase tracking-[.06em] text-brand">
+          <span className="h-1.5 w-1.5 animate-pulse-dot rounded-full bg-pos" />
           {kicker}
         </div>
         <h2 className="font-serif text-[clamp(26px,3vw,34px)] font-medium tracking-[-.01em]">
