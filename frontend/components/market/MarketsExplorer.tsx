@@ -189,17 +189,32 @@ function MarketListCard({ market }: { market: Market }) {
         </span>
         <span
           className={`flex items-center gap-[5px] font-mono text-[11px] ${
-            ends === 0 ? 'text-neg' : 'text-ink-3'
+            m.status === 'resolved'
+              ? 'text-pos'
+              : ends === 0
+                ? 'text-neg'
+                : 'text-ink-3'
           }`}
         >
-          {ends > 0
-            ? ends === 1
-              ? 'Ends tomorrow'
-              : `Ends in ${ends}d`
-            : ends === 0
-              ? 'Closing'
-              : 'Closed'}
-          <span className="flex h-1.5 w-1.5 rounded-full bg-current" />
+          {m.status === 'resolved' ? (
+            <>
+              Resolved · {m.resolved_outcome?.toUpperCase()} won
+              <span className="flex h-1.5 w-1.5 rounded-full bg-current" />
+            </>
+          ) : ends > 0 ? (
+            ends === 1 ? (
+              'Ends tomorrow'
+            ) : (
+              `Ends in ${ends}d`
+            )
+          ) : ends === 0 ? (
+            'Closing'
+          ) : (
+            'Closed'
+          )}
+          {m.status !== 'resolved' && (
+            <span className="flex h-1.5 w-1.5 rounded-full bg-current" />
+          )}
         </span>
       </div>
 

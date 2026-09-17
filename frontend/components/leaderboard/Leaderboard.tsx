@@ -5,6 +5,7 @@ import { fetchLeaderboard } from '@/lib/api';
 import type { LeaderboardEntry } from '@/lib/types';
 import { useWallet } from '@/components/wallet/WalletProvider';
 import { fmtBalance } from '@/lib/utils';
+import { onPush, startPush } from '@/lib/push';
 
 const MEDAL = ['🥇', '🥈', '🥉'];
 
@@ -25,9 +26,15 @@ export default function Leaderboard() {
     }
     void load();
     const timer = window.setInterval(load, 30_000);
+    // Push: refresh immediately when a resolution or balance change fires.
+    startPush();
+    const off = onPush((ev) => {
+      if (ev.type === 'leaderboard' || ev.type === 'resolution') void load();
+    });
     return () => {
       alive = false;
       window.clearInterval(timer);
+      off();
     };
   }, []);
 

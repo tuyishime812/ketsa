@@ -34,6 +34,14 @@ class Market(BaseModel):
     liquidity: float = 0.0          # resting book value, dollars
     status: MarketStatus = 'open'
     last_price: Optional[int] = None  # most recent YES fill price in cents
+    resolved_outcome: Optional[Outcome] = None  # winning outcome ('yes'/'no')
+    resolved_price: Optional[int] = None        # final price of the winning outcome
+    resolved_ts: Optional[float] = None         # unix time of resolution
+
+
+class ResolveMarketRequest(BaseModel):
+    outcome: Outcome
+    reason: Optional[str] = None
 
 
 class OrderLevel(BaseModel):
@@ -61,6 +69,7 @@ class Trade(BaseModel):
     price: int   # cents for the traded outcome (YES or NO)
     qty: float   # shares of the traded outcome
     notional: float  # dollars
+    kind: Literal['trade', 'resolution'] = 'trade'  # 'resolution' = payout entry
 
 
 class WalletPosition(BaseModel):

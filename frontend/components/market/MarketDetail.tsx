@@ -6,6 +6,7 @@ import { fetchBookSession, fetchTradesSession } from '@/lib/api';
 import type { Market, OrderBook, Trade, TradeResponse } from '@/lib/types';
 import {
   daysUntil,
+  fmtCents,
   fmtEndDate,
   fmtUsd,
 } from '@/lib/utils';
@@ -116,6 +117,17 @@ export default function MarketDetail({ initial }: { initial: MarketDetailInitial
             <p className="mt-4 max-w-[640px] text-[14.5px] leading-relaxed text-ink-2">
               {m.description}
             </p>
+            {m.status === 'resolved' && (
+              <div className="mt-4 flex flex-wrap items-center gap-3 rounded-[8px] border border-pos/30 bg-pos/5 px-4 py-3">
+                <span className="rounded-[5px] bg-pos px-[8px] py-[3px] font-mono text-[10.5px] font-bold uppercase tracking-[.06em] text-white">
+                  Resolved
+                </span>
+                <span className="font-mono text-[12.5px] text-ink">
+                  {m.resolved_outcome?.toUpperCase()} won — settled at{' '}
+                  {fmtCents(m.resolved_price ?? 0)}. Trading is closed.
+                </span>
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-x-9 gap-y-4 sm:grid-cols-4">
@@ -123,8 +135,14 @@ export default function MarketDetail({ initial }: { initial: MarketDetailInitial
             <Stat label="Liquidity" value={fmtUsd(m.liquidity ?? 0)} />
             <Stat label="Traders" value={m.meta[1]} />
             <Stat
-              label="Ends"
-              value={ends !== null ? fmtEndDate(m.end_date) : 'Open'}
+              label={m.status === 'resolved' ? 'Status' : 'Ends'}
+              value={
+                m.status === 'resolved'
+                  ? 'Resolved'
+                  : ends !== null
+                    ? fmtEndDate(m.end_date)
+                    : 'Open'
+              }
             />
           </div>
         </div>

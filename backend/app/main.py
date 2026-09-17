@@ -21,13 +21,13 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from . import payments as wande
 from . import store
-from .admin import router as admin_router
+from .admin import MessageResponse, require_admin, router as admin_router
 from .auth import resolve_optional_user, router as auth_router
 from .config import load_env_file
 from .engine import engine
@@ -48,6 +48,7 @@ from .models import (
     PortfolioStats,
     Position,
     Proof,
+    ResolveMarketRequest,
     TickerItem,
     Trade,
     TradeRequest,
@@ -62,10 +63,17 @@ CATEGORIES = ['politics', 'crypto', 'sports', 'culture', 'tech', 'climate']
 
 
 class ConnectionManager:
-    """Fan-out of live market data to connected WebSocket clients."""
+    """Fan-out of live market data to connected WebSocket clients.
+
+    Clients may (optionally) subscribe to a wallet to receive that wallet's
+    private notices (fill/payment/system notifications) on the same socket.
+    Public events — market ticks, trades, resolutions, leaderboard changes —
+    are always broadcast to every connection.
+    """
 
     def __init__(self) -> None:
         self._connections: set[WebSocket] = set()
+        self._subs: dict[WebSocket, str | None] = {}
 
     @property
     def connected(self) -> int:
@@ -74,13 +82,27 @@ class ConnectionManager:
     async def connect(self, websocket: WebSocket) -> None:
         await websocket.accept()
         self._connections.add(websocket)
+        self._subs[websocket] = None
 
     def disconnect(self, websocket: WebSocket) -> None:
         self._connections.discard(websocket)
+        self._subs.pop(websocket, None)
+
+    def subscribe(self, websocket: WebSocket, wallet_id: str) -> None:
+        self._subs[websocket] = wallet_id
 
     async def broadcast(self, message: str) -> None:
         dead: list[WebSocket] = []
+        try:
+            payload = json.loads(message)
+        except (ValueError, TypeError):
+            payload = None
         for ws in list(self._connections):
+            # Wallet-scoped notifications go only to the subscribed wallet.
+            if isinstance(payload, dict) and payload.get("type") == "notification":
+                owner = (payload.get("notification") or {}).get("wallet_id")
+                if self._subs.get(ws) is None or self._subs.get(ws) != owner:
+                    continue
             try:
                 await ws.send_text(message)
             except Exception:
@@ -388,6 +410,7 @@ def create_app() -> "FastAPI":
                     if not rec["credited"]:
                         engine.credit_balance(rec["wallet_id"], rec["amount"])
                         rec["credited"] = True
+                        engine.emit({"type": "leaderboard"})
                     rec["status"] = "completed"
                     engine.notify(
                         rec["wallet_id"],
@@ -421,6 +444,7 @@ def create_app() -> "FastAPI":
                 if rec["status"] == "failed" and not rec["rolled_back"]:
                     engine.credit_balance(rec["wallet_id"], rec["amount"])
                     rec["rolled_back"] = True
+                    engine.emit({"type": "leaderboard"})
                     engine.notify(
                         rec["wallet_id"],
                         "withdraw",
@@ -431,6 +455,7 @@ def create_app() -> "FastAPI":
             now = time.time()
             rec["updated"] = now
             store.upsert_payment(rec)
+            await _pump_events(manager)
             return _payment_payload(rec)
 
     @app.post("/api/payments/withdrawals", response_model=Payment)
@@ -508,6 +533,26 @@ def create_app() -> "FastAPI":
         await _pump_events(manager)
         return TradeResponse(**result)
 
+    @app.post(
+        "/api/admin/markets/{market_id}/resolve",
+        response_model=MessageResponse,
+        dependencies=[Depends(require_admin)],
+    )
+    async def admin_markets_resolve(
+        market_id: str, body: ResolveMarketRequest
+    ) -> MessageResponse:
+        try:
+            summary = engine.resolve_market(market_id, body.outcome)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        await _pump_events(manager)
+        detail = (
+            f"Resolved {market_id} → {body.outcome.upper()} at "
+            f"{summary['resolved_price']}¢ · {summary['wallets_settled']} wallets"
+            f" settled · ${summary['total_payout']:.2f} paid out"
+        )
+        return MessageResponse(detail=detail)
+
     @app.get("/api/leaderboard", response_model=list[LeaderboardEntry])
     async def leaderboard(limit: int = 25) -> list[LeaderboardEntry]:
         rows = _leaderboard(max(1, min(limit, 100)))
@@ -536,8 +581,18 @@ def create_app() -> "FastAPI":
     async def market_ws(websocket: WebSocket) -> None:
         await manager.connect(websocket)
         try:
-            # The connection is receive-mostly: we push the global feed and only
-            # read to wait, detect disconnect, and satisfy proxies' ping/pong.
+            # First message may be a wallet subscription. Everything after is
+            # ignored: we push the feed/count and only read to wait, detect
+            # disconnect, and satisfy proxies' ping/pong.
+            first: object | None = None
+            try:
+                first = json.loads(await websocket.receive_text())
+            except Exception:
+                pass
+            if isinstance(first, dict) and str(first.get("type")) == "sub":
+                wallet_id = str(first.get("wallet_id") or "").strip()
+                if wallet_id:
+                    manager.subscribe(websocket, wallet_id)
             while True:
                 await websocket.receive_text()
         except WebSocketDisconnect:

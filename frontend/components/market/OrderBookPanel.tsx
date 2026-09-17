@@ -72,6 +72,44 @@ export default function OrderBookPanel({ market, book }: { market: Market; book:
   const noBid = book.no_bids[0]?.price ?? null;
   const noAsk = book.no_asks[0]?.price ?? null;
 
+  if (market.status === 'resolved') {
+    const winner = market.resolved_outcome ?? (market.yes > market.no ? 'yes' : 'no');
+    return (
+      <div className="flex flex-col gap-5 rounded-m border border-line bg-white p-5">
+        <div className="flex items-center justify-between">
+          <h3 className="font-serif text-[17px] font-medium">
+            Order book <span className="text-ink-3">· final</span>
+          </h3>
+          <span
+            className={`font-mono text-[10.5px] font-semibold uppercase tracking-[.06em] ${
+              winner === 'yes' ? 'text-pos' : 'text-neg'
+            }`}
+          >
+            {winner.toUpperCase()} 100¢ · NO 0¢
+          </span>
+        </div>
+        <div className="flex flex-col gap-[7px]">
+          <div className="flex items-center justify-between rounded-[6px] border border-pos/20 bg-pos/5 px-[13px] py-[10px]">
+            <span className="font-mono text-[12px] text-pos">
+              YES settled at {market.yes}¢
+            </span>
+            <span className="font-mono text-[10px] uppercase tracking-[.06em] text-ink-3">
+              Payout $1/share
+            </span>
+          </div>
+          <div className="flex items-center justify-between rounded-[6px] border border-line bg-paper-alt px-[13px] py-[10px]">
+            <span className="font-mono text-[12px] text-neg">
+              NO settled at {market.no}¢
+            </span>
+            <span className="font-mono text-[10px] uppercase tracking-[.06em] text-ink-3">
+              Expired
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-5 rounded-m border border-line bg-white p-5">
       <div className="flex items-center justify-between">

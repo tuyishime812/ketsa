@@ -111,6 +111,14 @@ With both services running, log in at **`http://localhost:3000/admin`**:
   footer, section headings). The **Users** tab lists every account with live
   wallet equity and lets you reset a user's password (revokes their sessions)
   or delete the account entirely.
+- **Resolving markets.** The Markets editor has a **Resolve** action per
+  market (once a market's status is `resolved` the button is hidden). Picking
+  YES/NO settles every holder immediately: winning shares pay $1 each into the
+  wallet balance, losing shares expire to zero, open positions are cleared,
+  the winning outcome + final price are stored on the market, and each affected
+  wallet gets a settlement notification. Resolved markets show their final
+  answer everywhere (banner, order book, trade widget is disabled) and are
+  locked against further trading.
 - Edits are saved to the storage backend immediately and appear on the public
   site right away — no code changes or redeploys required. Markets created
   here also show up on `/api/markets`.
@@ -133,18 +141,25 @@ With both services running you can trade each market for real on the site:
   Portfolio ("Account" card), which revokes all other sessions and issues a
   fresh token.
 - **Leaderboard.** `/leaderboard` ranks every wallet that has traded by live
-  equity (P&L shown per row); refresh every 30s.
+  equity (P&L shown per row); refresh every 30s and immediately whenever a
+  market resolves or a deposit/refund lands.
 - **Notifications.** The bell in the nav (when a wallet is connected) lists the
-  latest fills, deposits and withdrawal events per wallet, with unread badges
-  and "mark all read".
+  latest fills, deposits, withdrawal and settlement events per wallet, with
+  unread badges and "mark all read". Live notifications arrive over the
+  WebSocket (wallet-scoped) without needing a page refresh.
+- **Resolution.** When an admin resolves a market, positions settle
+  automatically — winning shares pay out at $1 each, losers expire, and the
+  market locks at its final answer (see the panel docs above).
 - **Markets.** `/markets` lists all markets with search, category filters and
   sorting (volume, liquidity, ending soon, newest). `/markets/<id>` has a price
   chart, a live YES/NO order book, a trade widget and a recent-trades tape.
 - **Portfolio.** `/portfolio` tracks wallet balance, open positions, and realized
   + unrealized P&L against live prices, plus a **payments** panel for deposits
   and withdrawals via wandePay.
-- **Live updates.** A WebSocket feed (`ws://…/api/ws`) streams market ticks and
-  fills to all open pages; order books and the trade tape refresh every few
+- **Live updates.** A WebSocket feed (`ws://…/api/ws`) streams market ticks,
+  fills, **resolutions** and **leaderboard changes** to all open pages; clients
+  can subscribe a wallet on the same socket to receive that wallet's private
+  notification events. Order books and the trade tape refresh every few
   seconds as a fallback.
 - **Persistence.** Today the engine keeps books and the trade tape in memory,
   but **wallets are persisted** through the storage backend — a funded balance
@@ -170,12 +185,14 @@ The `/api/*` HTTP calls go through Next's rewrite proxy regardless.
 # Backend
 cd backend
 .venv\Scripts\python.exe -m pytest
-# 104 tests: endpoints, models/seed consistency, 404/405, CORS,
+# 117 tests: endpoints, models/seed consistency, 404/405, CORS,
 # security headers, OpenAPI gating, rate limiting, admin auth + CRUD + user
 # management, the matching engine (wallets, books, execution, WS feed),
 # account auth (register/login, sessions, throttling, change password,
-# wallet-binding on writes), leaderboard + notifications, and wandePay
-# payments (deposits, withdrawals, idempotent crediting, refunds).
+# wallet-binding on writes), leaderboard + notifications, wandePay
+# payments (deposits, withdrawals, idempotent crediting, refunds), and
+# market resolution (settlement/payout, trading locks, admin endpoint,
+# wallet-scoped WS notification routing).
 
 # Frontend
 cd frontend

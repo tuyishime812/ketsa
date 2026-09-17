@@ -106,6 +106,24 @@ class Marketplace:
         book["bids"] = sorted(bids, key=lambda lv: lv["price"], reverse=True)
 
     def _make_book(self, market: dict) -> dict:
+        if market.get("status") == "resolved":
+            # Resolved markets hold their final answer instead of a live book.
+            yes_price = int(market.get("resolved_price") or 0)
+            yes_price = 100 if yes_price > 50 else 0
+            return {
+                "yes": yes_price,
+                "no": 100 - yes_price,
+                "last": yes_price,
+                "volume": float(market.get("volume", 0.0)),
+                "liquidity": float(market.get("liquidity", 0.0)),
+                "base_liquidity": float(market.get("liquidity", 0.0)),
+                "pts": [int(p) for p in market.get("pts", [])] or [yes_price],
+                "trend": "up",
+                "updated": 0.0,
+                "bids": [],
+                "asks": [],
+                "resolved": True,
+            }
         yes = _clamp(int(market.get("yes", 50)))
         base_liquidity = max(float(market.get("liquidity", 0.0)) or 2000.0, MIN_LIQUIDITY)
         book = {
@@ -287,6 +305,8 @@ class Marketplace:
             raise ValueError("Unknown market")
         market = store.get_market(market_id)
         question = market["q"] if market else market_id
+        if market and market.get("status") == "resolved":
+            raise ValueError("This market has resolved — trading is closed")
 
         self._maybe_replenish(market_id)
 
@@ -466,19 +486,27 @@ class Marketplace:
             store.upsert_wallet(copy.deepcopy(wallet))
 
     def notify(self, wallet_id: str, ntype: str, title: str, message: str) -> None:
-        """Record an in-app notification for a wallet (fill / payment / system)."""
+        """Record an in-app notification for a wallet (fill / payment / system).
+
+        Also pushes a ``notification`` event onto the stream so the WS layer can
+        deliver it live to that wallet's subscribed sockets.
+        """
         self._wallets.get(wallet_id)  # ensure the wallet exists in memory
-        store.upsert_notification(
-            {
-                "id": secrets.token_hex(16),
-                "wallet_id": wallet_id,
-                "type": ntype if ntype in ("fill", "deposit", "withdraw", "system") else "system",
-                "title": title,
-                "message": message,
-                "ts": time.time(),
-                "read": False,
-            }
-        )
+        item = {
+            "id": secrets.token_hex(16),
+            "wallet_id": wallet_id,
+            "type": ntype if ntype in ("fill", "deposit", "withdraw", "system") else "system",
+            "title": title,
+            "message": message,
+            "ts": time.time(),
+            "read": False,
+        }
+        store.upsert_notification(item)
+        self._emit({"type": "notification", "notification": item})
+
+    def emit(self, payload: dict[str, Any]) -> None:
+        """Publish an arbitrary event to the WS stream (callers: main.py)."""
+        self._emit(payload)
 
     def connect_wallet(self, wallet_id: str | None = None, name: str = "Trader") -> dict:
         wallet_id = (wallet_id or "").strip() or ("0x" + secrets.token_hex(20))
@@ -581,6 +609,136 @@ class Marketplace:
     # ------------------------------------------------------------------
     # Administrative hooks
     # ------------------------------------------------------------------
+
+    def _settle_wallet(self, wallet: dict, market_id: str, winning_outcome: str,
+                       question: str) -> float:
+        """Pay out a wallet's winning shares for a resolved market.
+
+        Winners get $1 per share credited to cash (all of it realized profit);
+        loser positions simply expire to zero. Returns the payout credited.
+        """
+        sides = wallet.get("positions") or {}
+        market_pos = sides.pop(market_id, None)
+        if not market_pos:
+            return 0.0
+        payout = 0.0
+        ts = time.time()
+        for outcome in ("yes", "no"):
+            entry = market_pos.get(outcome)
+            if not entry or entry.get("shares", 0.0) <= _EPS:
+                continue
+            shares = entry["shares"]
+            avg = int(entry.get("avg") or 0)
+            wins = outcome == winning_outcome
+            if wins:
+                proceeds = shares
+                wallet["balance"] = _round2(wallet["balance"] + proceeds)
+                wallet["realized"] = _round2(wallet["realized"] + proceeds - shares * avg / 100.0)
+                payout += proceeds
+                final_price = 100
+            else:
+                final_price = 0
+            wallet.setdefault("history", []).append(
+                {
+                    "ts": ts,
+                    "market_id": market_id,
+                    "question": question,
+                    "outcome": outcome,
+                    "side": "sell",
+                    "price": final_price,
+                    "qty": _round4(shares),
+                    "notional": _round2(shares * final_price / 100.0),
+                    "kind": "resolution",
+                }
+            )
+            self.notify(
+                wallet["id"],
+                "system",
+                "Market resolved",
+                (
+                    f"{question} — your {outcome.upper()} position "
+                    + ("resolved to $1.00 per share. Funds added to balance." if wins
+                       else "resolved to $0.00.")
+                ),
+            )
+        if not sides:
+            wallet["positions"] = {}
+        return payout
+
+    def resolve_market(self, market_id: str, outcome: str) -> dict:
+        """Resolve a market to YES/NO, settle every holder, and lock trading.
+
+        Winning shares pay $1 each (realizing the entire payout as profit);
+        losing shares expire to zero. The resolved outcome + price are persisted
+        on the market so the state survives restarts and shows everywhere.
+        """
+        if outcome not in ("yes", "no"):
+            raise ValueError("outcome must be 'yes' or 'no'")
+        market = store.get_market(market_id)
+        if market is None:
+            raise ValueError("Unknown market")
+        if market.get("status") == "resolved":
+            raise ValueError("Market is already resolved")
+        question = market["q"] or market_id
+
+        winning_price = 100 if outcome == "yes" else 0
+
+        # Freeze the live book at the final answer.
+        book = self._ensure(market_id)
+        if book is not None:
+            book["yes"] = winning_price
+            book["no"] = 100 - winning_price
+            book["last"] = winning_price
+            book["bids"] = []
+            book["asks"] = []
+            pts = book["pts"] + [winning_price]
+            book["pts"] = pts[-MAX_PTS:]
+            book["trend"] = "up"
+            book["resolved"] = True
+
+        # Settle every wallet that holds a position in this market — both the
+        # live in-memory wallets and any persisted-only copies, without double
+        # paying wallets that exist in both places.
+        settled = 0
+        total_payout = 0.0
+        wallet_ids = set(self._wallets) | {w["id"] for w in store.list_wallets()}
+        for wallet_id in sorted(wallet_ids):
+            wallet = self._wallets.get(wallet_id)
+            if wallet is None:
+                persisted = store.get_wallet(wallet_id)
+                if persisted is None:
+                    continue
+                wallet = persisted
+            is_live = wallet_id in self._wallets
+            if (wallet.get("positions") or {}).get(market_id) is None:
+                continue
+            payout = self._settle_wallet(wallet, market_id, outcome, question)
+            total_payout += payout
+            settled += 1
+            if is_live:
+                self._persist(wallet_id)
+            else:
+                store.upsert_wallet(wallet)
+
+        stored = dict(market)
+        stored["status"] = "resolved"
+        stored["resolved_outcome"] = outcome
+        stored["resolved_price"] = winning_price
+        stored["resolved_ts"] = time.time()
+        store.upsert_market(stored)
+
+        self._emit_market(market_id)
+        self._emit({"type": "resolution", "market_id": market_id, "outcome": outcome,
+                    "resolved_price": winning_price, "wallets_settled": settled,
+                    "total_payout": _round2(total_payout)})
+        self._emit({"type": "leaderboard"})
+        return {
+            "market_id": market_id,
+            "outcome": outcome,
+            "resolved_price": winning_price,
+            "wallets_settled": settled,
+            "total_payout": _round2(total_payout),
+        }
 
     def reseed_market(self, market_id: str) -> None:
         """Rebuild a market's live state from its stored content (after admin edit)."""

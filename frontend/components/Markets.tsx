@@ -142,13 +142,19 @@ const MarketCard = forwardRef<HTMLAnchorElement, MarketCardProps>(
           <span className="rounded-[5px] bg-brand-tint px-[8px] py-[3px] font-mono text-[10px] font-semibold uppercase tracking-[.05em] text-brand">
             {m.tag}
           </span>
-          <span
-            className={`font-mono text-xs font-bold ${
-              m.trend === 'up' ? 'text-pos' : 'text-neg'
-            }`}
-          >
-            {randomChange(m.trend)}
-          </span>
+          {m.status === 'resolved' ? (
+            <span className="rounded-[4px] bg-pos/10 px-[7px] py-[2px] font-mono text-[10px] font-bold uppercase tracking-[.05em] text-pos">
+              Resolved
+            </span>
+          ) : (
+            <span
+              className={`font-mono text-xs font-bold ${
+                m.trend === 'up' ? 'text-pos' : 'text-neg'
+              }`}
+            >
+              {randomChange(m.trend)}
+            </span>
+          )}
         </div>
 
         <h3 className="line-clamp-2 font-serif text-[16.5px] font-medium leading-[1.4] text-ink">

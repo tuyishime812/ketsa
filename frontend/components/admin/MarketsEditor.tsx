@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
-import { adminDelete, adminPut } from '@/lib/api';
+import { Fragment, useState } from 'react';
+import { adminDelete, adminPost, adminPut } from '@/lib/api';
 import type { Market } from '@/lib/types';
 import {
   Card,
@@ -77,6 +77,7 @@ export default function MarketsEditor({
   const [list, setList] = useState<Market[]>(markets);
   const [editing, setEditing] = useState<Draft | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [resolveId, setResolveId] = useState<string | null>(null);
 
   const dirty = editing !== null;
 
@@ -146,6 +147,33 @@ export default function MarketsEditor({
     setList((prev) => prev.filter((m) => m.id !== id));
   }
 
+  async function resolveMarket(m: Market, outcome: 'yes' | 'no') {
+    setError(null);
+    try {
+      await adminPost(
+        token,
+        `/markets/${encodeURIComponent(m.id)}/resolve`,
+        { outcome },
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Resolve failed');
+      return;
+    }
+    setList((prev) =>
+      prev.map((it) =>
+        it.id === m.id
+          ? {
+              ...it,
+              status: 'resolved' as const,
+              resolved_outcome: outcome,
+              resolved_price: outcome === 'yes' ? 100 : 0,
+            }
+          : it,
+      ),
+    );
+    setResolveId(null);
+  }
+
   return (
     <div className="admin-stack">
       <div className="admin-row-between">
@@ -176,26 +204,77 @@ export default function MarketsEditor({
             </thead>
             <tbody>
               {list.map((m) => (
-                <tr key={m.id}>
-                  <td className="admin-mono">{m.id}</td>
-                  <td className="admin-strong">{m.q}</td>
-                  <td>{m.cat}</td>
-                  <td className="admin-mono">{m.yes}¢</td>
-                  <td className="admin-mono">{m.no}¢</td>
-                  <td className={m.trend === 'up' ? 'admin-pos' : 'admin-neg'}>
-                    {m.trend === 'up' ? '▲' : '▼'}
-                  </td>
-                  <td className="admin-actions">
-                    <button
-                      type="button"
-                      className="admin-btn admin-btn--ghost"
-                      onClick={() => startEdit(m)}
+                <Fragment key={m.id}>
+                  <tr>
+                    <td className="admin-mono">{m.id}</td>
+                    <td className="admin-strong">{m.q}</td>
+                    <td>{m.cat}</td>
+                    <td className="admin-mono">{m.yes}¢</td>
+                    <td className="admin-mono">{m.no}¢</td>
+                    <td
+                      className={
+                        m.status === 'resolved'
+                          ? 'admin-pos'
+                          : m.trend === 'up'
+                            ? 'admin-pos'
+                            : 'admin-neg'
+                      }
                     >
-                      Edit
-                    </button>
-                    <DangerButton onConfirm={() => removeMarket(m.id)} label="Delete" />
-                  </td>
-                </tr>
+                      {m.status === 'resolved'
+                        ? `RESOLVED · ${(m.resolved_outcome ?? '').toUpperCase()}`
+                        : m.trend === 'up'
+                          ? '▲'
+                          : '▼'}
+                    </td>
+                    <td className="admin-actions">
+                      <button
+                        type="button"
+                        className="admin-btn admin-btn--ghost"
+                        onClick={() => startEdit(m)}
+                      >
+                        Edit
+                      </button>
+                      {m.status !== 'resolved' && (
+                        <button
+                          type="button"
+                          className="admin-btn admin-btn--ghost"
+                          onClick={() => setResolveId((id) => (id === m.id ? null : m.id))}
+                        >
+                          Resolve
+                        </button>
+                      )}
+                      <DangerButton onConfirm={() => removeMarket(m.id)} label="Delete" />
+                    </td>
+                  </tr>
+                  {resolveId === m.id && (
+                    <tr className="admin-reset-row">
+                      <td colSpan={7} className="admin-resolve-actions">
+                        <span>Resolve “{m.q}” as:</span>
+                        <button
+                          type="button"
+                          className="admin-btn admin-btn--primary"
+                          onClick={() => void resolveMarket(m, 'yes')}
+                        >
+                          YES won · 100¢
+                        </button>
+                        <button
+                          type="button"
+                          className="admin-btn admin-btn--primary"
+                          onClick={() => void resolveMarket(m, 'no')}
+                        >
+                          NO won · 100¢
+                        </button>
+                        <button
+                          type="button"
+                          className="admin-btn admin-btn--ghost"
+                          onClick={() => setResolveId(null)}
+                        >
+                          Cancel
+                        </button>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
               ))}
             </tbody>
           </table>

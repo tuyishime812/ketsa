@@ -31,6 +31,21 @@ function priceOf(p: WalletPosition, m: Market | null, outcome: Outcome): number 
   return (outcome === 'yes' ? m.yes : m.no) as number;
 }
 
+interface Row {
+  p: WalletPosition;
+  market: Market | null;
+  price: number;
+  cost: number;
+  value: number;
+}
+
+interface HoldingGroup {
+  market_id: string;
+  question: string;
+  yes: Row | null;
+  no: Row | null;
+}
+
 export default function Portfolio({
   initialMarkets,
 }: {
@@ -40,7 +55,7 @@ export default function Portfolio({
   const feed = useMarketFeed();
 
   const rows = useMemo(() => {
-    if (!wallet) return [];
+    if (!wallet) return [] as Row[];
     return wallet.positions.map((p) => {
       const market = positionMarket(p, initialMarkets, feed.markets);
       const price = priceOf(p, market, p.outcome);
@@ -50,9 +65,24 @@ export default function Portfolio({
     });
   }, [wallet, initialMarkets, feed.markets]);
 
+  const groups = useMemo<HoldingGroup[]>(() => {
+    const byMarket = new Map<string, HoldingGroup>();
+    for (const r of rows) {
+      const g =
+        byMarket.get(r.p.market_id) ?? {
+          market_id: r.p.market_id,
+          question: r.p.question,
+          yes: null,
+          no: null,
+        };
+      g[r.p.outcome] = r;
+      byMarket.set(r.p.market_id, g);
+    }
+    return [...byMarket.values()];
+  }, [rows]);
+
   const unrealized = rows.reduce((s, r) => s + (r.value - r.cost), 0);
   const totalPnl = (wallet?.realized_pnl ?? 0) + unrealized;
-  const maxValue = Math.max(1, ...rows.map((r) => r.value));
 
   if (loading) {
     return (
@@ -146,39 +176,48 @@ export default function Portfolio({
             <div className="flex flex-col gap-6">
               <div className="rounded-m border border-line bg-white p-5">
                 <h3 className="mb-4 font-serif text-[17px] font-medium">
-                  Holdings
+                  Holdings <span className="text-ink-3">· net exposure</span>
                 </h3>
-              <div className="flex flex-col gap-4">
-                {rows.map((r) => (
-                  <div key={`${r.p.market_id}:${r.p.outcome}`}>
-                    <div className="mb-[6px] flex items-baseline justify-between gap-3">
-                      <span className="truncate text-[12.5px] font-medium text-ink-2">
-                        {r.p.outcome.toUpperCase()} · {r.p.question}
-                      </span>
-                      <span className="font-mono text-[11.5px] font-semibold text-ink">
-                        {fmtBalance(r.value, wallet.currency)}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-[8px]">
-                      <div className="h-[7px] flex-1 overflow-hidden rounded-full bg-paper-alt">
-                        <div
-                          className="h-full rounded-full"
-                          style={{
-                            width: `${(r.value / maxValue) * 100}%`,
-                            backgroundColor:
-                              r.p.outcome === 'yes' ? '#13A95C' : '#E5484D',
-                          }}
+                <div className="flex flex-col gap-4">
+                  {groups.map((g) => {
+                    const gMax = Math.max(1, g.yes?.value ?? 0, g.no?.value ?? 0);
+                    const net = (g.yes?.value ?? 0) - (g.no?.value ?? 0);
+                    return (
+                      <div key={g.market_id}>
+                        <div className="mb-[6px] flex items-baseline justify-between gap-3">
+                          <Link
+                            href={`/markets/${g.market_id}`}
+                            className="truncate text-[12.5px] font-medium text-ink-2 transition-colors hover:text-ink"
+                          >
+                            {g.question}
+                          </Link>
+                          <span
+                            className={`font-mono text-[11px] font-semibold ${
+                              net >= 0 ? 'text-pos' : 'text-neg'
+                            }`}
+                          >
+                            net {fmtBalance(Math.abs(net), wallet.currency)}{' '}
+                            {net >= 0 ? 'long' : 'short'}
+                          </span>
+                        </div>
+                        <LadderRow
+                          outcome="yes"
+                          row={g.yes}
+                          max={gMax}
+                          currency={wallet.currency}
+                        />
+                        <LadderRow
+                          outcome="no"
+                          row={g.no}
+                          max={gMax}
+                          currency={wallet.currency}
                         />
                       </div>
-                      <span className="font-mono text-[10px] text-ink-3">
-                        {((r.value / Math.max(wallet.equity, 1)) * 100).toFixed(0)}%
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <p className="mt-5 border-t border-line pt-4 font-mono text-[10px] uppercase tracking-[.06em] text-ink-3">
-Balance {fmtBalance(wallet.balance, wallet.currency)}
+                    );
+                  })}
+                </div>
+                <p className="mt-5 border-t border-line pt-4 font-mono text-[10px] uppercase tracking-[.06em] text-ink-3">
+                  Balance {fmtBalance(wallet.balance, wallet.currency)}
                 </p>
               </div>
 
@@ -252,10 +291,20 @@ Balance {fmtBalance(wallet.balance, wallet.currency)}
                           <span className="text-ink-3">{timeAgo(t.ts)}</span>
                           <span
                             className={`rounded-[4px] px-[6px] py-[2px] text-[10px] font-semibold uppercase ${
-                              t.side === 'buy' ? 'bg-pos/10 text-pos' : 'bg-paper-alt text-ink-2'
+                              t.kind === 'resolution'
+                                ? t.price > 0
+                                  ? 'bg-pos/10 text-pos'
+                                  : 'bg-neg/10 text-neg'
+                                : t.side === 'buy'
+                                  ? 'bg-pos/10 text-pos'
+                                  : 'bg-paper-alt text-ink-2'
                             }`}
                           >
-                            {t.side} {t.outcome}
+                            {t.kind === 'resolution'
+                              ? t.price > 0
+                                ? 'Payout'
+                                : 'Expired'
+                              : `${t.side} ${t.outcome}`}
                           </span>
                           <Link
                             href={`/markets/${t.market_id}`}
@@ -279,6 +328,41 @@ Balance {fmtBalance(wallet.balance, wallet.currency)}
         )}
       </div>
     </section>
+  );
+}
+
+function LadderRow({
+  outcome,
+  row,
+  max,
+  currency,
+}: {
+  outcome: Outcome;
+  row: Row | null;
+  max: number;
+  currency: string;
+}) {
+  if (!row) return null;
+  const isYes = outcome === 'yes';
+  return (
+    <div className="flex items-center gap-[8px] py-[2px]">
+      <span
+        className={`w-[40px] font-mono text-[10px] font-bold uppercase ${
+          isYes ? 'text-pos' : 'text-neg'
+        }`}
+      >
+        {outcome}
+      </span>
+      <div className="h-[8px] flex-1 overflow-hidden rounded-full bg-paper-alt">
+        <div
+          className={`h-full rounded-full ${isYes ? 'bg-pos' : 'bg-neg'}`}
+          style={{ width: `${(row.value / max) * 100}%` }}
+        />
+      </div>
+      <span className="w-[118px] truncate text-right font-mono text-[10.5px] text-ink-2">
+        {fmtShares(row.p.shares)} sh · {fmtBalance(row.value, currency)}
+      </span>
+    </div>
   );
 }
 

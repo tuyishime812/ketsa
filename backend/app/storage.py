@@ -162,6 +162,9 @@ def _market_dict(m) -> dict:
         "volume": m.volume,
         "liquidity": m.liquidity,
         "status": m.status,
+        "resolved_outcome": getattr(m, "resolved_outcome", None),
+        "resolved_price": getattr(m, "resolved_price", None),
+        "resolved_ts": getattr(m, "resolved_ts", None),
     }
 
 

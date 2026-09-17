@@ -107,6 +107,46 @@ export default function TradeWidget({
     wallet === undefined ||
     wallet.balance >= (estimate?.total ?? 0);
 
+  if (market.status === 'resolved') {
+    const winner = market.resolved_outcome ?? (market.yes > market.no ? 'yes' : 'no');
+    const winPrice = market.resolved_price ?? (winner === 'yes' ? market.yes : market.no);
+    return (
+      <div className="rounded-m border border-line bg-white p-6 text-center">
+        <div className="font-mono text-[10px] uppercase tracking-[.07em] text-ink-3">
+          Market resolved
+        </div>
+        <div className="mt-3 font-serif text-[24px] font-medium">
+          <span className={winner === 'yes' ? 'text-pos' : 'text-neg'}>
+            {winner.toUpperCase()}
+          </span>{' '}
+          won
+        </div>
+        <p className="mx-auto mt-2 max-w-[260px] text-[13px] text-ink-2">
+          Settled at {fmtCents(winPrice)} per share. Holding positions were
+          paid out or expired automatically — trading is closed.
+        </p>
+        <div className="mt-5 grid grid-cols-2 gap-3">
+          <div className="rounded-[7px] border border-line bg-paper-alt px-3 py-3">
+            <div className="font-mono text-[10px] uppercase tracking-[.06em] text-ink-3">
+              YES
+            </div>
+            <div className="mt-[2px] font-mono text-[17px] font-semibold text-ink">
+              {market.yes}¢
+            </div>
+          </div>
+          <div className="rounded-[7px] border border-line bg-paper-alt px-3 py-3">
+            <div className="font-mono text-[10px] uppercase tracking-[.06em] text-ink-3">
+              NO
+            </div>
+            <div className="mt-[2px] font-mono text-[17px] font-semibold text-ink">
+              {market.no}¢
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   async function submit() {
     if (!wallet || !estimate) return;
     setError(null);

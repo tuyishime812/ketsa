@@ -6,6 +6,7 @@ import type { NotificationItem } from '@/lib/types';
 import { useWallet } from '@/components/wallet/WalletProvider';
 import { timeAgo } from '@/lib/utils';
 import { fetchNotificationsSession } from '@/lib/api';
+import { onPush, startPush, subscribeWallet } from '@/lib/push';
 
 const TYPE_STYLES: Record<NotificationItem['type'], string> = {
   fill: 'bg-pos-tint text-pos',
@@ -34,6 +35,25 @@ export default function NotificationsBell() {
     } finally {
       setLoading(false);
     }
+  }, [wallet]);
+
+  useEffect(() => {
+    if (!wallet) return;
+    startPush();
+    subscribeWallet(wallet.id);
+    const off = onPush((ev) => {
+      if (ev.type !== 'notification') return;
+      const notif = ev.notification as NotificationItem;
+      if (!notif || notif.wallet_id !== wallet.id) return;
+      setItems((prev) => {
+        if (prev.some((n) => n.id === notif.id)) return prev;
+        return [notif, ...prev].sort((a, b) => b.ts - a.ts).slice(0, 50);
+      });
+    });
+    return () => {
+      off();
+      subscribeWallet(null);
+    };
   }, [wallet]);
 
   useEffect(() => {

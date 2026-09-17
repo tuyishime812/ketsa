@@ -31,6 +31,9 @@ export interface Market {
   liquidity?: number; // resting book value, dollars
   status?: 'open' | 'closed' | 'resolved';
   last_price?: number | null; // most recent YES fill price in cents
+  resolved_outcome?: Outcome | null; // winning outcome once resolved
+  resolved_price?: number | null; // final price of the YES side (100 or 0)
+  resolved_ts?: number | null; // unix time of resolution
 }
 
 export interface OrderLevel {
@@ -58,6 +61,7 @@ export interface Trade {
   price: number; // cents for the traded outcome
   qty: number; // shares
   notional: number; // dollars
+  kind?: 'trade' | 'resolution'; // 'resolution' = payout entry at settlement
 }
 
 export interface WalletPosition {
