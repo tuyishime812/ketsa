@@ -96,10 +96,15 @@ protected `/api/admin/*` through the same-origin `/api` path.
    Note: the "reset content" admin action re-seeds markets/settings only and
    never touches wallets or payment records.
    - Create a free Supabase project (supabase.com), then in the **SQL editor**
-     run the checked-in schema **once**:
-     `backend/db/schema.sql` (creates `ketsa_kv`, `ketsa_wallets` and
-     `ketsa_payments`). The backend seeds the content idempotently on first
-     boot — no further schema setup is required.
+     run the checked-in schema **once**: `backend/db/schema.sql`. It creates the
+     five tables (`ketsa_kv`, `ketsa_wallets`, `ketsa_payments`, `ketsa_users`,
+     `ketsa_notifications`) and enables Row Level Security on all of them, so
+     the public anon/publishable key can read and write nothing while the
+     service role keeps full access. It is idempotent and never touches existing
+     data. The backend seeds the content itself on first boot — no further
+     schema setup is required.
+     > **Local dev:** the backend loads `backend/.env` (gitignored) at startup.
+     > The repo-root `.env` is a documented mirror only — nothing reads it.
 2. **Set the password.** `KETSA_ADMIN_PASSWORD` must be a strong, unique
    value. It is the only key to the whole site. The backend reads it from the
    environment and **never** falls back to a committed secret. In production it

@@ -21,6 +21,12 @@ frontend/out/
 !.env.example
 !.env.production.example
 
+# --- Local backups / scratch ---
+# Stray snapshot folders (e.g. the Firestore-era backup) are kept OUTSIDE the
+# repo, but ignore them here too so they can never be committed by accident.
+_*-backup-*/
+*-backup-*/
+
 # --- OS / editor ---
 .DS_Store
 Thumbs.db

@@ -62,6 +62,17 @@ The backend's data layer (`app/storage.py`) is pluggable and selected with
   Supabase project: set `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` and run
   `backend/db/schema.sql` once in the SQL editor.
 
+The schema enables **Row Level Security** on all five tables, so the public
+anon/publishable key can read and write nothing while the backend's
+service-role key (which bypasses RLS) keeps full access.
+
+**Where to put the values.** For local dev the backend loads `backend/.env`
+(gitignored) at startup — that is the file to edit. The repo-root `.env` is a
+documented mirror that nothing reads, and Next.js reads `frontend/.env.local`.
+Real process env vars always win over the file, so a host's secret manager
+takes precedence in production. The test suite pins the in-process `memory`
+store (`backend/tests/conftest.py`), so `pytest` can never touch a live project.
+
 The admin "reset content" endpoint re-seeds both backends to the original data
 (preserving any stored admin password). Wallet balances and payment records are
 **never** wiped by a content reset.
