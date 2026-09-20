@@ -41,11 +41,14 @@ create table if not exists public.ketsa_notifications (
   value jsonb not null default '{}'::jsonb
 );
 
--- The service-role key operates server-side and bypasses RLS. If you enable
--- row-level security, allow the service role (permissions are set by default
--- when tables are created). For an extra lock-down you can grant/revoke:
---   alter table public.ketsa_kv enable row level security;
---   drop policy if exists "service_read" on public.ketsa_kv;
---   create policy "service_read" on public.ketsa_kv
---     for select using (true);
--- (the service role is exempt from RLS unless the table's owner opts in).
+-- Row Level Security. The anon/publishable key is PUBLIC (it ships in the
+-- browser bundle), so without RLS anyone holding it could read every wallet
+-- balance, payment record, user account and password hash. Enabling RLS with NO
+-- policies denies every non-service role by default, while the backend's
+-- service-role key is exempt from RLS and keeps full access. This is safe to
+-- run on an existing project: it is idempotent and changes no data.
+alter table public.ketsa_kv            enable row level security;
+alter table public.ketsa_wallets       enable row level security;
+alter table public.ketsa_payments      enable row level security;
+alter table public.ketsa_users         enable row level security;
+alter table public.ketsa_notifications enable row level security;

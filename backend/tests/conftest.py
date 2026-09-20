@@ -11,9 +11,26 @@ from unittest import mock
 import pytest
 from fastapi.testclient import TestClient
 
-from app.engine import engine
-from app.main import create_app
-from app.storage import reset_backend
+# ---------------------------------------------------------------------------
+# Never let the test-suite talk to a real database.
+#
+# ``app.config`` loads ``backend/.env`` (gitignored) at import time, so a dev
+# whose local .env points at Supabase (KETSA_DB_BACKEND=supabase) would
+# otherwise run the whole suite — plus the import-time ``create_app()`` in
+# ``app/main.py`` — against the live project: seeding content, creating real
+# wallet/payment/user rows, and wiping markets on a reset test. Pin the
+# in-process store here, *before* the app is imported, so both the import-time
+# app and every test app are memory backed. CI has no backend/.env, so this is
+# a no-op there. See tests/test_storage.py for the backend-selection tests,
+# which still manipulate the env var explicitly (monkeypatch restores it).
+# ---------------------------------------------------------------------------
+os.environ.pop("SUPABASE_URL", None)
+os.environ.pop("SUPABASE_SERVICE_ROLE_KEY", None)
+os.environ["KETSA_DB_BACKEND"] = "memory"
+
+from app.engine import engine  # noqa: E402
+from app.main import create_app  # noqa: E402
+from app.storage import reset_backend  # noqa: E402
 
 
 def make_client(rate_limit: int = 0, expose_docs: bool = True) -> TestClient:
