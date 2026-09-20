@@ -8,9 +8,10 @@ import NotificationsBell from '@/components/notifications/NotificationsBell';
 import { fmtBalance } from '@/lib/utils';
 
 const NAV_LINKS = [
+  { href: '/dashboard', label: 'Dashboard', requiresWallet: true },
   { href: '/markets', label: 'Markets' },
   { href: '/leaderboard', label: 'Leaderboard' },
-  { href: '/portfolio', label: 'Portfolio' },
+  { href: '/portfolio', label: 'Portfolio', requiresWallet: true },
 ];
 
 export default function Nav() {
@@ -21,6 +22,7 @@ export default function Nav() {
 
   const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
   const signOut = () => (user ? logout() : disconnect());
+  const links = NAV_LINKS.filter((l) => !l.requiresWallet || wallet);
 
   return (
     <header className="sticky top-0 z-[100] border-b border-line bg-[rgba(255,255,255,.92)] backdrop-blur-[10px]">
@@ -35,7 +37,7 @@ export default function Nav() {
 
         {/* Desktop menu bar */}
         <nav className="hidden items-center gap-[2px] md:flex" aria-label="Primary">
-          {NAV_LINKS.map((l) => (
+          {links.map((l) => (
             <Link
               key={l.label}
               href={l.href}
@@ -95,7 +97,7 @@ export default function Nav() {
       {open && (
         <div className="border-t border-line bg-white md:hidden">
           <div className="wrap flex flex-col gap-1 py-4">
-            {NAV_LINKS.map((l) => (
+            {links.map((l) => (
               <Link
                 key={l.label}
                 href={l.href}
@@ -189,7 +191,7 @@ function RightControls({
         }`}
       >
         <Link
-          href="/portfolio"
+          href="/dashboard"
           className="group flex w-full items-center gap-[10px] rounded-full border border-line-strong bg-paper px-[14px] py-[8px] transition-colors duration-200 ease-ketsa hover:border-ink"
         >
           <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-brand-tint font-mono text-[10px] font-semibold uppercase text-brand">

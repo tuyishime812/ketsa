@@ -7,6 +7,7 @@ import { useWallet } from '@/components/wallet/WalletProvider';
 import { liveOf, useMarketFeed } from '@/components/market/MarketFeed';
 import AccountSettings from '@/components/portfolio/AccountSettings';
 import PaymentsPanel from '@/components/payments/PaymentsPanel';
+import StatCard from '@/components/dashboard/StatCard';
 import {
   fmtBalance,
   fmtCents,
@@ -83,6 +84,11 @@ export default function Portfolio({
 
   const unrealized = rows.reduce((s, r) => s + (r.value - r.cost), 0);
   const totalPnl = (wallet?.realized_pnl ?? 0) + unrealized;
+  const winRate =
+    wallet && rows.length > 0
+      ? Math.round((rows.filter((r) => r.value - r.cost > 0).length / rows.length) * 100)
+      : 0;
+  const currency = wallet?.currency ?? 'MWK';
 
   if (loading) {
     return (
@@ -136,7 +142,7 @@ export default function Portfolio({
   return (
     <section className="section">
       <div className="wrap">
-        <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
+        <div className="mb-8 flex flex-wrap items-end justify-between gap-5">
           <div>
             <div className="mb-2 font-mono text-[11px] uppercase tracking-[.07em] text-brand">
               Simulated wallet · {wallet.name}
@@ -144,17 +150,34 @@ export default function Portfolio({
             <h1 className="font-serif text-[clamp(28px,3.5vw,40px)] font-medium tracking-[-.01em]">
               Portfolio
             </h1>
+            <p className="mt-[6px] max-w-[520px] text-sm text-ink-2">
+              Balance, open exposure and P&L across every market, plus wandePay
+              top-up and cash-out.
+            </p>
           </div>
-          <div className="flex gap-5 text-right">
-            <Summary label="Equity" value={fmtBalance(wallet.equity, wallet.currency)} strong />
-            <Summary
-              label="Total P&L"
-              value={`${totalPnl >= 0 ? '+' : ''}${fmtBalance(totalPnl, wallet.currency)}`}
-              strong
-              tone={totalPnl >= 0 ? 'pos' : 'neg'}
+          <div className="grid grow gap-[12px] sm:grid-cols-2 lg:grid-cols-4 lg:max-w-[760px]">
+            <StatCard
+              label="Equity"
+              value={fmtBalance(wallet.equity, currency)}
+              tone="brand"
             />
-            <Summary label="Realized" value={fmtBalance(wallet.realized_pnl, wallet.currency)} />
-            <Summary label="Open" value={fmtBalance(unrealized, wallet.currency)} />
+            <StatCard
+              label="Total P&L"
+              value={`${totalPnl >= 0 ? '+' : ''}${fmtBalance(totalPnl, currency)}`}
+              tone={totalPnl >= 0 ? 'pos' : 'neg'}
+              sub={`${fmtBalance(unrealized, currency)} unrealized`}
+            />
+            <StatCard
+              label="Realized P&L"
+              value={`${wallet.realized_pnl >= 0 ? '+' : ''}${fmtBalance(wallet.realized_pnl, currency)}`}
+              tone={wallet.realized_pnl >= 0 ? 'pos' : 'neg'}
+            />
+            <StatCard
+              label="Open positions"
+              value={`${rows.length}`}
+              tone={winRate >= 50 ? 'pos' : 'neutral'}
+              sub={`${winRate}% in profit`}
+            />
           </div>
         </div>
 
@@ -362,33 +385,6 @@ function LadderRow({
       <span className="w-[118px] truncate text-right font-mono text-[10.5px] text-ink-2">
         {fmtShares(row.p.shares)} sh · {fmtBalance(row.value, currency)}
       </span>
-    </div>
-  );
-}
-
-function Summary({
-  label,
-  value,
-  strong = false,
-  tone,
-}: {
-  label: string;
-  value: string;
-  strong?: boolean;
-  tone?: 'pos' | 'neg';
-}) {
-  return (
-    <div>
-      <div className="font-mono text-[10px] uppercase tracking-[.07em] text-ink-3">
-        {label}
-      </div>
-      <div
-        className={`mt-[3px] font-mono ${strong ? 'text-[19px] font-semibold' : 'text-[14px] font-medium'} ${
-          tone === 'pos' ? 'text-pos' : tone === 'neg' ? 'text-neg' : 'text-ink'
-        }`}
-      >
-        {value}
-      </div>
     </div>
   );
 }
