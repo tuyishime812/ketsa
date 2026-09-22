@@ -18,9 +18,10 @@ import secrets
 import time
 
 from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
-from . import store
+from . import social, store
 from .engine import engine
 from .models import User, Wallet
 
@@ -29,6 +30,13 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 # token digest -> (expiry, user id). Sessions last 30 days, sliding.
 _sessions: dict[str, tuple[float, str]] = {}
 SESSION_TTL = 30 * 24 * 3600
+
+# Auth0 social login: single-use, short-lived tickets that carry a freshly
+# issued session token from the backend callback to the frontend /auth/callback
+# page. The ticket appears in a URL, so it must be unguessable, single-use and
+# short-lived (60s) — the real session token never travels in a URL.
+_tickets: dict[str, tuple[float, str]] = {}
+SSO_TICKET_TTL = 60
 
 # Login throttling — per-email failed-attempt window (env-tunable so tests can
 # force short windows). Guards the (public, per-IP limited) login endpoint
@@ -90,6 +98,10 @@ class ChangePasswordRequest(BaseModel):
     new: str
 
 
+class SocialSessionRequest(BaseModel):
+    ticket: str
+
+
 class AuthResponse(BaseModel):
     token: str
     user: User
@@ -120,6 +132,13 @@ def _issue_session(user_id: str) -> str:
     return token
 
 
+def _issue_sso_ticket(token: str) -> str:
+    """Single-use ticket that hands a session token to the frontend callback."""
+    ticket = secrets.token_urlsafe(32)
+    _tickets[ticket] = (time.time() + SSO_TICKET_TTL, token)
+    return ticket
+
+
 def _revoke_session(token: str) -> None:
     _sessions.pop(_hash_token(token), None)
 
@@ -145,11 +164,8 @@ def _wallet_for_user(user: dict) -> Wallet:
     return Wallet(**w)
 
 
-def require_user(authorization: str | None = Header(default=None)) -> dict:
-    """FastAPI dependency: resolve the bearer token to the authenticated user."""
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    token = authorization.removeprefix("Bearer ").strip()
+def resolve_token(token: str) -> dict:
+    """Resolve a raw bearer token to the authenticated user record."""
     digest = _hash_token(token)
     now = time.time()
     entry = _sessions.get(digest)
@@ -161,6 +177,13 @@ def require_user(authorization: str | None = Header(default=None)) -> dict:
     if user is None:
         raise HTTPException(status_code=401, detail="Account not found")
     return user
+
+
+def require_user(authorization: str | None = Header(default=None)) -> dict:
+    """FastAPI dependency: resolve the bearer token to the authenticated user."""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return resolve_token(authorization.removeprefix("Bearer ").strip())
 
 
 def resolve_optional_user(authorization: str | None) -> dict | None:
@@ -267,3 +290,130 @@ async def change_password(
 @router.get("/me", response_model=AuthResponse)
 async def me(user: dict = Depends(require_user)) -> AuthResponse:
     return AuthResponse(token="", user=_user_public(user), wallet=_wallet_for_user(user))
+
+
+# --- Auth0 social login (Google) ---------------------------------------------
+
+def _realize_social_user(claims: dict) -> dict:
+    """Find or create the Ketsa user matching an Auth0 id-token payload.
+
+    Account linking rules (in order):
+      1. Auth0 subject (``sub``) matches an existing user -> reuse it.
+      2. Verified email matches a user that has NO Auth0 subject yet -> link
+         the login (Google proved ownership of that inbox). A user that
+         already carries a *different* Auth0 subject is rejected — never
+         silently re-link an email to a second provider account.
+      3. Otherwise create a fresh account (with a wallet).
+    """
+    sub = str(claims.get("sub") or "").strip()
+    if not sub:
+        raise HTTPException(status_code=400, detail="Auth0 id token has no subject")
+    email = str(claims.get("email") or "").strip().lower()
+    name = str(claims.get("name") or "").strip() or (email or sub).split("@")[0]
+    verified = claims.get("email_verified") is True
+
+    user = store.get_user_by_auth0_sub(sub)
+    if user is None and email and verified:
+        existing = store.get_user_by_email(email)
+        if existing is not None:
+            other = existing.get("auth0_sub")
+            if other and other != sub:
+                raise HTTPException(
+                    status_code=409,
+                    detail="This email is already linked to another Google account",
+                )
+            user = existing
+
+    if user is None:
+        # New account. Prefer the email as the record id, but NEVER let the
+        # id collide with an existing record: an unverified email claim (or any
+        # leftover collision) falls back to the Auth0 subject, otherwise a
+        # Google upsert could overwrite a password account's row (wiping its
+        # password hash and orphaning its wallet).
+        uid = email if (email and verified) else sub
+        if store.get_user(uid) is not None:
+            uid = sub
+        wallet = engine.connect_wallet(name=name)
+        user = {
+            "id": uid,
+            "email": email,
+            "name": name,
+            "password": None,  # Google-created accounts log in via Auth0 only
+            "wallet_id": wallet["id"],
+            "auth0_sub": sub,
+            "created": time.time(),
+        }
+        store.upsert_user(user)
+        engine.notify(
+            wallet["id"],
+            "system",
+            "Welcome to Ketsa",
+            f"Your account is live with wallet {wallet['id'][:8]}.",
+        )
+    else:
+        if not user.get("auth0_sub"):
+            user["auth0_sub"] = sub
+            store.upsert_user(user)
+        # Make sure the wallet is live in the engine after a restart.
+        engine.connect_wallet(user["wallet_id"], name=user.get("name") or name)
+    return user
+
+
+@router.post("/social/login", response_model=dict)
+async def social_login_start() -> dict:
+    """Start an Auth0 Google login; returns the /authorize URL to follow."""
+    if not social.configured():
+        raise HTTPException(status_code=503, detail="Google login is not configured on this server")
+    return {"url": social.begin_login()}
+
+
+@router.get("/social/callback")
+async def social_login_callback(
+    code: str | None = None, state: str | None = None
+) -> RedirectResponse:
+    """Auth0 redirect target: validate state, exchange the code, verify the
+    id token, then hand the browser a single-use ticket for the frontend.
+
+    The Ketsa session token itself never appears in this redirect — only the
+    60-second, single-use ticket does.
+    """
+    if not social.configured():
+        raise HTTPException(status_code=503, detail="Google login is not configured on this server")
+    try:
+        nonce = social.take_state(state or "")
+    except social.SocialError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not code:
+        raise HTTPException(status_code=400, detail="Missing authorization code")
+    try:
+        tokens = social.exchange_code(code)
+    except social.SocialError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    id_token = tokens.get("id_token")
+    if not id_token:
+        raise HTTPException(status_code=502, detail="Auth0 did not return an id token")
+    try:
+        claims = social.verify_id_token(id_token, nonce)
+    except social.SocialError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    user = _realize_social_user(claims)
+    token = _issue_session(user["id"])
+    ticket = _issue_sso_ticket(token)
+    return RedirectResponse(
+        url=f"{social.frontend_url()}/auth/callback?ticket={ticket}",
+        status_code=302,
+    )
+
+
+@router.post("/social/session", response_model=AuthResponse)
+async def social_session(body: SocialSessionRequest) -> AuthResponse:
+    """Exchange the single-use ticket for the Ketsa session (token + user + wallet)."""
+    entry = _tickets.pop(body.ticket, None)
+    if entry is None:
+        raise HTTPException(status_code=400, detail="Invalid or expired login — please try again")
+    exp, token = entry
+    if exp < time.time():
+        raise HTTPException(status_code=400, detail="Login expired — please try again")
+    user = resolve_token(token)
+    return AuthResponse(token=token, user=_user_public(user), wallet=_wallet_for_user(user))

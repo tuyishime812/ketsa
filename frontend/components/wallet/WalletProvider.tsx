@@ -16,6 +16,7 @@ import {
   loginSession,
   logoutSession,
   registerSession,
+  startSocialLogin,
 } from '@/lib/api';
 import type { User, Wallet } from '@/lib/types';
 import {
@@ -45,6 +46,8 @@ interface WalletContextValue {
   closeAuth: () => void;
   login: (email: string, password: string) => Promise<void>;
   register: (name: string, email: string, password: string) => Promise<void>;
+  /** Start Auth0 "Continue with Google"; the browser leaves for Auth0. */
+  googleLogin: () => Promise<void>;
   logout: () => Promise<void>;
   /** Persist a refreshed token + user + wallet (e.g. after a password change). */
   applySession: (session: { token: string; user: User; wallet: Wallet }) => void;
@@ -202,6 +205,20 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     [finishAuth],
   );
 
+  const googleLogin = useCallback(async () => {
+    setAuthBusy(true);
+    setAuthError(null);
+    try {
+      const { url } = await startSocialLogin();
+      // Full-page navigation: Auth0 -> backend callback -> /auth/callback.
+      // The auth modal stays mounted until the browser leaves.
+      window.location.assign(url);
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : 'Google login unavailable');
+      setAuthBusy(false);
+    }
+  }, []);
+
   const logout = useCallback(async () => {
     const session = loadStoredSession();
     if (session?.token) {
@@ -231,6 +248,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         closeAuth,
         login,
         register,
+        googleLogin,
         logout,
         applySession: finishAuth,
       }}
@@ -255,6 +273,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           }}
           onRegister={(name, email, password) => {
             void register(name, email, password);
+          }}
+          onGoogle={() => {
+            void googleLogin();
           }}
           onClose={closeAuth}
           onGuest={() => {

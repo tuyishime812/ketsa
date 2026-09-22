@@ -4,14 +4,18 @@
 -- before pointing the backend at the project. All Ketsa content is stored as
 -- JSONB rows so the app never needs migrations for content changes.
 --
--- Three tables:
---   ketsa_kv       — markets + editable content (watch, ticker, dashboard,
---                    stats, proof, settings). The "kind" column lets the API
---                    scope queries; a content-reset only ever touches these.
---   ketsa_wallets  — persisted wallet balances. Real-money state: it is NEVER
---                    wiped by the admin "reset content" action.
---   ketsa_payments — the mobile-money (wandePay) payment ledger. Idempotency
---                    flags live here, so this is also never wiped by resets.
+-- Five tables:
+--   ketsa_kv           — markets + editable content (watch, ticker, dashboard,
+--                        stats, proof, settings). The "kind" column lets the
+--                        API scope queries; a content-reset only ever touches
+--                        these.
+--   ketsa_wallets      — persisted wallet balances. Real-money state: it is
+--                        NEVER wiped by the admin "reset content" action.
+--   ketsa_payments     — the mobile-money (wandePay) payment ledger.
+--                        Idempotency flags live here, so this is also never
+--                        wiped by resets.
+--   ketsa_users        — accounts (password + Auth0/Google sign-ins).
+--   ketsa_notifications — per-wallet in-app notification feed.
 
 create table if not exists public.ketsa_kv (
   id    text primary key,
@@ -35,6 +39,12 @@ create table if not exists public.ketsa_users (
   id    text primary key,
   value jsonb not null default '{}'::jsonb
 );
+
+-- Auth0 social login: users created via "Continue with Google" carry their
+-- Auth0 subject ("auth0_sub") inside the JSONB value. Index the lookup the
+-- backend performs when a Google user returns (find-or-create by subject).
+create index if not exists ketsa_users_auth0_sub_idx
+  on public.ketsa_users ((value ->> 'auth0_sub'));
 
 create table if not exists public.ketsa_notifications (
   id    text primary key,

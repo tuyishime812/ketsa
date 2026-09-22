@@ -100,6 +100,10 @@ def get_user_by_email(email: str) -> dict | None:
     return get_backend().get_user_by_email(email)
 
 
+def get_user_by_auth0_sub(sub: str) -> dict | None:
+    return get_backend().get_user_by_auth0_sub(sub)
+
+
 def upsert_user(user: dict) -> None:
     get_backend().upsert_user(user)
 

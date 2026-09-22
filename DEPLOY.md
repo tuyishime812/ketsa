@@ -103,6 +103,20 @@ protected `/api/admin/*` through the same-origin `/api` path.
      service role keeps full access. It is idempotent and never touches existing
      data. The backend seeds the content itself on first boot — no further
      schema setup is required.
+   - **Order matters:** run `backend/db/schema.sql` **before**
+     `backend/db/realtime.sql`. `realtime.sql` (optional — live browser
+     updates via Supabase Realtime: the channel "ketsa_live" for watched-marker
+     changes, "ketsa_notify_<wallet>" for notifications) only turns on logical
+     replication + publication for the tables from `schema.sql`, so it must
+     come second. The default live feed is the backend's in-process
+     `/api/ws` + SSE — that path needs **no** SQL at all; `realtime.sql` is
+     purely for the Supabase Realtime wiring.
+   - **Run order summary (Supabase SQL editor, one file per query):**
+     1️⃣ `backend/db/schema.sql` — tables + RLS (required for
+     `KETSA_DB_BACKEND=supabase`)
+     2️⃣ `backend/db/realtime.sql` — optional live-updates publication
+     (skip unless you're wiring Supabase Realtime into the frontend)
+     Then set `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` in the backend env.
      > **Local dev:** the backend loads `backend/.env` (gitignored) at startup.
      > The repo-root `.env` is a documented mirror only — nothing reads it.
 2. **Set the password.** `KETSA_ADMIN_PASSWORD` must be a strong, unique
@@ -116,7 +130,23 @@ protected `/api/admin/*` through the same-origin `/api` path.
    `KETSA_DB_BACKEND=supabase` so funded balances and the payment ledger
    survive restarts. Without the token the payment endpoints return `503` and
    the site runs purely on play money.
-4. **Log in.** Open `https://<your-frontend>/admin`, enter the password, and
+4. **Social login via Auth0 — "Continue with Google" (optional).** Set
+   `KETSA_AUTH0_DOMAIN`, `KETSA_AUTH0_CLIENT_ID`, `KETSA_AUTH0_CLIENT_SECRET`
+   (Auth0 application type **Regular Web Application** — the backend runs the
+   whole Authorization Code flow server-side, so no Auth0 SDK ships in the
+   browser). Also set `KETSA_PUBLIC_BASE_URL` to the **public** origin of the
+   backend — the Auth0 callback URI
+   (`https://<backend>/api/auth/social/callback`) must match exactly — and
+   `KETSA_FRONTEND_URL` to the frontend origin the browser returns to. In the
+   Auth0 dashboard (Applications → Settings):
+   - Allowed Callback URLs: `https://<backend>/api/auth/social/callback`
+   - Allowed Logout URLs: `https://<frontend>`
+   - Allowed Web Origins: `https://<frontend>`
+   Then enable the **Google** connection (Authentication → Social → Google)
+   for this application. If the Auth0 env vars are absent the button flow
+   returns `503` and the modal hides nothing — the site just keeps
+   email/password auth.
+5. **Log in.** Open `https://<your-frontend>/admin`, enter the password, and
    you'll get the dashboard with a sidebar of editors. Changes save
    immediately and appear on the public site.
 

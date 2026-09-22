@@ -243,6 +243,11 @@ and wired through `docker-compose.yml`.
 | `KETSA_WANDE_BASE_URL`       | backend   | wandePay API base URL                              | `https://apiv1.wandepay.site/api/` |
 | `KETSA_AUTH_MAX_FAILURES`    | backend   | Failed logins per email before a temporary lockout  | `5` |
 | `KETSA_AUTH_LOCKOUT_SECONDS` | backend   | Lockout window after too many failed logins         | `900` |
+| `KETSA_AUTH0_DOMAIN`         | backend   | Auth0 tenant (e.g. `ketsa.us.auth0.com`) — enables "Continue with Google" | — (social off; button returns 503) |
+| `KETSA_AUTH0_CLIENT_ID`      | backend   | Auth0 regular-web-app client id                      | — |
+| `KETSA_AUTH0_CLIENT_SECRET`  | backend   | Auth0 client secret (secret; never commit)           | — |
+| `KETSA_PUBLIC_BASE_URL`      | backend   | Public backend origin; Auth0 callback URI is `<this>/api/auth/social/callback` | `http://127.0.0.1:8000` |
+| `KETSA_FRONTEND_URL`         | backend   | Where the browser lands after Google login (`/auth/callback`) | `http://localhost:3000` |
 
 ---
 

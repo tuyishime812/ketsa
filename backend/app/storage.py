@@ -206,6 +206,7 @@ class StoreBackend(Protocol):
     def list_wallets(self) -> list[dict]: ...
     def get_user(self, user_id: str) -> dict | None: ...
     def get_user_by_email(self, email: str) -> dict | None: ...
+    def get_user_by_auth0_sub(self, sub: str) -> dict | None: ...
     def upsert_user(self, user: dict) -> None: ...
     def list_users(self) -> list[dict]: ...
     def delete_user(self, user_id: str) -> bool: ...
@@ -390,6 +391,15 @@ class MemoryBackend:
         self.init()
         for u in self._users.values():
             if u.get("email", "").lower() == (email or "").lower():
+                return copy.deepcopy(u)
+        return None
+
+    def get_user_by_auth0_sub(self, sub: str) -> dict | None:
+        self.init()
+        if not sub:
+            return None
+        for u in self._users.values():
+            if u.get("auth0_sub") == sub:
                 return copy.deepcopy(u)
         return None
 
@@ -724,6 +734,15 @@ class SupabaseBackend:
         needle = email.lower()
         for u in self._list_rows(USERS_TABLE):
             if (u.get("email") or "").lower() == needle:
+                return u
+        return None
+
+    def get_user_by_auth0_sub(self, sub: str) -> dict | None:
+        self.init()
+        if not sub:
+            return None
+        for u in self._list_rows(USERS_TABLE):
+            if u.get("auth0_sub") == sub:
                 return u
         return None
 
