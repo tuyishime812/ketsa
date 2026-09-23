@@ -3,19 +3,27 @@
 import { useState } from 'react';
 
 type Mode = 'login' | 'register';
+type IdKind = 'email' | 'phone';
 
 interface AuthModalProps {
   initialMode?: Mode;
   busy: boolean;
   error: string | null;
-  onLogin: (email: string, password: string) => void;
-  onRegister: (name: string, email: string, password: string) => void;
+  onLogin: (identifier: string, password: string) => void;
+  onRegister: (name: string, identifier: string, password: string) => void;
   onGoogle: () => void;
   onClose: () => void;
   onGuest: () => void;
 }
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+// Malawi mobile: optional +265 / 265 / leading-0, then 9 digits starting 8|9.
+// Mirrors backend normalize_phone() (spaces/dashes ignored client-side).
+const PHONE_RE = /^(\+?265)?0?[89]\d{8}$/;
+
+function normalizePhoneInput(v: string): string {
+  return v.replace(/[\s\-()]/g, '');
+}
 
 function Field({
   label,
@@ -88,7 +96,8 @@ export default function AuthModal({
 }: AuthModalProps) {
   const [mode, setMode] = useState<Mode>(initialMode);
   const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
+  const [identifier, setIdentifier] = useState('');
+  const [idKind, setIdKind] = useState<IdKind>('email');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [showPw, setShowPw] = useState(false);
@@ -102,7 +111,12 @@ export default function AuthModal({
   function validate(): boolean {
     const errs: Record<string, string> = {};
     if (mode === 'register' && !name.trim()) errs.name = 'Enter your name';
-    if (!EMAIL_RE.test(email.trim())) errs.email = 'Enter a valid email';
+    const raw = identifier.trim();
+    if (idKind === 'email') {
+      if (!EMAIL_RE.test(raw)) errs.identifier = 'Enter a valid email address';
+    } else if (!PHONE_RE.test(normalizePhoneInput(raw))) {
+      errs.identifier = 'Enter a valid Malawian phone number (e.g. 0991 234 567)';
+    }
     if (password.length < 8) errs.password = 'Must be at least 8 characters';
     if (mode === 'register' && confirm !== password) errs.confirm = 'Passwords do not match';
     setLocalErrors(errs);
@@ -112,8 +126,8 @@ export default function AuthModal({
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (busy || !validate()) return;
-    if (mode === 'login') onLogin(email.trim(), password);
-    else onRegister(name.trim(), email.trim(), password);
+    if (mode === 'login') onLogin(identifier.trim(), password);
+    else onRegister(name.trim(), identifier.trim(), password);
   }
 
   const tab =
@@ -234,15 +248,48 @@ export default function AuthModal({
                 error={localErrors.name}
               />
             )}
-            <Field
-              label="Email"
-              type="email"
-              value={email}
-              onChange={setEmail}
-              placeholder="you@example.com"
-              autoComplete="email"
-              error={localErrors.email}
-            />
+            <div>
+              <div className="mb-1.5 flex items-center justify-between">
+                <span className="font-mono text-[11px] font-semibold uppercase tracking-[.07em] text-ink-3">
+                  Email or phone
+                </span>
+                <div className="flex gap-[3px] rounded-full border border-line bg-paper-alt p-[3px]">
+                  <button
+                    type="button"
+                    className={`rounded-full px-[11px] py-[3px] font-mono text-[10px] font-semibold uppercase tracking-[.06em] transition-colors ${
+                      idKind === 'email' ? 'bg-ink text-white' : 'text-ink-3 hover:text-ink'
+                    }`}
+                    onClick={() => setIdKind('email')}
+                  >
+                    Email
+                  </button>
+                  <button
+                    type="button"
+                    className={`rounded-full px-[11px] py-[3px] font-mono text-[10px] font-semibold uppercase tracking-[.06em] transition-colors ${
+                      idKind === 'phone' ? 'bg-ink text-white' : 'text-ink-3 hover:text-ink'
+                    }`}
+                    onClick={() => setIdKind('phone')}
+                  >
+                    Phone
+                  </button>
+                </div>
+              </div>
+              <input
+                type={idKind === 'email' ? 'email' : 'tel'}
+                className="field w-full"
+                value={identifier}
+                placeholder={idKind === 'email' ? 'you@example.com' : '0991 234 567'}
+                autoComplete={idKind === 'email' ? 'email' : 'tel'}
+                inputMode={idKind === 'email' ? 'email' : 'tel'}
+                spellCheck={false}
+                onChange={(e) => setIdentifier(e.target.value)}
+              />
+              {localErrors.identifier && (
+                <span className="mt-1 block text-[12px] font-medium text-neg">
+                  {localErrors.identifier}
+                </span>
+              )}
+            </div>
             <div>
               <div className="mb-1.5 flex items-center justify-between">
                 <span className="font-mono text-[11px] font-semibold uppercase tracking-[.07em] text-ink-3">

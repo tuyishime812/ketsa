@@ -143,11 +143,12 @@ With both services running you can trade each market for real on the site:
 
 - **Play money.** Every visitor gets a simulated wallet seeded with **MK 1,000**
   (stored in `localStorage`). Click **Connect wallet** in the nav to create one.
-- **Accounts.** Optional email accounts (`/api/auth/register`) let you keep a
-  name and email on a wallet. The wallet's **equity and positions live on the
-  storage backend** and your `Authorization: Bearer` token (30-day sliding)
+- **Accounts.** Optional email **or phone** accounts (`/api/auth/register`)
+  let you keep a name and identifier (email address or Malawian mobile number,
+  e.g. `0991 234 567`) on a wallet. The wallet's **equity and positions live on
+  the storage backend** and your `Authorization: Bearer` token (30-day sliding)
   locks the account to its own wallet — trading or paying into another wallet
-  returns `403`. Failed logins are throttled per email (`KETSA_AUTH_MAX_FAILURES`
+  returns `403`. Failed logins are throttled per identifier (`KETSA_AUTH_MAX_FAILURES`
   / `KETSA_AUTH_LOCKOUT_SECONDS`); you can change your password from the
   Portfolio ("Account" card), which revokes all other sessions and issues a
   fresh token.
@@ -241,7 +242,7 @@ and wired through `docker-compose.yml`.
 | `SUPABASE_SERVICE_ROLE_KEY`  | backend   | Supabase secret service-role key (Supabase only)    | — |
 | `KETSA_WANDE_TOKEN`          | backend   | wandePay API token for MWK deposits/withdrawals (secret; absent ⇒ payments 503) | — (payments off) |
 | `KETSA_WANDE_BASE_URL`       | backend   | wandePay API base URL                              | `https://apiv1.wandepay.site/api/` |
-| `KETSA_AUTH_MAX_FAILURES`    | backend   | Failed logins per email before a temporary lockout  | `5` |
+| `KETSA_AUTH_MAX_FAILURES`    | backend   | Failed logins per email/phone before a temporary lockout  | `5` |
 | `KETSA_AUTH_LOCKOUT_SECONDS` | backend   | Lockout window after too many failed logins         | `900` |
 | `KETSA_AUTH0_DOMAIN`         | backend   | Auth0 tenant (e.g. `ketsa.us.auth0.com`) — enables "Continue with Google" | — (social off; button returns 503) |
 | `KETSA_AUTH0_CLIENT_ID`      | backend   | Auth0 regular-web-app client id                      | — |

@@ -27,6 +27,10 @@ from fastapi.testclient import TestClient
 os.environ.pop("SUPABASE_URL", None)
 os.environ.pop("SUPABASE_SERVICE_ROLE_KEY", None)
 os.environ["KETSA_DB_BACKEND"] = "memory"
+# Pin the admin gate too — a dev .env's KETSA_ADMIN_PASSWORD would otherwise
+# make every admin-login test 401 (config.py never overrides existing vars,
+# so this assignment wins over backend/.env at import time).
+os.environ["KETSA_ADMIN_PASSWORD"] = "ketsa-admin"
 
 from app.engine import engine  # noqa: E402
 from app.main import create_app  # noqa: E402

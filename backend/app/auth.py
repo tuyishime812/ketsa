@@ -38,9 +38,10 @@ SESSION_TTL = 30 * 24 * 3600
 _tickets: dict[str, tuple[float, str]] = {}
 SSO_TICKET_TTL = 60
 
-# Login throttling — per-email failed-attempt window (env-tunable so tests can
-# force short windows). Guards the (public, per-IP limited) login endpoint
-# against password guessing without locking out honest guests on a shared IP.
+# Login throttling — per-identifier (email or phone) failed-attempt window
+# (env-tunable so tests can force short windows). Guards the (public,
+# per-IP limited) login endpoint against password guessing without locking
+# out honest guests on a shared IP.
 LOGIN_MAX_FAILURES = 5
 LOGIN_WINDOW_SECONDS = 900
 _login_attempts: dict[str, list[float]] = {}
@@ -48,6 +49,52 @@ _login_attempts: dict[str, list[float]] = {}
 _SALT_LEN = 16
 _PBKDF2_ITER = 100_000
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# Malawian mobile numbers, canonical form: 9 digits starting with 8 or 9
+# (TNM: 098/099, Airtel: 088/099). Stored/compared without leading 0 or
+# country code — matching wandePay's normalize_number() so a registered phone
+# can be reused directly for deposits/payouts later.
+_PHONE_RE = re.compile(r"^[89]\d{8}$")
+
+
+def normalize_phone(raw: str) -> str:
+    """Normalize a Malawian phone to canonical 9-digit form ('991234567').
+
+    Accepts '0991234567', '+265991234567', '265991234567', '00265...',
+    spaced/dashed variants. Raises ValueError for anything else.
+    """
+    digits = re.sub(r"[\s\-().]", "", (raw or "").strip())
+    if digits.startswith("+"):
+        digits = digits[1:]
+    if not digits.isdigit() or not digits:
+        raise ValueError("not a valid phone number")
+    if digits.startswith("00265"):
+        digits = digits[5:]
+    elif digits.startswith("265") and len(digits) == 12:
+        digits = digits[3:]
+    digits = digits.lstrip("0")
+    if not _PHONE_RE.match(digits):
+        raise ValueError("not a valid Malawian phone number")
+    return digits
+
+
+def normalize_identifier(identifier: str) -> tuple[str, str]:
+    """Classify and canonicalize a user-supplied identifier.
+
+    Returns ``("email", lowercased_email)`` or ``("phone", canonical_9_digits)``.
+    Raises ``ValueError`` for anything that is neither.
+    """
+    raw = (identifier or "").strip()
+    if _EMAIL_RE.match(raw):
+        return "email", raw.lower()
+    return "phone", normalize_phone(raw)
+
+
+def lookup_user_by_identifier(identifier: str) -> dict | None:
+    """Resolve an email or phone identifier to a user record (or None)."""
+    kind, normalized = normalize_identifier(identifier)
+    if kind == "email":
+        return store.get_user_by_email(normalized)
+    return store.get_user_by_phone(normalized)
 
 
 def _throttle_window() -> int:
@@ -84,12 +131,12 @@ def hash_password(password: str) -> str:
 
 class RegisterRequest(BaseModel):
     name: str
-    email: str
+    identifier: str  # email address OR Malawian phone number
     password: str
 
 
 class LoginRequest(BaseModel):
-    email: str
+    identifier: str  # email address OR Malawian phone number
     password: str
 
 
@@ -153,6 +200,7 @@ def _user_public(user: dict) -> User:
     return User(
         id=user["id"],
         email=user["email"],
+        phone=user.get("phone") or None,
         name=user["name"],
         wallet_id=user["wallet_id"],
         created=user["created"],
@@ -204,21 +252,33 @@ def resolve_optional_user(authorization: str | None) -> dict | None:
 @router.post("/register", response_model=AuthResponse)
 async def register(body: RegisterRequest) -> AuthResponse:
     name = body.name.strip()
-    email = body.email.strip().lower()
+    try:
+        kind, identifier = normalize_identifier(body.identifier)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Enter a valid email address or Malawian phone number (e.g. 0991 234 567)",
+        )
 
     if not name or len(name) < 2:
         raise HTTPException(status_code=400, detail="Name must be at least 2 characters")
-    if not _EMAIL_RE.match(email):
-        raise HTTPException(status_code=400, detail="Enter a valid email address")
     if len(body.password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
-    if store.get_user_by_email(email):
-        raise HTTPException(status_code=409, detail="An account with this email already exists")
+
+    if kind == "email":
+        email, phone = identifier, ""
+        if store.get_user_by_email(email):
+            raise HTTPException(status_code=409, detail="An account with this email already exists")
+    else:
+        email, phone = "", identifier
+        if store.get_user_by_phone(phone):
+            raise HTTPException(status_code=409, detail="An account with this phone number already exists")
 
     wallet = engine.connect_wallet(name=name)
     user = {
-        "id": email,
+        "id": identifier,
         "email": email,
+        "phone": phone,
         "name": name,
         "password": _hash_password(body.password),
         "wallet_id": wallet["id"],
@@ -239,13 +299,20 @@ async def register(body: RegisterRequest) -> AuthResponse:
 
 @router.post("/login", response_model=AuthResponse)
 async def login(body: LoginRequest) -> AuthResponse:
-    email = body.email.strip().lower()
+    try:
+        kind, identifier = normalize_identifier(body.identifier)
+    except ValueError:
+        # Uniform 401: don't let format errors distinguish account state.
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid email/phone or password",
+        )
     now = time.time()
     window = _throttle_window()
     max_failures = _throttle_max()
     _prune_attempts(now, window)
 
-    fails = [t for t in _login_attempts.get(email, []) if now - t < window]
+    fails = [t for t in _login_attempts.get(identifier, []) if now - t < window]
     if len(fails) >= max_failures:
         retry_in = max(1, int(window - (now - min(fails))))
         raise HTTPException(
@@ -253,13 +320,13 @@ async def login(body: LoginRequest) -> AuthResponse:
             detail=f"Too many attempts. Try again in {retry_in}s.",
         )
 
-    user = store.get_user_by_email(email)
+    user = store.get_user_by_email(identifier) if kind == "email" else store.get_user_by_phone(identifier)
     if user is None or not _verify_password(body.password, user.get("password", "")):
-        _login_attempts.setdefault(email, []).append(now)
+        _login_attempts.setdefault(identifier, []).append(now)
         _prune_attempts(now, window)
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+        raise HTTPException(status_code=401, detail="Invalid email/phone or password")
 
-    _login_attempts.pop(email, None)
+    _login_attempts.pop(identifier, None)
     token = _issue_session(user["id"])
     return AuthResponse(token=token, user=_user_public(user), wallet=_wallet_for_user(user))
 
@@ -337,6 +404,7 @@ def _realize_social_user(claims: dict) -> dict:
         user = {
             "id": uid,
             "email": email,
+            "phone": "",
             "name": name,
             "password": None,  # Google-created accounts log in via Auth0 only
             "wallet_id": wallet["id"],

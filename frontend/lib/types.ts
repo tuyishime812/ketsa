@@ -90,6 +90,7 @@ export interface Wallet {
 export interface User {
   id: string;
   email: string;
+  phone?: string | null;
   name: string;
   wallet_id: string;
   created: number;
@@ -102,13 +103,13 @@ export interface AuthSession {
 }
 
 export interface AuthCredentials {
-  email: string;
+  identifier: string; // email address OR Malawian phone number
   password: string;
 }
 
 export interface RegisterCredentials {
   name: string;
-  email: string;
+  identifier: string; // email address OR Malawian phone number
   password: string;
 }
 
@@ -138,6 +139,7 @@ export interface NotificationItem {
 export interface AdminUserView {
   id: string;
   email: string;
+  phone?: string | null;
   name: string;
   wallet_id: string;
   created: number;

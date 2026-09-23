@@ -12,7 +12,7 @@ def _admin_token(client: TestClient) -> str:
 def _register(client: TestClient, email: str = "alice@ketsa.io") -> dict:
     resp = client.post(
         "/api/auth/register",
-        json={"name": "Alice Trader", "email": email, "password": "password123"},
+        json={"name": "Alice Trader", "identifier": email, "password": "password123"},
     )
     assert resp.status_code == 200
     return resp.json()
@@ -135,7 +135,7 @@ def test_admin_reset_password(client: TestClient) -> None:
     # Unknown user → 404
     resp = client.post(
         "/api/admin/users/reset-password",
-        json={"email": "nobody@ketsa.io", "new_password": "brandnewpass1"},
+        json={"identifier": "nobody@ketsa.io", "new_password": "brandnewpass1"},
         headers=_auth(token),
     )
     assert resp.status_code == 404
@@ -143,7 +143,7 @@ def test_admin_reset_password(client: TestClient) -> None:
     # Short password → 400
     resp = client.post(
         "/api/admin/users/reset-password",
-        json={"email": "resetme@ketsa.io", "new_password": "short"},
+        json={"identifier": "resetme@ketsa.io", "new_password": "short"},
         headers=_auth(token),
     )
     assert resp.status_code == 400
@@ -151,7 +151,7 @@ def test_admin_reset_password(client: TestClient) -> None:
     # Successful reset
     resp = client.post(
         "/api/admin/users/reset-password",
-        json={"email": "resetme@ketsa.io", "new_password": "brandnewpass1"},
+        json={"identifier": "resetme@ketsa.io", "new_password": "brandnewpass1"},
         headers=_auth(token),
     )
     assert resp.status_code == 200
@@ -160,11 +160,11 @@ def test_admin_reset_password(client: TestClient) -> None:
     assert client.get("/api/auth/me", headers=_auth(reg["token"])).status_code == 401
     assert client.post(
         "/api/auth/login",
-        json={"email": "resetme@ketsa.io", "password": "password123"},
+        json={"identifier": "resetme@ketsa.io", "password": "password123"},
     ).status_code == 401
     assert client.post(
         "/api/auth/login",
-        json={"email": "resetme@ketsa.io", "password": "brandnewpass1"},
+        json={"identifier": "resetme@ketsa.io", "password": "brandnewpass1"},
     ).status_code == 200
 
 

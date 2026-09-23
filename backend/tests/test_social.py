@@ -364,7 +364,7 @@ def _google_login_with(client: TestClient, claims: dict) -> dict:
 def test_links_google_login_to_existing_password_account(client: TestClient) -> None:
     reg = client.post("/api/auth/register", json={
         "name": "Ada Okafor",
-        "email": GOOGLE_EMAIL,
+        "identifier": GOOGLE_EMAIL,
         "password": "CorrectHorse99",
     })
     assert reg.status_code == 200, reg.text
@@ -394,7 +394,7 @@ def test_rejects_email_bound_to_another_google_account(client: TestClient) -> No
 def test_unverified_email_does_not_link(client: TestClient) -> None:
     reg = client.post("/api/auth/register", json={
         "name": "Ada Okafor",
-        "email": GOOGLE_EMAIL,
+        "identifier": GOOGLE_EMAIL,
         "password": "CorrectHorse99",
     })
     assert reg.status_code == 200, reg.text
@@ -411,7 +411,7 @@ def test_unverified_email_does_not_link(client: TestClient) -> None:
 
     # The pre-existing password account must be untouched and still work.
     reg_login = client.post("/api/auth/login", json={
-        "email": GOOGLE_EMAIL, "password": "CorrectHorse99",
+        "identifier": GOOGLE_EMAIL, "password": "CorrectHorse99",
     })
     assert reg_login.status_code == 200, reg_login.text
     assert reg_login.json()["wallet"]["id"] == reg.json()["wallet"]["id"]

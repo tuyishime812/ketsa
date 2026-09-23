@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 
 from . import store
-from .auth import hash_password, revoke_user_sessions
+from .auth import hash_password, lookup_user_by_identifier, revoke_user_sessions
 from .engine import engine
 from .models import AdminUserView
 from .storage import get_all_settings, get_setting, reset_db, set_setting
@@ -234,7 +234,7 @@ async def admin_settings_section(section: str, body: dict) -> MessageResponse:
 # --- Users ------------------------------------------------------------------
 
 class AdminUserResetPassword(BaseModel):
-    email: str
+    identifier: str  # email address OR Malawian phone number
     new_password: str
 
 
@@ -249,6 +249,7 @@ async def admin_users_list() -> list[AdminUserView]:
             AdminUserView(
                 id=u["id"],
                 email=u["email"],
+                phone=u.get("phone") or None,
                 name=u.get("name") or u["id"],
                 wallet_id=u["wallet_id"],
                 created=float(u.get("created") or 0.0),
@@ -268,7 +269,10 @@ async def admin_users_list() -> list[AdminUserView]:
     dependencies=[Depends(require_admin)],
 )
 async def admin_user_reset_password(body: AdminUserResetPassword) -> MessageResponse:
-    user = store.get_user_by_email(body.email.strip().lower())
+    try:
+        user = lookup_user_by_identifier(body.identifier)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="User not found")
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
     if len(body.new_password) < 8:

@@ -102,7 +102,7 @@ export default function DashboardSidebar() {
           </span>
         </div>
         {user && (
-          <p className="mt-[8px] truncate text-[11px] text-ink-3">{user.email}</p>
+          <p className="mt-[8px] truncate text-[11px] text-ink-3">{user.email || user.phone || ''}</p>
         )}
       </div>
     </aside>

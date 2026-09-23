@@ -103,6 +103,7 @@ class WalletConnectRequest(BaseModel):
 class User(BaseModel):
     id: str
     email: str
+    phone: Optional[str] = None
     name: str
     wallet_id: str
     created: float
@@ -117,6 +118,7 @@ class AdminUserView(BaseModel):
     """A user record enriched with live wallet stats for the admin panel."""
     id: str
     email: str
+    phone: Optional[str] = None
     name: str
     wallet_id: str
     created: float

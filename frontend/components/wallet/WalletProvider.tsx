@@ -44,8 +44,8 @@ interface WalletContextValue {
   // Auth
   openAuth: (mode?: AuthMode) => void;
   closeAuth: () => void;
-  login: (email: string, password: string) => Promise<void>;
-  register: (name: string, email: string, password: string) => Promise<void>;
+  login: (identifier: string, password: string) => Promise<void>;
+  register: (name: string, identifier: string, password: string) => Promise<void>;
   /** Start Auth0 "Continue with Google"; the browser leaves for Auth0. */
   googleLogin: () => Promise<void>;
   logout: () => Promise<void>;
@@ -172,11 +172,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = useCallback(
-    async (email: string, password: string) => {
+    async (identifier: string, password: string) => {
       setAuthBusy(true);
       setAuthError(null);
       try {
-        const session = await loginSession({ email, password });
+        const session = await loginSession({ identifier, password });
         finishAuth(session);
         setAuthOpen(false);
       } catch (err) {
@@ -189,11 +189,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   );
 
   const register = useCallback(
-    async (name: string, email: string, password: string) => {
+    async (name: string, identifier: string, password: string) => {
       setAuthBusy(true);
       setAuthError(null);
       try {
-        const session = await registerSession({ name, email, password });
+        const session = await registerSession({ name, identifier, password });
         finishAuth(session);
         setAuthOpen(false);
       } catch (err) {
@@ -268,11 +268,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           initialMode={authMode}
           busy={authBusy}
           error={authError}
-          onLogin={(email, password) => {
-            void login(email, password);
+          onLogin={(identifier, password) => {
+            void login(identifier, password);
           }}
-          onRegister={(name, email, password) => {
-            void register(name, email, password);
+          onRegister={(name, identifier, password) => {
+            void register(name, identifier, password);
           }}
           onGoogle={() => {
             void googleLogin();

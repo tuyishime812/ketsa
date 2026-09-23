@@ -46,7 +46,7 @@ export default function AccountSettings() {
     <div className="rounded-m border border-line bg-white p-5">
       <h3 className="mb-3 font-serif text-[17px] font-medium">Account</h3>
       <p className="mb-4 text-[12.5px] leading-snug text-ink-2">
-        Signed in as <span className="font-medium text-ink">{user.email}</span>
+        Signed in as <span className="font-medium text-ink">{user.email || user.phone}</span>
       </p>
 
       <form className="flex flex-col gap-3" onSubmit={(e) => void submit(e)}>

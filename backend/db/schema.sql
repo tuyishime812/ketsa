@@ -46,6 +46,11 @@ create table if not exists public.ketsa_users (
 create index if not exists ketsa_users_auth0_sub_idx
   on public.ketsa_users ((value ->> 'auth0_sub'));
 
+-- Phone-number accounts: users may register/log in with a Malawian phone
+-- instead of an email; index the per-phone lookup (unique across accounts).
+create index if not exists ketsa_users_phone_idx
+  on public.ketsa_users ((value ->> 'phone'));
+
 create table if not exists public.ketsa_notifications (
   id    text primary key,
   value jsonb not null default '{}'::jsonb

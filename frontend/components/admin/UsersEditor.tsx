@@ -41,7 +41,7 @@ export default function UsersEditor({ token }: { token: string }) {
 
   const sorted = useSorted(users, sortBy);
 
-  async function resetPassword(email: string, newPassword: string) {
+  async function resetPassword(identifier: string, newPassword: string) {
     setError(null);
     setMsg(null);
     if (newPassword.length < 8) {
@@ -50,22 +50,22 @@ export default function UsersEditor({ token }: { token: string }) {
     }
     try {
       await adminPost(token, '/users/reset-password', {
-        email,
+        identifier,
         new_password: newPassword,
       });
-      setMsg(`Password reset for ${email}. Previous sessions were revoked.`);
+      setMsg(`Password reset for ${identifier}. Previous sessions were revoked.`);
     } catch (err) {
       setError(apiError(err));
     }
   }
 
-  async function deleteUser(email: string) {
+  async function deleteUser(id: string) {
     setError(null);
     setMsg(null);
     try {
-      await adminDelete(token, `/users/${encodeURIComponent(email)}`);
-      setUsers((prev) => (prev ?? []).filter((u) => u.email !== email));
-      setMsg(`Deleted account ${email}.`);
+      await adminDelete(token, `/users/${encodeURIComponent(id)}`);
+      setUsers((prev) => (prev ?? []).filter((u) => u.id !== id));
+      setMsg(`Deleted account ${id}.`);
     } catch (err) {
       setError(apiError(err));
     }
@@ -137,8 +137,8 @@ export default function UsersEditor({ token }: { token: string }) {
                   <UserRow
                     key={u.id}
                     user={u}
-                    onReset={(pw) => resetPassword(u.email, pw)}
-                    onDelete={() => deleteUser(u.email)}
+                    onReset={(pw) => resetPassword(u.email || u.phone || u.id, pw)}
+                    onDelete={() => deleteUser(u.id)}
                   />
                 ))}
             </tbody>
@@ -178,7 +178,7 @@ function UserRow({
       <tr>
         <td>
           <div className="admin-td-name">{user.name}</div>
-          <div className="admin-td-sub">{user.email}</div>
+          <div className="admin-td-sub">{user.email || user.phone || '—'}</div>
         </td>
         <td className="admin-mono">{user.wallet_id}</td>
         <td className="admin-mono">

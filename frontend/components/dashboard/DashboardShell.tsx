@@ -430,7 +430,7 @@ function AccountCard() {
             </span>
             <div className="min-w-0">
               <div className="truncate text-[13.5px] font-semibold text-ink">{user.name}</div>
-              <div className="truncate text-[11.5px] text-ink-3">{user.email}</div>
+              <div className="truncate text-[11.5px] text-ink-3">{user.email || user.phone || ''}</div>
             </div>
           </div>
           <div className="mt-4 grid grid-cols-2 gap-2">

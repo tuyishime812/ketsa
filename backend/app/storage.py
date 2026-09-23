@@ -206,6 +206,7 @@ class StoreBackend(Protocol):
     def list_wallets(self) -> list[dict]: ...
     def get_user(self, user_id: str) -> dict | None: ...
     def get_user_by_email(self, email: str) -> dict | None: ...
+    def get_user_by_phone(self, phone: str) -> dict | None: ...
     def get_user_by_auth0_sub(self, sub: str) -> dict | None: ...
     def upsert_user(self, user: dict) -> None: ...
     def list_users(self) -> list[dict]: ...
@@ -400,6 +401,16 @@ class MemoryBackend:
             return None
         for u in self._users.values():
             if u.get("auth0_sub") == sub:
+                return copy.deepcopy(u)
+        return None
+
+    def get_user_by_phone(self, phone: str) -> dict | None:
+        self.init()
+        if not phone:
+            return None
+        needle = "".join(phone.split()).lstrip("0")
+        for u in self._users.values():
+            if u.get("phone", "").lstrip("0") == needle:
                 return copy.deepcopy(u)
         return None
 
@@ -743,6 +754,16 @@ class SupabaseBackend:
             return None
         for u in self._list_rows(USERS_TABLE):
             if u.get("auth0_sub") == sub:
+                return u
+        return None
+
+    def get_user_by_phone(self, phone: str) -> dict | None:
+        self.init()
+        if not phone:
+            return None
+        needle = "".join(phone.split()).lstrip("0")
+        for u in self._list_rows(USERS_TABLE):
+            if (u.get("phone") or "").lstrip("0") == needle:
                 return u
         return None
 
