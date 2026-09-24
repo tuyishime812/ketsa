@@ -13,10 +13,14 @@ import {
   connectWalletSession,
   fetchAuthMe,
   fetchWalletSession,
+  forgotPassword as forgotPasswordRequest,
   loginSession,
   logoutSession,
   registerSession,
+  resendRegisterOtp as resendRegisterOtpRequest,
+  resetPassword as resetPasswordRequest,
   startSocialLogin,
+  verifyEmail as verifyEmailRequest,
 } from '@/lib/api';
 import type { User, Wallet } from '@/lib/types';
 import {
@@ -45,7 +49,29 @@ interface WalletContextValue {
   openAuth: (mode?: AuthMode) => void;
   closeAuth: () => void;
   login: (identifier: string, password: string) => Promise<void>;
-  register: (name: string, identifier: string, password: string) => Promise<void>;
+  /**
+   * Register. Email signups return 'pending' (OTP emailed — the auth modal
+   * shows the verify step); phone signups or an error return null.
+   */
+  register: (
+    name: string,
+    identifier: string,
+    password: string,
+  ) => Promise<'pending' | null>;
+  /** The email awaiting OTP verification, if a signup is in flight. */
+  pendingEmail: string | null;
+  /** Complete an email signup with the emailed code. */
+  verifyEmail: (email: string, otp: string) => Promise<void>;
+  /** Re-send the signup OTP; true when a fresh code was emailed. */
+  resendRegisterOtp: (email: string) => Promise<boolean>;
+  /** Request a password-reset code; always succeeds (uniform 200). */
+  forgotPassword: (identifier: string) => Promise<boolean>;
+  /** Set a new password with the emailed code; true on success. */
+  resetPassword: (
+    email: string,
+    otp: string,
+    newPassword: string,
+  ) => Promise<boolean>;
   /** Start Auth0 "Continue with Google"; the browser leaves for Auth0. */
   googleLogin: () => Promise<void>;
   logout: () => Promise<void>;
@@ -65,6 +91,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [authMode, setAuthMode] = useState<AuthMode>('login');
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [pendingEmail, setPendingEmail] = useState<string | null>(null);
   const restoring = useRef(false);
 
   const refresh = useCallback(async (): Promise<Wallet | null> => {
@@ -189,21 +216,97 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   );
 
   const register = useCallback(
-    async (name: string, identifier: string, password: string) => {
+    async (
+      name: string,
+      identifier: string,
+      password: string,
+    ): Promise<'pending' | null> => {
       setAuthBusy(true);
       setAuthError(null);
       try {
-        const session = await registerSession({ name, identifier, password });
-        finishAuth(session);
+        const result = await registerSession({ name, identifier, password });
+        if ('pending' in result) {
+          setPendingEmail(result.email);
+          return 'pending'; // modal switches to the OTP verify step
+        }
+        finishAuth(result);
         setAuthOpen(false);
+        return null;
       } catch (err) {
         setAuthError(err instanceof Error ? err.message : 'Registration failed');
+        return null;
       } finally {
         setAuthBusy(false);
       }
     },
     [finishAuth],
   );
+
+  const verifyEmail = useCallback(
+    async (email: string, otp: string) => {
+      setAuthBusy(true);
+      setAuthError(null);
+      try {
+        const session = await verifyEmailRequest(email, otp);
+        finishAuth(session);
+        setPendingEmail(null);
+        setAuthOpen(false);
+      } catch (err) {
+        setAuthError(
+          err instanceof Error ? err.message : 'Verification failed',
+        );
+      } finally {
+        setAuthBusy(false);
+      }
+    },
+    [finishAuth],
+  );
+
+  const resendRegisterOtp = useCallback(async (email: string) => {
+    setAuthBusy(true);
+    setAuthError(null);
+    try {
+      await resendRegisterOtpRequest(email);
+      return true;
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : 'Could not resend code');
+      return false;
+    } finally {
+      setAuthBusy(false);
+    }
+  }, []);
+
+  const forgotPassword = useCallback(async (identifier: string) => {
+    setAuthBusy(true);
+    setAuthError(null);
+    try {
+      await forgotPasswordRequest(identifier);
+      return true;
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : 'Reset request failed');
+      return false;
+    } finally {
+      setAuthBusy(false);
+    }
+  }, []);
+
+  const resetPassword = useCallback(async (
+    email: string,
+    otp: string,
+    newPassword: string,
+  ) => {
+    setAuthBusy(true);
+    setAuthError(null);
+    try {
+      await resetPasswordRequest(email, otp, newPassword);
+      return true;
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : 'Reset failed');
+      return false;
+    } finally {
+      setAuthBusy(false);
+    }
+  }, []);
 
   const googleLogin = useCallback(async () => {
     setAuthBusy(true);
@@ -248,6 +351,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         closeAuth,
         login,
         register,
+        pendingEmail,
+        verifyEmail,
+        resendRegisterOtp,
+        forgotPassword,
+        resetPassword,
         googleLogin,
         logout,
         applySession: finishAuth,
@@ -268,12 +376,19 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           initialMode={authMode}
           busy={authBusy}
           error={authError}
+          pendingEmail={pendingEmail}
           onLogin={(identifier, password) => {
             void login(identifier, password);
           }}
-          onRegister={(name, identifier, password) => {
-            void register(name, identifier, password);
-          }}
+          onRegister={(name, identifier, password) =>
+            register(name, identifier, password)
+          }
+          onVerify={(email, otp) => verifyEmail(email, otp)}
+          onResendOtp={(email) => resendRegisterOtp(email)}
+          onForgot={(identifier) => forgotPassword(identifier)}
+          onReset={(email, otp, newPassword) =>
+            resetPassword(email, otp, newPassword)
+          }
           onGoogle={() => {
             void googleLogin();
           }}

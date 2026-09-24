@@ -146,7 +146,20 @@ protected `/api/admin/*` through the same-origin `/api` path.
    for this application. If the Auth0 env vars are absent the button flow
    returns `503` and the modal hides nothing — the site just keeps
    email/password auth.
-5. **Log in.** Open `https://<your-frontend>/admin`, enter the password, and
+5. **Transactional email via Resend (recommended).** Two auth flows depend on
+   it: **email-OTP signup verification** (an email registration is held
+   pending — no account, no seeded wallet — until the user enters the 6-digit
+   code) and **forgot-password** (reset code emailed to the account's email).
+   Set `KETSA_RESEND_API_KEY` (from https://resend.com/api-keys) and
+   `KETSA_RESEND_FROM` to an address on a domain you've **verified in Resend**
+   (Resend's default sandbox domain only delivers to your own inbox). Without
+   the key no mail is sent: the API still answers normally but codes only land
+   in the server log — fine for local testing, never acceptable in production.
+   Optional tuning: `KETSA_OTP_TTL_SECONDS` (default 600),
+   `KETSA_OTP_MAX_ATTEMPTS` (default 5), `KETSA_OTP_RESEND_SECONDS`
+   (default 60). Phone-only accounts cannot self-reset (no SMS provider
+   wired) — reset them from the admin dashboard.
+6. **Log in.** Open `https://<your-frontend>/admin`, enter the password, and
    you'll get the dashboard with a sidebar of editors. Changes save
    immediately and appear on the public site.
 

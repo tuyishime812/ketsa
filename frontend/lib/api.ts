@@ -15,7 +15,9 @@ import type {
   NotificationItem,
   OrderBook,
   Payment,
+  PendingVerification,
   RegisterCredentials,
+  RegisterResult,
   Trade,
   TradeRequest,
   TradeResponse,
@@ -247,10 +249,68 @@ async function authRequest<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
-export function registerSession(body: RegisterCredentials): Promise<AuthSession> {
-  return authRequest<AuthSession>('/register', {
+/**
+ * Register a user account.
+ *
+ * Email signups answer 202 with `{ok, pending, email}` — an emailed OTP must
+ * be verified via `verifyEmail()` before the account exists (and a wallet is
+ * minted). Phone signups answer 200 with a full session immediately.
+ */
+export async function registerSession(
+  body: RegisterCredentials,
+): Promise<RegisterResult> {
+  const res = await fetch(`${AUTH_BASE}/register`, {
     method: 'POST',
+    credentials: 'omit',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
     body: JSON.stringify(body),
+  });
+  const payload = (await res.json()) as AuthSession | PendingVerification;
+  if (!res.ok) {
+    throw new Error(
+      (payload as { detail?: string })?.detail ||
+        `Auth request failed (${res.status})`,
+    );
+  }
+  return payload as RegisterResult;
+}
+
+/** Complete an email signup with the emailed one-time passcode. */
+export function verifyEmail(email: string, otp: string): Promise<AuthSession> {
+  return authRequest<AuthSession>('/register/verify', {
+    method: 'POST',
+    body: JSON.stringify({ email, otp }),
+  });
+}
+
+/** Re-email the signup code for a pending registration (cooldown-gated). */
+export function resendRegisterOtp(email: string): Promise<PendingVerification> {
+  return authRequest<PendingVerification>('/register/resend', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  });
+}
+
+/** Request a password-reset code for an email account (uniform 200 reply). */
+export function forgotPassword(identifier: string): Promise<{ ok: boolean }> {
+  return authRequest<{ ok: boolean }>('/forgot-password', {
+    method: 'POST',
+    body: JSON.stringify({ identifier }),
+  });
+}
+
+/** Set a new password with the emailed reset code; revokes all sessions. */
+export function resetPassword(
+  email: string,
+  otp: string,
+  newPassword: string,
+): Promise<{ ok: boolean }> {
+  return authRequest<{ ok: boolean }>('/reset-password', {
+    method: 'POST',
+    body: JSON.stringify({ email, otp, new_password: newPassword }),
   });
 }
 

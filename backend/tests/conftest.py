@@ -62,3 +62,37 @@ def client() -> TestClient:
 def limited_client() -> TestClient:
     """A client with a strict per-IP rate limit to exercise 429 handling."""
     return make_client(rate_limit=3, expose_docs=False)
+
+
+def register_user(
+    client: TestClient,
+    identifier: str = "alice@ketsa.io",
+    name: str = "Alice Trader",
+    password: str = "password123",
+) -> dict:
+    """Register a user, completing the email-OTP step when needed.
+
+    Email signups return 202 pending (a code is "mailed" — captured via the
+    patched mailer transport) and only become accounts after verification;
+    phone signups return a session immediately. Returns the final auth body
+    (a 200 AuthResponse in both cases), asserting intermediate statuses.
+    """
+    sent: list[tuple[str, str]] = []
+    with mock.patch(
+        "app.mailer.send_otp_email",
+        side_effect=lambda to, code, purpose, ttl, name="": (
+            sent.append((to, code)) or True
+        ),
+    ):
+        res = client.post(
+            "/api/auth/register",
+            json={"name": name, "identifier": identifier, "password": password},
+        )
+        if res.status_code == 202:
+            code = next(c for t, c in sent if t == identifier.strip().lower())
+            res = client.post(
+                "/api/auth/register/verify",
+                json={"email": identifier.strip().lower(), "otp": code},
+            )
+        assert res.status_code == 200, res.text
+        return res.json()

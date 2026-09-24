@@ -1,16 +1,39 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 type Mode = 'login' | 'register';
 type IdKind = 'email' | 'phone';
+type Step = 'auth' | 'verify' | 'forgot';
 
 interface AuthModalProps {
   initialMode?: Mode;
   busy: boolean;
   error: string | null;
+  /** Email awaiting OTP verification, when a signup is in flight. */
+  pendingEmail: string | null;
   onLogin: (identifier: string, password: string) => void;
-  onRegister: (name: string, identifier: string, password: string) => void;
+  /**
+   * Register. Resolves 'pending' when the backend answered 202 (email OTP
+   * emailed — the modal moves to the verify step) or null otherwise.
+   */
+  onRegister: (
+    name: string,
+    identifier: string,
+    password: string,
+  ) => Promise<'pending' | null>;
+  /** Complete an email signup with the emailed code. */
+  onVerify: (email: string, otp: string) => Promise<void>;
+  /** Re-send the signup code; true when a fresh code was emailed. */
+  onResendOtp: (email: string) => Promise<boolean>;
+  /** Request a password-reset code; resolves true when the request was sent. */
+  onForgot: (identifier: string) => Promise<boolean>;
+  /** Set a new password with the emailed code; true on success. */
+  onReset: (
+    email: string,
+    otp: string,
+    newPassword: string,
+  ) => Promise<boolean>;
   onGoogle: () => void;
   onClose: () => void;
   onGuest: () => void;
@@ -20,6 +43,7 @@ const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 // Malawi mobile: optional +265 / 265 / leading-0, then 9 digits starting 8|9.
 // Mirrors backend normalize_phone() (spaces/dashes ignored client-side).
 const PHONE_RE = /^(\+?265)?0?[89]\d{8}$/;
+const OTP_RE = /^\d{6}$/;
 
 function normalizePhoneInput(v: string): string {
   return v.replace(/[\s\-()]/g, '');
@@ -32,6 +56,7 @@ function Field({
   onChange,
   placeholder,
   autoComplete,
+  inputMode,
   error,
 }: {
   label: string;
@@ -40,6 +65,7 @@ function Field({
   onChange: (v: string) => void;
   placeholder?: string;
   autoComplete?: string;
+  inputMode?: 'text' | 'email' | 'tel' | 'numeric';
   error?: string | null;
 }) {
   return (
@@ -53,11 +79,65 @@ function Field({
         value={value}
         placeholder={placeholder}
         autoComplete={autoComplete}
+        inputMode={inputMode}
         spellCheck={false}
         onChange={(e) => onChange(e.target.value)}
       />
       {error && <span className="mt-1 block text-[12px] font-medium text-neg">{error}</span>}
     </label>
+  );
+}
+
+/** Email-or-phone identifier input with an Email/Phone kind toggle. */
+function IdentifierField({
+  kind,
+  onKindChange,
+  value,
+  onChange,
+  error,
+}: {
+  kind: IdKind;
+  onKindChange: (k: IdKind) => void;
+  value: string;
+  onChange: (v: string) => void;
+  error?: string | null;
+}) {
+  const chip = (k: IdKind, label: string) => (
+    <button
+      type="button"
+      className={`rounded-full px-[11px] py-[3px] font-mono text-[10px] font-semibold uppercase tracking-[.06em] transition-colors ${
+        kind === k ? 'bg-ink text-white' : 'text-ink-3 hover:text-ink'
+      }`}
+      onClick={() => onKindChange(k)}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div>
+      <div className="mb-1.5 flex items-center justify-between">
+        <span className="font-mono text-[11px] font-semibold uppercase tracking-[.07em] text-ink-3">
+          Email or phone
+        </span>
+        <div className="flex gap-[3px] rounded-full border border-line bg-paper-alt p-[3px]">
+          {chip('email', 'Email')}
+          {chip('phone', 'Phone')}
+        </div>
+      </div>
+      <input
+        type={kind === 'email' ? 'email' : 'tel'}
+        className="field w-full"
+        value={value}
+        placeholder={kind === 'email' ? 'you@example.com' : '0991 234 567'}
+        autoComplete={kind === 'email' ? 'email' : 'tel'}
+        inputMode={kind === 'email' ? 'email' : 'tel'}
+        spellCheck={false}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      {error && (
+        <span className="mt-1 block text-[12px] font-medium text-neg">{error}</span>
+      )}
+    </div>
   );
 }
 
@@ -88,13 +168,19 @@ export default function AuthModal({
   initialMode = 'login',
   busy,
   error,
+  pendingEmail,
   onLogin,
   onRegister,
+  onVerify,
+  onResendOtp,
+  onForgot,
+  onReset,
   onGoogle,
   onClose,
   onGuest,
 }: AuthModalProps) {
   const [mode, setMode] = useState<Mode>(initialMode);
+  const [step, setStep] = useState<Step>('auth');
   const [name, setName] = useState('');
   const [identifier, setIdentifier] = useState('');
   const [idKind, setIdKind] = useState<IdKind>('email');
@@ -102,6 +188,28 @@ export default function AuthModal({
   const [confirm, setConfirm] = useState('');
   const [showPw, setShowPw] = useState(false);
   const [localErrors, setLocalErrors] = useState<Record<string, string>>({});
+  // Verify step (email signup)
+  const [otp, setOtp] = useState('');
+  const [resent, setResent] = useState(false);
+  // Forgot-password step
+  const [forgotId, setForgotId] = useState('');
+  const [forgotKind, setForgotKind] = useState<IdKind>('email');
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotSent, setForgotSent] = useState(false);
+  const [newPw, setNewPw] = useState('');
+  const [newPw2, setNewPw2] = useState('');
+  const [resetDone, setResetDone] = useState(false);
+
+  // A pending email signup flips the modal to the verify step.
+  useEffect(() => {
+    if (pendingEmail) {
+      setStep('verify');
+      setOtp('');
+      setResent(false);
+    }
+  }, [pendingEmail]);
+
+  const verifyEmailTarget = pendingEmail || identifier.trim();
 
   function switchMode(next: Mode) {
     setMode(next);
@@ -126,14 +234,131 @@ export default function AuthModal({
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (busy || !validate()) return;
+    setResetDone(false);
     if (mode === 'login') onLogin(identifier.trim(), password);
-    else onRegister(name.trim(), identifier.trim(), password);
+    else {
+      const outcome = await onRegister(name.trim(), identifier.trim(), password);
+      if (outcome === 'pending') {
+        setStep('verify');
+        setOtp('');
+        setResent(false);
+        setLocalErrors({});
+      }
+    }
+  }
+
+  async function submitVerify(e: React.FormEvent) {
+    e.preventDefault();
+    if (busy) return;
+    const code = otp.trim();
+    if (!OTP_RE.test(code)) {
+      setLocalErrors({ otp: 'Enter the 6-digit code from the email' });
+      return;
+    }
+    setLocalErrors({});
+    await onVerify(verifyEmailTarget, code);
+  }
+
+  async function resend() {
+    if (busy) return;
+    const ok = await onResendOtp(verifyEmailTarget);
+    if (ok) {
+      setResent(true);
+      setOtp('');
+      setLocalErrors({});
+    }
+  }
+
+  function backToForm() {
+    setStep('auth');
+    setOtp('');
+    setResent(false);
+    setLocalErrors({});
+  }
+
+  async function submitForgot(e: React.FormEvent) {
+    e.preventDefault();
+    if (busy) return;
+    const raw = forgotId.trim();
+    const valid =
+      forgotKind === 'email'
+        ? EMAIL_RE.test(raw)
+        : PHONE_RE.test(normalizePhoneInput(raw));
+    if (!valid) {
+      setLocalErrors({
+        forgotId: 'Enter a valid email address or Malawian phone number',
+      });
+      return;
+    }
+    setLocalErrors({});
+    const sent = await onForgot(raw);
+    if (!sent) return;
+    if (forgotKind === 'email') {
+      setForgotEmail(raw);
+      setForgotSent(true);
+      setOtp('');
+      setNewPw('');
+      setNewPw2('');
+    } else {
+      // The endpoint answers 200 for anything (no user oracle) — phone-only
+      // accounts can't self-reset until an SMS provider is wired in.
+      setLocalErrors({
+        forgotId:
+          'Phone-only accounts can\u2019t reset online yet — an admin can reset your password.',
+      });
+    }
+  }
+
+  async function submitReset(e: React.FormEvent) {
+    e.preventDefault();
+    if (busy) return;
+    const errs: Record<string, string> = {};
+    if (!OTP_RE.test(otp.trim())) errs.otp = 'Enter the 6-digit code from the email';
+    if (newPw.length < 8) errs.newPw = 'Must be at least 8 characters';
+    if (newPw !== newPw2) errs.newPw2 = 'Passwords do not match';
+    if (Object.keys(errs).length) {
+      setLocalErrors(errs);
+      return;
+    }
+    setLocalErrors({});
+    const done = await onReset(forgotEmail, otp.trim(), newPw);
+    if (!done) return;
+    setStep('auth');
+    setMode('login');
+    setResetDone(true);
+    setForgotSent(false);
+    setForgotEmail('');
+    setForgotId('');
+    setOtp('');
+    setNewPw('');
+    setNewPw2('');
   }
 
   const tab =
     'flex-1 rounded-[9px] py-[10px] text-sm font-semibold transition-all duration-200 ease-ketsa';
   const activeTab = 'bg-ink text-white shadow-[0_6px_16px_-8px_rgba(12,21,38,.55)]';
   const idleTab = 'text-ink-2 hover:bg-paper hover:text-ink';
+  const submitBtn =
+    'w-full rounded-[9px] bg-ink px-5 py-[12px] text-sm font-semibold text-white transition-all duration-200 ease-ketsa hover:-translate-y-[1px] hover:bg-brand-ink disabled:cursor-not-allowed disabled:opacity-60';
+  const linkBtn =
+    'text-[12.5px] font-medium text-ink-3 transition-colors hover:text-ink disabled:cursor-not-allowed disabled:opacity-60';
+
+  const kicker =
+    step === 'verify'
+      ? 'Check your email'
+      : step === 'forgot'
+        ? 'Password reset'
+        : mode === 'login'
+          ? 'Welcome back'
+          : 'Create your account';
+  const heading =
+    step === 'verify'
+      ? 'Enter your code'
+      : step === 'forgot'
+        ? 'Recover your account'
+        : mode === 'login'
+          ? 'Log in to Ketsa'
+          : 'Start trading in minutes';
 
   return (
     <div
@@ -183,11 +408,9 @@ export default function AuthModal({
           <div className="mb-1 flex items-start justify-between">
             <div>
               <div className="mb-1 font-mono text-[10.5px] uppercase tracking-[.07em] text-brand">
-                {mode === 'login' ? 'Welcome back' : 'Create your account'}
+                {kicker}
               </div>
-              <h3 className="font-serif text-[24px] font-medium text-ink">
-                {mode === 'login' ? 'Log in to Ketsa' : 'Start trading in minutes'}
-              </h3>
+              <h3 className="font-serif text-[24px] font-medium text-ink">{heading}</h3>
             </div>
             <button
               aria-label="Close"
@@ -200,179 +423,299 @@ export default function AuthModal({
             </button>
           </div>
 
-          <div className="mt-5 flex rounded-[10px] border border-line bg-paper-alt p-[4px]">
-            <button
-              type="button"
-              className={`${tab} ${mode === 'login' ? activeTab : idleTab}`}
-              onClick={() => switchMode('login')}
-            >
-              Log in
-            </button>
-            <button
-              type="button"
-              className={`${tab} ${mode === 'register' ? activeTab : idleTab}`}
-              onClick={() => switchMode('register')}
-            >
-              Create account
-            </button>
-          </div>
-
-          <div className="mt-6">
-            <button
-              type="button"
-              onClick={busy ? undefined : onGoogle}
-              disabled={busy}
-              className="flex w-full items-center justify-center gap-2.5 rounded-[9px] border border-line bg-white px-5 py-[12px] text-sm font-semibold text-ink transition-all duration-200 ease-ketsa hover:-translate-y-[1px] hover:border-ink hover:bg-paper disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <GoogleG />
-              Continue with Google
-            </button>
-          </div>
-
-          <div className="my-5 flex items-center gap-3" aria-hidden>
-            <span className="h-px flex-1 bg-line" />
-            <span className="font-mono text-[10px] font-semibold uppercase tracking-[.08em] text-ink-3">
-              or
-            </span>
-            <span className="h-px flex-1 bg-line" />
-          </div>
-
-          <form onSubmit={submit} className="space-y-4" noValidate>
-            {mode === 'register' && (
-              <Field
-                label="Name"
-                value={name}
-                onChange={setName}
-                placeholder="Ada Okafor"
-                autoComplete="name"
-                error={localErrors.name}
-              />
-            )}
-            <div>
-              <div className="mb-1.5 flex items-center justify-between">
-                <span className="font-mono text-[11px] font-semibold uppercase tracking-[.07em] text-ink-3">
-                  Email or phone
-                </span>
-                <div className="flex gap-[3px] rounded-full border border-line bg-paper-alt p-[3px]">
-                  <button
-                    type="button"
-                    className={`rounded-full px-[11px] py-[3px] font-mono text-[10px] font-semibold uppercase tracking-[.06em] transition-colors ${
-                      idKind === 'email' ? 'bg-ink text-white' : 'text-ink-3 hover:text-ink'
-                    }`}
-                    onClick={() => setIdKind('email')}
-                  >
-                    Email
-                  </button>
-                  <button
-                    type="button"
-                    className={`rounded-full px-[11px] py-[3px] font-mono text-[10px] font-semibold uppercase tracking-[.06em] transition-colors ${
-                      idKind === 'phone' ? 'bg-ink text-white' : 'text-ink-3 hover:text-ink'
-                    }`}
-                    onClick={() => setIdKind('phone')}
-                  >
-                    Phone
-                  </button>
-                </div>
-              </div>
-              <input
-                type={idKind === 'email' ? 'email' : 'tel'}
-                className="field w-full"
-                value={identifier}
-                placeholder={idKind === 'email' ? 'you@example.com' : '0991 234 567'}
-                autoComplete={idKind === 'email' ? 'email' : 'tel'}
-                inputMode={idKind === 'email' ? 'email' : 'tel'}
-                spellCheck={false}
-                onChange={(e) => setIdentifier(e.target.value)}
-              />
-              {localErrors.identifier && (
-                <span className="mt-1 block text-[12px] font-medium text-neg">
-                  {localErrors.identifier}
-                </span>
-              )}
-            </div>
-            <div>
-              <div className="mb-1.5 flex items-center justify-between">
-                <span className="font-mono text-[11px] font-semibold uppercase tracking-[.07em] text-ink-3">
-                  Password
-                </span>
-                {mode === 'login' && (
-                  <span className="text-[11px] text-ink-3">8+ characters</span>
-                )}
-              </div>
-              <div className="relative">
-                <input
-                  type={showPw ? 'text' : 'password'}
-                  className="field w-full pr-[42px]"
-                  value={password}
-                  placeholder="••••••••"
-                  autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
+          {step === 'auth' && (
+            <>
+              <div className="mt-5 flex rounded-[10px] border border-line bg-paper-alt p-[4px]">
                 <button
                   type="button"
-                  aria-label={showPw ? 'Hide password' : 'Show password'}
-                  className="absolute right-[12px] top-1/2 -translate-y-1/2 text-ink-3 transition-colors hover:text-ink"
-                  onClick={() => setShowPw((v) => !v)}
+                  className={`${tab} ${mode === 'login' ? activeTab : idleTab}`}
+                  onClick={() => switchMode('login')}
                 >
-                  {showPw ? (
-                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
-                      <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Z" stroke="currentColor" strokeWidth="1.6" />
-                      <path d="M2 2l20 20" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-                    </svg>
-                  ) : (
-                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
-                      <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Z" stroke="currentColor" strokeWidth="1.6" />
-                      <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.6" />
-                    </svg>
-                  )}
+                  Log in
+                </button>
+                <button
+                  type="button"
+                  className={`${tab} ${mode === 'register' ? activeTab : idleTab}`}
+                  onClick={() => switchMode('register')}
+                >
+                  Create account
                 </button>
               </div>
-              {localErrors.password && (
-                <span className="mt-1 block text-[12px] font-medium text-neg">{localErrors.password}</span>
+
+              <div className="mt-6">
+                <button
+                  type="button"
+                  onClick={busy ? undefined : onGoogle}
+                  disabled={busy}
+                  className="flex w-full items-center justify-center gap-2.5 rounded-[9px] border border-line bg-white px-5 py-[12px] text-sm font-semibold text-ink transition-all duration-200 ease-ketsa hover:-translate-y-[1px] hover:border-ink hover:bg-paper disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <GoogleG />
+                  Continue with Google
+                </button>
+              </div>
+
+              <div className="my-5 flex items-center gap-3" aria-hidden>
+                <span className="h-px flex-1 bg-line" />
+                <span className="font-mono text-[10px] font-semibold uppercase tracking-[.08em] text-ink-3">
+                  or
+                </span>
+                <span className="h-px flex-1 bg-line" />
+              </div>
+
+              <form onSubmit={submit} className="space-y-4" noValidate>
+                {mode === 'register' && (
+                  <Field
+                    label="Name"
+                    value={name}
+                    onChange={setName}
+                    placeholder="Ada Okafor"
+                    autoComplete="name"
+                    error={localErrors.name}
+                  />
+                )}
+                <IdentifierField
+                  kind={idKind}
+                  onKindChange={setIdKind}
+                  value={identifier}
+                  onChange={setIdentifier}
+                  error={localErrors.identifier}
+                />
+                {mode === 'register' && idKind === 'email' && !localErrors.identifier && (
+                  <p className="-mt-2 text-[11.5px] text-ink-3">
+                    Email signups are verified with a code we email to your inbox.
+                  </p>
+                )}
+                <div>
+                  <div className="mb-1.5 flex items-center justify-between">
+                    <span className="font-mono text-[11px] font-semibold uppercase tracking-[.07em] text-ink-3">
+                      Password
+                    </span>
+                    {mode === 'register' ? (
+                      <span className="text-[11px] text-ink-3">8+ characters</span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="text-[11px] font-semibold text-brand transition-colors hover:text-ink"
+                        onClick={() => {
+                          setForgotId(identifier);
+                          setForgotKind(idKind);
+                          setStep('forgot');
+                          setLocalErrors({});
+                        }}
+                      >
+                        Forgot password?
+                      </button>
+                    )}
+                  </div>
+                  <div className="relative">
+                    <input
+                      type={showPw ? 'text' : 'password'}
+                      className="field w-full pr-[42px]"
+                      value={password}
+                      placeholder="••••••••"
+                      autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+                      onChange={(e) => setPassword(e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      aria-label={showPw ? 'Hide password' : 'Show password'}
+                      className="absolute right-[12px] top-1/2 -translate-y-1/2 text-ink-3 transition-colors hover:text-ink"
+                      onClick={() => setShowPw((v) => !v)}
+                    >
+                      {showPw ? (
+                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
+                          <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Z" stroke="currentColor" strokeWidth="1.6" />
+                          <path d="M2 2l20 20" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                        </svg>
+                      ) : (
+                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
+                          <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Z" stroke="currentColor" strokeWidth="1.6" />
+                          <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.6" />
+                        </svg>
+                      )}
+                    </button>
+                  </div>
+                  {localErrors.password && (
+                    <span className="mt-1 block text-[12px] font-medium text-neg">{localErrors.password}</span>
+                  )}
+                </div>
+                {mode === 'register' && (
+                  <Field
+                    label="Confirm password"
+                    type="password"
+                    value={confirm}
+                    onChange={setConfirm}
+                    placeholder="••••••••"
+                    autoComplete="new-password"
+                    error={localErrors.confirm}
+                  />
+                )}
+
+                {resetDone && (
+                  <div className="rounded-[8px] border border-pos/25 bg-pos-tint px-[13px] py-[10px] text-[13px] font-medium text-pos">
+                    Password reset — log in with your new password.
+                  </div>
+                )}
+                {error && (
+                  <div className="rounded-[8px] border border-neg/25 bg-neg-tint px-[13px] py-[10px] text-[13px] font-medium text-neg">
+                    {error}
+                  </div>
+                )}
+
+                <button type="submit" className={submitBtn} disabled={busy}>
+                  {busy
+                    ? mode === 'login'
+                      ? 'Logging in…'
+                      : 'Creating account…'
+                    : mode === 'login'
+                      ? 'Log in'
+                      : 'Create account'}
+                </button>
+              </form>
+
+              <div className="mt-5 border-t border-line pt-4 text-center">
+                <button
+                  type="button"
+                  className={linkBtn}
+                  onClick={busy ? undefined : onGuest}
+                >
+                  Skip — continue with a play wallet instead
+                </button>
+              </div>
+            </>
+          )}
+
+          {step === 'verify' && (
+            <form onSubmit={submitVerify} className="mt-6 space-y-4" noValidate>
+              <p className="text-[13.5px] leading-relaxed text-ink-2">
+                We emailed a 6-digit code to{' '}
+                <span className="font-semibold text-ink">{verifyEmailTarget}</span>.
+                Enter it to activate your account — your Ketsa wallet is created
+                the moment the code checks out.
+              </p>
+              <Field
+                label="Verification code"
+                value={otp}
+                onChange={(v) => setOtp(v.replace(/\D/g, '').slice(0, 6))}
+                placeholder="••••••"
+                inputMode="numeric"
+                error={localErrors.otp}
+              />
+              {error && (
+                <div className="rounded-[8px] border border-neg/25 bg-neg-tint px-[13px] py-[10px] text-[13px] font-medium text-neg">
+                  {error}
+                </div>
+              )}
+              <button type="submit" className={submitBtn} disabled={busy}>
+                {busy ? 'Verifying…' : 'Verify & continue'}
+              </button>
+              <div className="flex items-center justify-between pt-1">
+                <button
+                  type="button"
+                  className={linkBtn}
+                  onClick={busy ? undefined : backToForm}
+                >
+                  ← Back
+                </button>
+                <button
+                  type="button"
+                  className={linkBtn}
+                  onClick={busy ? undefined : resend}
+                  disabled={busy}
+                >
+                  {resent ? 'Code resent — check your inbox' : 'Resend code'}
+                </button>
+              </div>
+            </form>
+          )}
+
+          {step === 'forgot' && (
+            <div className="mt-6">
+              {!forgotSent ? (
+                <form onSubmit={submitForgot} className="space-y-4" noValidate>
+                  <p className="text-[13.5px] leading-relaxed text-ink-2">
+                    Enter the email on your Ketsa account and we&apos;ll email a
+                    6-digit reset code. Phone-only accounts can&apos;t self-reset
+                    yet — an admin can reset your password from the dashboard.
+                  </p>
+                  <IdentifierField
+                    kind={forgotKind}
+                    onKindChange={setForgotKind}
+                    value={forgotId}
+                    onChange={setForgotId}
+                    error={localErrors.forgotId}
+                  />
+                  {error && (
+                    <div className="rounded-[8px] border border-neg/25 bg-neg-tint px-[13px] py-[10px] text-[13px] font-medium text-neg">
+                      {error}
+                    </div>
+                  )}
+                  <button type="submit" className={submitBtn} disabled={busy}>
+                    {busy ? 'Sending…' : 'Email reset code'}
+                  </button>
+                  <button
+                    type="button"
+                    className={`${linkBtn} w-full text-center`}
+                    onClick={busy ? undefined : backToForm}
+                  >
+                    ← Back to log in
+                  </button>
+                </form>
+              ) : (
+                <form onSubmit={submitReset} className="space-y-4" noValidate>
+                  <p className="text-[13.5px] leading-relaxed text-ink-2">
+                    Enter the 6-digit code we emailed to{' '}
+                    <span className="font-semibold text-ink">{forgotEmail}</span>,
+                    then choose a new password.
+                  </p>
+                  <Field
+                    label="Reset code"
+                    value={otp}
+                    onChange={(v) => setOtp(v.replace(/\D/g, '').slice(0, 6))}
+                    placeholder="••••••"
+                    inputMode="numeric"
+                    error={localErrors.otp}
+                  />
+                  <Field
+                    label="New password"
+                    type="password"
+                    value={newPw}
+                    onChange={setNewPw}
+                    placeholder="••••••••"
+                    autoComplete="new-password"
+                    error={localErrors.newPw}
+                  />
+                  <Field
+                    label="Confirm new password"
+                    type="password"
+                    value={newPw2}
+                    onChange={setNewPw2}
+                    placeholder="••••••••"
+                    autoComplete="new-password"
+                    error={localErrors.newPw2}
+                  />
+                  {error && (
+                    <div className="rounded-[8px] border border-neg/25 bg-neg-tint px-[13px] py-[10px] text-[13px] font-medium text-neg">
+                      {error}
+                    </div>
+                  )}
+                  <button type="submit" className={submitBtn} disabled={busy}>
+                    {busy ? 'Resetting…' : 'Set new password'}
+                  </button>
+                  <button
+                    type="button"
+                    className={`${linkBtn} w-full text-center`}
+                    onClick={busy ? undefined : () => {
+                      setForgotSent(false);
+                      setLocalErrors({});
+                    }}
+                  >
+                    ← Back
+                  </button>
+                </form>
               )}
             </div>
-            {mode === 'register' && (
-              <Field
-                label="Confirm password"
-                type="password"
-                value={confirm}
-                onChange={setConfirm}
-                placeholder="••••••••"
-                autoComplete="new-password"
-                error={localErrors.confirm}
-              />
-            )}
-
-            {error && (
-              <div className="rounded-[8px] border border-neg/25 bg-neg-tint px-[13px] py-[10px] text-[13px] font-medium text-neg">
-                {error}
-              </div>
-            )}
-
-            <button
-              type="submit"
-              className="w-full rounded-[9px] bg-ink px-5 py-[12px] text-sm font-semibold text-white transition-all duration-200 ease-ketsa hover:-translate-y-[1px] hover:bg-brand-ink disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={busy}
-            >
-              {busy
-                ? mode === 'login'
-                  ? 'Logging in…'
-                  : 'Creating account…'
-                : mode === 'login'
-                  ? 'Log in'
-                  : 'Create account'}
-            </button>
-          </form>
-
-          <div className="mt-5 border-t border-line pt-4 text-center">
-            <button
-              type="button"
-              className="text-[12.5px] font-medium text-ink-3 transition-colors hover:text-ink"
-              onClick={busy ? undefined : onGuest}
-            >
-              Skip — continue with a play wallet instead
-            </button>
-          </div>
+          )}
         </div>
       </div>
     </div>

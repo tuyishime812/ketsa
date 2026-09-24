@@ -152,6 +152,15 @@ With both services running you can trade each market for real on the site:
   / `KETSA_AUTH_LOCKOUT_SECONDS`); you can change your password from the
   Portfolio ("Account" card), which revokes all other sessions and issues a
   fresh token.
+  - **Email signups are verified.** With Resend configured, an email
+    registration returns a pending state and emails a 6-digit code — the
+    account (and its seeded wallet) is only created once the code is entered,
+    so plaintext addresses can't be squatted. Resend also powers
+    **forgot-password**: enter the account email, enter the emailed code plus
+    a new password, and all existing sessions are revoked. Phone-only accounts
+    can't self-reset yet (no SMS provider) — an admin resets those from the
+    dashboard. Without `KETSA_RESEND_API_KEY` the resend flows still respond,
+    but no mail goes out (codes land in the server log for local testing).
 - **Leaderboard.** `/leaderboard` ranks every wallet that has traded by live
   equity (P&L shown per row); refresh every 30s and immediately whenever a
   market resolves or a deposit/refund lands.
@@ -249,6 +258,11 @@ and wired through `docker-compose.yml`.
 | `KETSA_AUTH0_CLIENT_SECRET`  | backend   | Auth0 client secret (secret; never commit)           | — |
 | `KETSA_PUBLIC_BASE_URL`      | backend   | Public backend origin; Auth0 callback URI is `<this>/api/auth/social/callback` | `http://127.0.0.1:8000` |
 | `KETSA_FRONTEND_URL`         | backend   | Where the browser lands after Google login (`/auth/callback`) | `http://localhost:3000` |
+| `KETSA_RESEND_API_KEY`       | backend   | Resend API key — emails signup-verification + password-reset OTPs (absent ⇒ no mail sent; codes logged for dev) | — (email OTP off) |
+| `KETSA_RESEND_FROM`          | backend   | "From" address for OTP emails; must be on a domain verified in Resend | `Ketsa <onboarding@resend.dev>` |
+| `KETSA_OTP_TTL_SECONDS`      | backend   | One-time code lifetime                                   | `600` |
+| `KETSA_OTP_MAX_ATTEMPTS`     | backend   | Wrong entries before a code is burned                     | `5` |
+| `KETSA_OTP_RESEND_SECONDS`   | backend   | Cooldown before a new code is emailed to the same address | `60` |
 
 ---
 

@@ -2,6 +2,8 @@
 
 from fastapi.testclient import TestClient
 
+from conftest import register_user
+
 
 def _admin_token(client: TestClient) -> str:
     resp = client.post("/api/admin/login", json={"password": "ketsa-admin"})
@@ -10,12 +12,7 @@ def _admin_token(client: TestClient) -> str:
 
 
 def _register(client: TestClient, email: str = "alice@ketsa.io") -> dict:
-    resp = client.post(
-        "/api/auth/register",
-        json={"name": "Alice Trader", "identifier": email, "password": "password123"},
-    )
-    assert resp.status_code == 200
-    return resp.json()
+    return register_user(client, identifier=email, name="Alice Trader")
 
 
 # ---------------------------------------------------------------------------

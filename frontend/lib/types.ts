@@ -102,6 +102,15 @@ export interface AuthSession {
   wallet: Wallet;
 }
 
+/** 202 returned by /register for email signups awaiting OTP verification. */
+export interface PendingVerification {
+  ok: boolean;
+  pending: true;
+  email: string;
+}
+
+export type RegisterResult = AuthSession | PendingVerification;
+
 export interface AuthCredentials {
   identifier: string; // email address OR Malawian phone number
   password: string;

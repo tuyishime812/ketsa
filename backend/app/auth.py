@@ -17,11 +17,11 @@ import re
 import secrets
 import time
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
-from . import social, store
+from . import mailer, social, store
 from .engine import engine
 from .models import User, Wallet
 
@@ -97,6 +97,94 @@ def lookup_user_by_identifier(identifier: str) -> dict | None:
     return store.get_user_by_phone(normalized)
 
 
+# --- One-time passcode (OTP) engine ------------------------------------------
+# Codes are 6 random digits whose SHA-256 digest is stored (never plaintext),
+# single-use, TTL'd, capped at a few attempts, with a resend cooldown. Every
+# code is keyed by a scope string that also carries its payload:
+#   "signup:<email>" -> {name, password_hash} waiting for verification
+#   "reset:<user_id>" -> {} (user already exists)
+# All thresholds are env-tunable so tests can force short windows.
+_OTP_TTL_SECONDS = 10 * 60
+_OTP_MAX_ATTEMPTS = 5
+_OTP_RESEND_SECONDS = 60
+_otps: dict[str, dict] = {}
+
+
+class _OtpCooldown(Exception):
+    """Raised when a new code for the same scope was issued too recently."""
+
+
+def _otp_ttl() -> int:
+    try:
+        return int(os.getenv("KETSA_OTP_TTL_SECONDS", str(_OTP_TTL_SECONDS)))
+    except ValueError:
+        return _OTP_TTL_SECONDS
+
+
+def _otp_max_attempts() -> int:
+    try:
+        return int(os.getenv("KETSA_OTP_MAX_ATTEMPTS", str(_OTP_MAX_ATTEMPTS)))
+    except ValueError:
+        return _OTP_MAX_ATTEMPTS
+
+
+def _otp_resend_cooldown() -> int:
+    try:
+        return int(os.getenv("KETSA_OTP_RESEND_SECONDS", str(_OTP_RESEND_SECONDS)))
+    except ValueError:
+        return _OTP_RESEND_SECONDS
+
+
+def _issue_otp(key: str, payload: dict | None = None) -> str:
+    """Issue a fresh 6-digit code for ``key``, carrying ``payload``.
+
+    An existing code for the same key inherits its payload unless a new one is
+    given, so resends never lose the pending registration data. Raises
+    ``_OtpCooldown`` when a code for this key was issued moments ago.
+    """
+    now = time.time()
+    # Opportunistic sweep: drop anything that expired so a resend can start
+    # fresh, and the map can never grow unbounded.
+    for stale in [k for k, v in _otps.items() if v["expires"] < now]:
+        _otps.pop(stale, None)
+    previous = _otps.get(key)
+    if previous and now - previous["issued"] < _otp_resend_cooldown():
+        raise _OtpCooldown()
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    _otps[key] = {
+        "hash": hashlib.sha256(code.encode("ascii")).hexdigest(),
+        "issued": now,
+        "expires": now + _otp_ttl(),
+        "attempts": 0,
+        "payload": payload if payload is not None else (previous or {}).get("payload"),
+    }
+    return code
+
+
+def _consume_otp(key: str, code: str) -> dict | None:
+    """Validate and burn a one-time passcode.
+
+    Returns the consumed entry on success (entry removed — single use, even
+    in memory; callers read ``entry.get("payload")``), or None for any
+    failure: unknown key, expired code, too many attempts (code dead, entry
+    kept so a resend can recover the payload), or a wrong code (entry kept,
+    attempts bumped). Comparison is constant-time.
+    """
+    entry = _otps.get(key)
+    if entry is None:
+        return None
+    now = time.time()
+    if now > entry["expires"] or entry["attempts"] > _otp_max_attempts():
+        return None
+    entry["attempts"] += 1
+    if entry["attempts"] > _otp_max_attempts():
+        return None
+    validate = hashlib.sha256((code or "").strip().encode("ascii")).hexdigest()
+    if not secrets.compare_digest(entry["hash"], validate):
+        return None
+    return _otps.pop(key, None)
+
+
 def _throttle_window() -> int:
     try:
         return int(os.getenv("KETSA_AUTH_LOCKOUT_SECONDS", str(LOGIN_WINDOW_SECONDS)))
@@ -135,6 +223,25 @@ class RegisterRequest(BaseModel):
     password: str
 
 
+class VerifyEmailRequest(BaseModel):
+    email: str
+    otp: str
+
+
+class ResendOtpRequest(BaseModel):
+    email: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    identifier: str  # email address OR Malawian phone number
+
+
+class ResetPasswordRequest(BaseModel):
+    email: str
+    otp: str
+    new_password: str
+
+
 class LoginRequest(BaseModel):
     identifier: str  # email address OR Malawian phone number
     password: str
@@ -153,6 +260,40 @@ class AuthResponse(BaseModel):
     token: str
     user: User
     wallet: Wallet
+
+
+class PendingVerifyResponse(BaseModel):
+    """202 returned by /register for email signups awaiting OTP verification."""
+    ok: bool = True
+    pending: bool = True
+    email: str
+
+
+def _create_account(*, identifier: str, email: str, phone: str, name: str, password_hash: str) -> dict:
+    """Create the account record + wallet and send the welcome notification.
+
+    ``identifier`` is the record id (email or canonical phone); ``email`` and
+    ``phone`` are the displayed contact fields (one of them empty).
+    """
+    wallet = engine.connect_wallet(name=name)
+    user = {
+        "id": identifier,
+        "email": email,
+        "phone": phone,
+        "name": name,
+        "password": password_hash,
+        "wallet_id": wallet["id"],
+        "created": time.time(),
+    }
+    store.upsert_user(user)
+    engine.notify(
+        wallet["id"],
+        "system",
+        "Welcome to Ketsa",
+        f"Your account is live with {wallet['balance']:.0f} {wallet['currency']}. "
+        "Trade a market to get started.",
+    )
+    return user
 
 
 def _hash_password(password: str) -> str:
@@ -249,8 +390,10 @@ def resolve_optional_user(authorization: str | None) -> dict | None:
 
 # --- Routes -----------------------------------------------------------------
 
-@router.post("/register", response_model=AuthResponse)
-async def register(body: RegisterRequest) -> AuthResponse:
+@router.post("/register", response_model=AuthResponse | PendingVerifyResponse)
+async def register(
+    body: RegisterRequest, response: Response
+) -> AuthResponse | PendingVerifyResponse:
     name = body.name.strip()
     try:
         kind, identifier = normalize_identifier(body.identifier)
@@ -269,32 +412,132 @@ async def register(body: RegisterRequest) -> AuthResponse:
         email, phone = identifier, ""
         if store.get_user_by_email(email):
             raise HTTPException(status_code=409, detail="An account with this email already exists")
+        # Proof-of-inbox first: no account, no wallet (no 1,000 MWK mint) until
+        # the emailed code comes back. Pending signups expire with the OTP.
+        try:
+            code = _issue_otp(
+                f"signup:{email}",
+                payload={"name": name, "password_hash": _hash_password(body.password)},
+            )
+        except _OtpCooldown:
+            raise HTTPException(
+                status_code=429,
+                detail="A verification code was recently sent to this email. Try again shortly.",
+            )
+        mailer.send_otp_email(email, code, "signup", _otp_ttl() // 60, name=name)
+        response.status_code = 202  # pending — account appears only after OTP
+        return PendingVerifyResponse(email=email)
     else:
         email, phone = "", identifier
         if store.get_user_by_phone(phone):
             raise HTTPException(status_code=409, detail="An account with this phone number already exists")
+        user = _create_account(
+            identifier=identifier,
+            email=email,
+            phone=phone,
+            name=name,
+            password_hash=_hash_password(body.password),
+        )
+        token = _issue_session(user["id"])
+        return AuthResponse(token=token, user=_user_public(user), wallet=_wallet_for_user(user))
 
-    wallet = engine.connect_wallet(name=name)
-    user = {
-        "id": identifier,
-        "email": email,
-        "phone": phone,
-        "name": name,
-        "password": _hash_password(body.password),
-        "wallet_id": wallet["id"],
-        "created": time.time(),
-    }
-    store.upsert_user(user)
-    engine.notify(
-        wallet["id"],
-        "system",
-        "Welcome to Ketsa",
-        f"Your account is live with {wallet['balance']:.0f} {wallet['currency']}. "
-        "Trade a market to get started.",
+
+@router.post("/register/verify", response_model=AuthResponse)
+async def verify_email(body: VerifyEmailRequest) -> AuthResponse:
+    """Complete an email signup with the emailed one-time passcode."""
+    email = body.email.strip().lower()
+    if not _EMAIL_RE.match(email):
+        raise HTTPException(status_code=400, detail="Enter a valid email address")
+    if store.get_user_by_email(email):
+        raise HTTPException(status_code=409, detail="An account with this email already exists")
+    payload = _consume_otp(f"signup:{email}", body.otp.strip())
+    if payload is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired verification code")
+    payload = payload.get("payload") or {}
+    name = str(payload.get("name") or email.split("@")[0])
+    password_hash = str(payload.get("password_hash") or "")
+    user = _create_account(
+        identifier=email,
+        email=email,
+        phone="",
+        name=name,
+        password_hash=password_hash,
     )
-
     token = _issue_session(user["id"])
-    return AuthResponse(token=token, user=_user_public(user), wallet=Wallet(**wallet))
+    return AuthResponse(token=token, user=_user_public(user), wallet=_wallet_for_user(user))
+
+
+@router.post("/register/resend", response_model=PendingVerifyResponse)
+async def resend_register_otp(body: ResendOtpRequest, response: Response) -> PendingVerifyResponse:
+    """Re-email the signup code for a pending registration (cooldown-gated)."""
+    email = body.email.strip().lower()
+    if not _EMAIL_RE.match(email):
+        raise HTTPException(status_code=400, detail="Enter a valid email address")
+    if _otps.get(f"signup:{email}") is None:
+        raise HTTPException(status_code=400, detail="No pending registration for this email")
+    try:
+        code = _issue_otp(f"signup:{email}")
+    except _OtpCooldown:
+        raise HTTPException(
+            status_code=429,
+            detail="A verification code was recently sent to this email. Try again shortly.",
+        )
+    entry = _otps.get(f"signup:{email}", {})
+    payload = entry.get("payload") or {}
+    mailer.send_otp_email(
+        email, code, "signup", _otp_ttl() // 60, name=str(payload.get("name") or "")
+    )
+    response.status_code = 202
+    return PendingVerifyResponse(email=email)
+
+
+@router.post("/forgot-password")
+async def forgot_password(body: ForgotPasswordRequest) -> dict:
+    """Email a reset code when the identifier belongs to an account.
+
+    Always answers 200 ``{"ok": true}`` — for unknown accounts, phone
+    identifiers (email-only self-service), invalid input and rate-limited
+    resends alike — so the endpoint cannot be used to enumerate users.
+    """
+    try:
+        kind, identifier = normalize_identifier(body.identifier)
+    except ValueError:
+        return {"ok": True}
+    user = None
+    if kind == "email":
+        user = store.get_user_by_email(identifier)
+    if user is None:
+        return {"ok": True}
+    try:
+        code = _issue_otp(f"reset:{user['id']}")
+    except _OtpCooldown:
+        return {"ok": True}  # silently swallowed on purpose (no oracle)
+    mailer.send_otp_email(identifier, code, "reset", _otp_ttl() // 60)
+    return {"ok": True}
+
+
+@router.post("/reset-password")
+async def reset_password(body: ResetPasswordRequest) -> dict:
+    """Validate the emailed reset code and set a new password.
+
+    All existing sessions are revoked. Unknown emails and invalid/expired
+    codes produce the same 401, so the endpoint reveals nothing about which
+    addresses have accounts.
+    """
+    email = body.email.strip().lower()
+    if not _EMAIL_RE.match(email):
+        raise HTTPException(status_code=400, detail="Enter a valid email address")
+    if len(body.new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    user = store.get_user_by_email(email)
+    key = f"reset:{user['id']}" if user is not None else None
+    # Identical failure for unknown account vs bad/expired/used code.
+    if key is None or _consume_otp(key, body.otp.strip()) is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired code")
+    user["password"] = hash_password(body.new_password)
+    store.upsert_user(user)
+    revoke_user_sessions(user["id"])
+    return {"ok": True}
 
 
 @router.post("/login", response_model=AuthResponse)

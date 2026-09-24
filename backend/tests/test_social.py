@@ -23,6 +23,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 
+from conftest import register_user
 from app import auth as auth_mod
 from app import social as social_mod
 from app.engine import engine
@@ -362,13 +363,8 @@ def _google_login_with(client: TestClient, claims: dict) -> dict:
 
 
 def test_links_google_login_to_existing_password_account(client: TestClient) -> None:
-    reg = client.post("/api/auth/register", json={
-        "name": "Ada Okafor",
-        "identifier": GOOGLE_EMAIL,
-        "password": "CorrectHorse99",
-    })
-    assert reg.status_code == 200, reg.text
-    password_wallet = reg.json()["wallet"]["id"]
+    reg = register_user(client, identifier=GOOGLE_EMAIL, name="Ada Okafor", password="CorrectHorse99")
+    password_wallet = reg["wallet"]["id"]
 
     session = _google_login_with(client, google_claims(nonce="n"))
     assert session["user"]["id"] == GOOGLE_EMAIL
@@ -392,12 +388,7 @@ def test_rejects_email_bound_to_another_google_account(client: TestClient) -> No
 
 
 def test_unverified_email_does_not_link(client: TestClient) -> None:
-    reg = client.post("/api/auth/register", json={
-        "name": "Ada Okafor",
-        "identifier": GOOGLE_EMAIL,
-        "password": "CorrectHorse99",
-    })
-    assert reg.status_code == 200, reg.text
+    reg = register_user(client, identifier=GOOGLE_EMAIL, name="Ada Okafor", password="CorrectHorse99")
 
     session = _google_login_with(
         client, google_claims(email_verified=False, name="Eve")
@@ -414,7 +405,7 @@ def test_unverified_email_does_not_link(client: TestClient) -> None:
         "identifier": GOOGLE_EMAIL, "password": "CorrectHorse99",
     })
     assert reg_login.status_code == 200, reg_login.text
-    assert reg_login.json()["wallet"]["id"] == reg.json()["wallet"]["id"]
+    assert reg_login.json()["wallet"]["id"] == reg["wallet"]["id"]
 
 
 # ---------------------------------------------------------------------------
