@@ -11,6 +11,7 @@ nothing in this file touches the network or a real database.
 """
 
 import base64
+import hashlib
 import json
 import os
 import time
@@ -101,16 +102,6 @@ def google_claims(**overrides) -> dict:
 # ---------------------------------------------------------------------------
 
 _PRIV_PEM, _JWKS = make_keypair()
-
-
-@pytest.fixture(autouse=True)
-def _clean_state():
-    reset_backend()
-    engine.reset()
-    auth_mod._tickets.clear()
-    auth_mod._sessions.clear()
-    social_mod._states.clear()
-    yield
 
 
 @pytest.fixture(autouse=True)
@@ -300,7 +291,11 @@ def test_callback_rejects_nonce_mismatch(client: TestClient) -> None:
     ):
         res = _run_callback(client, "code", state)
     assert res.status_code == 400
-    assert "nonce" in res.json()["detail"].lower()
+    # The reason (a replayed/mismatched nonce) is a security signal and belongs in
+    # the server log, not in the response body.
+    detail = res.json()["detail"].lower()
+    assert "nonce" not in detail
+    assert "google sign-in could not be verified" in detail
 
 
 def test_callback_rejects_unknown_signing_key(client: TestClient) -> None:
@@ -444,3 +439,242 @@ def test_ticket_cannot_be_forged_or_expired(client: TestClient) -> None:
     import time
     auth_mod._tickets[ticket] = (time.time() - 1, "stale-token")
     assert client.post("/api/auth/social/session", json={"ticket": ticket}).status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Connection binding (A-02)
+#
+# `begin_login` asks Auth0 for the google-oauth2 connection, but /authorize does
+# not bind `state` to it. A valid signature only proves "some connection in this
+# tenant signed this" — issuer, audience and keys are shared. So a token from a
+# SECOND connection in the same tenant used to pass every other check and then
+# get linked, by email, to an existing account. These tests are the regression
+# for that.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "rogue_sub",
+    [
+        "Username-Password-Authentication|abc123",  # Auth0's built-in database
+        "my-enterprise-saml|xyz789",                # an enterprise connection
+        "auth0|deadbeef",                           # no connection prefix at all
+        "notgoogle-oauth2|abc",                     # prefix-lookalike
+        "google-oauth2",                            # connection name, no separator
+        "GOOGLE-OAUTH2|abc",                        # case-different lookalike
+    ],
+)
+def test_sub_connection_prefix_is_enforced(client: TestClient, rogue_sub: str) -> None:
+    """Only the Google connection may complete a Ketsa social login."""
+    register_user(client, identifier=GOOGLE_EMAIL, name="Ada Okafor",
+                  password="CorrectHorse99")
+    _, state = _start_login(client)
+    nonce = social_mod._states[state]["nonce"]
+    with mock.patch.object(social_mod, "jwks", return_value=_JWKS), mock.patch.object(
+        social_mod, "exchange_code",
+        return_value={"id_token": sign_id_token(_PRIV_PEM, google_claims(nonce=nonce, sub=rogue_sub))},
+    ):
+        res = _run_callback(client, "code", state)
+    assert res.status_code == 400
+    assert "location" not in res.headers
+    # The victim's account was never linked to the rogue subject. A password
+    # account has no `auth0_sub` key at all, hence .get().
+    assert auth_mod.store.get_user(GOOGLE_EMAIL).get("auth0_sub") is None
+
+
+def test_same_connection_different_google_account_stays_allowed(client: TestClient) -> None:
+    """The guard must not over-block: a new Google identity is a normal signup.
+
+    Google accounts are separated by Auth0, not by us, so a *different*
+    google-oauth2 subject must still be able to create its own account.
+    """
+    res = _google_login_with(client, google_claims(sub="google-oauth2|9999999999"))
+    assert res["user"]["id"] == GOOGLE_EMAIL  # new account, own subject
+    assert auth_mod.store.get_user(GOOGLE_EMAIL)["auth0_sub"] == "google-oauth2|9999999999"
+
+
+def test_rogue_connection_cannot_hijack_an_existing_account(client: TestClient) -> None:
+    """The full attack: a non-Google connection claiming the victim's email."""
+    reg = register_user(client, identifier=GOOGLE_EMAIL, name="Ada Okafor",
+                        password="CorrectHorse99")
+    victim_wallet = reg["wallet"]["id"]
+
+    # Fund it so a takeover would be visibly valuable.
+    engine.credit_balance(victim_wallet, 5_000.0)
+    # Baseline: register_user already issued the victim one session.
+    sessions_before = {d for d in auth_mod._sessions}
+
+    for attempt in range(3):  # a determined attacker retries
+        _, state = _start_login(client)
+        nonce = social_mod._states[state]["nonce"]
+        with mock.patch.object(social_mod, "jwks", return_value=_JWKS), mock.patch.object(
+            social_mod, "exchange_code",
+            return_value={"id_token": sign_id_token(
+                _PRIV_PEM,
+                google_claims(nonce=nonce, sub="Username-Password-Authentication|attacker",
+                              email=GOOGLE_EMAIL, email_verified=True),
+            )},
+        ):
+            res = _run_callback(client, "code", state)
+        assert res.status_code == 400, f"attempt {attempt} should have been rejected"
+        # Not one new session was minted, by anyone.
+        assert set(auth_mod._sessions) == sessions_before
+
+    victim = auth_mod.store.get_user(GOOGLE_EMAIL)
+    assert victim.get("auth0_sub") is None
+    assert victim["wallet_id"] == victim_wallet
+    assert engine.wallet_view(victim_wallet)["balance"] == 5_000.0
+    # The victim's password still works — the account was never re-pointed.
+    assert client.post("/api/auth/login", json={
+        "identifier": GOOGLE_EMAIL, "password": "CorrectHorse99"}).status_code == 200
+
+
+def test_expected_sub_prefix_tracks_the_configured_connection() -> None:
+    """The guard is derived from the same value /authorize asks for."""
+    assert social_mod.expected_sub_prefix() == f"{social_mod.connection()}|"
+    assert social_mod.expected_sub_prefix() == "google-oauth2|"
+    # And it follows the env var, so adding a provider cannot desync the two.
+    with mock.patch.dict(os.environ, {"KETSA_AUTH0_CONNECTION": "apple"}, clear=False):
+        assert social_mod.connection() == "apple"
+        assert social_mod.expected_sub_prefix() == "apple|"
+
+
+# ---------------------------------------------------------------------------
+# PKCE (A-05)
+# ---------------------------------------------------------------------------
+
+def test_authorize_url_carries_a_pkce_challenge(client: TestClient) -> None:
+    url, state = _start_login(client)
+    qs = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+    assert qs["code_challenge_method"] == ["S256"]
+    challenge = qs["code_challenge"][0]
+    # S256, unpadded base64url of the SHA-256 of the stored verifier.
+    verifier = social_mod._states[state]["verifier"]
+    expected = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=")
+    assert challenge == expected.decode("ascii")
+    assert 43 <= len(verifier) <= 128  # RFC 7636
+
+
+def test_pkce_verifier_is_sent_to_the_token_endpoint(client: TestClient) -> None:
+    """The callback must hand the bound verifier to /oauth/token."""
+    _, state = _start_login(client)
+    nonce = social_mod._states[state]["nonce"]
+    expected_verifier = social_mod._states[state]["verifier"]
+    with mock.patch.object(social_mod, "jwks", return_value=_JWKS), mock.patch.object(
+        social_mod, "exchange_code", return_value={
+            "id_token": sign_id_token(_PRIV_PEM, google_claims(nonce=nonce))}
+    ) as exch:
+        _run_callback(client, "code", state)
+    assert exch.call_args.args[1] == expected_verifier
+
+
+def test_take_state_returns_a_single_use_pair() -> None:
+    """(nonce, verifier) is returned together and the state is consumed."""
+    social_mod._states["s1"] = {
+        "exp": time.time() + 600, "nonce": "n", "verifier": "v",
+    }
+    assert social_mod.take_state("s1") == ("n", "v")
+    # Second attempt: the state is gone.
+    with pytest.raises(social_mod.SocialError):
+        social_mod.take_state("s1")
+
+
+# ---------------------------------------------------------------------------
+# Unbounded growth of the ticket / state stores (A-01, A-03)
+# ---------------------------------------------------------------------------
+
+def test_abandoned_tickets_are_evicted_not_kept_forever() -> None:
+    """A ticket nobody ever redeems must not live forever (CWE-401/770)."""
+    auth_mod._tickets.clear()
+    now = time.time()
+    # 10 abandoned tickets, all long expired, plus one live.
+    for i in range(10):
+        auth_mod._tickets[f"dead-{i}"] = (now - 1, "tok")
+    auth_mod._tickets["live"] = (now + 60, "tok")
+    auth_mod._prune_tickets(now)
+    assert "live" in auth_mod._tickets
+    assert [t for t in auth_mod._tickets if t.startswith("dead-")] == []
+    auth_mod._tickets.clear()
+
+
+def test_ticket_store_is_hard_capped() -> None:
+    """A burst inside one TTL window cannot grow the dict without bound."""
+    auth_mod._tickets.clear()
+    cap = auth_mod.MAX_PENDING_TICKETS
+    now = time.time()
+    for i in range(cap + 500):
+        auth_mod._tickets[f"t{i}"] = (now + 60, "tok")
+    auth_mod._prune_tickets(now)
+    assert len(auth_mod._tickets) == cap
+    auth_mod._tickets.clear()
+
+
+def test_issuing_a_ticket_sweeps_expired_ones(client: TestClient) -> None:
+    """The sweep runs on the issue path, so it happens on real traffic."""
+    auth_mod._tickets.clear()
+    for i in range(50):
+        auth_mod._tickets[f"stale-{i}"] = (time.time() - 1, "tok")
+    auth_mod._issue_sso_ticket("tok")
+    assert [t for t in auth_mod._tickets if t.startswith("stale-")] == []
+    assert len(auth_mod._tickets) == 1
+
+
+def test_pending_states_are_hard_capped() -> None:
+    """Same guarantee for the /authorize state store (CWE-770)."""
+    social_mod._states.clear()
+    cap = social_mod.MAX_PENDING_STATES
+    now = time.time()
+    for i in range(cap + 500):
+        social_mod._states[f"s{i}"] = {"exp": now + 600, "nonce": "n", "verifier": "v"}
+    social_mod._prune_states(now)
+    assert len(social_mod._states) == cap
+    social_mod._states.clear()
+
+
+def test_state_cap_evicts_the_soonest_to_expire() -> None:
+    """Under pressure the oldest attempts go first, not arbitrary ones."""
+    social_mod._states.clear()
+    now = time.time()
+    social_mod._states["oldest"] = {"exp": now + 10, "nonce": "n", "verifier": "v"}
+    social_mod._states["newest"] = {"exp": now + 590, "nonce": "n", "verifier": "v"}
+    social_mod.MAX_PENDING_STATES = 1
+    try:
+        social_mod._prune_states(now)
+        assert "oldest" not in social_mod._states
+        assert "newest" in social_mod._states
+    finally:
+        social_mod.MAX_PENDING_STATES = 5_000
+        social_mod._states.clear()
+
+
+# ---------------------------------------------------------------------------
+# Provider internals must not reach the browser (A-04)
+# ---------------------------------------------------------------------------
+
+def test_auth0_error_detail_is_not_returned_to_the_client(client: TestClient) -> None:
+    """Auth0's own error text is logged, not shown in the browser."""
+    _, state = _start_login(client)
+    secretish = "unauthorized_client: https://internal-ketsa.auth0.com/secret-tenant"
+    with mock.patch.object(social_mod, "jwks", return_value=_JWKS), mock.patch.object(
+        social_mod, "exchange_code", side_effect=social_mod.SocialError(secretish)
+    ):
+        res = _run_callback(client, "code", state)
+    assert res.status_code == 502
+    body = res.text
+    assert "secret-tenant" not in body
+    assert "internal-ketsa" not in body
+    assert "unauthorized_client" not in body
+
+
+def test_token_rejection_reason_is_not_returned_to_the_client(client: TestClient) -> None:
+    """A rejected token's reason belongs in the log, not the response."""
+    _, state = _start_login(client)
+    nonce = social_mod._states[state]["nonce"]
+    with mock.patch.object(social_mod, "jwks", return_value=_JWKS), mock.patch.object(
+        social_mod, "exchange_code",
+        return_value={"id_token": sign_id_token(
+            _PRIV_PEM, google_claims(nonce=nonce, sub="rogue-conn|1"))},
+    ):
+        res = _run_callback(client, "code", state)
+    assert res.status_code == 400
+    assert "rogue-conn" not in res.text
+    assert "expected provider" not in res.text

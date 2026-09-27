@@ -13,6 +13,7 @@ Auth is intentionally lightweight and mirrors the admin gate in `admin.py`:
 
 import asyncio
 import hashlib
+import logging
 import os
 import re
 import secrets
@@ -26,6 +27,10 @@ from . import mailer, social, store
 from .engine import engine
 from .models import User, Wallet
 
+# Security-relevant failures are logged with detail and returned to the client
+# as a generic message, so provider internals never reach the browser.
+logger = logging.getLogger("ketsa.auth")
+
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 # token digest -> (expiry, user id). Sessions last 30 days, sliding.
@@ -38,6 +43,22 @@ SESSION_TTL = 30 * 24 * 3600
 # short-lived (60s) — the real session token never travels in a URL.
 _tickets: dict[str, tuple[float, str]] = {}
 SSO_TICKET_TTL = 60
+# Redeemed tickets are popped, but a ticket whose callback is never completed
+# (closed tab, back button, dropped mobile connection) would otherwise sit here
+# forever: the TTL is only ever checked at redemption, never used to evict. On
+# a long-running process that is an unbounded leak reachable by anyone who can
+# call /social/login and simply never finish (CWE-401 / CWE-770). So entries
+# are swept on issue, and hard-capped so a burst inside one TTL cannot blow up.
+MAX_PENDING_TICKETS = 5_000
+
+
+def _prune_tickets(now: float) -> None:
+    """Evict expired tickets, then hard-cap the dict if it is still too big."""
+    for t in [t for t, (exp, _) in _tickets.items() if exp < now]:
+        _tickets.pop(t, None)
+    if len(_tickets) > MAX_PENDING_TICKETS:
+        for t in sorted(_tickets, key=lambda k: _tickets[k][0])[: len(_tickets) - MAX_PENDING_TICKETS]:
+            _tickets.pop(t, None)
 
 # Login throttling — per-identifier (email or phone) failed-attempt window
 # (env-tunable so tests can force short windows). Guards the (public,
@@ -323,8 +344,10 @@ def _issue_session(user_id: str) -> str:
 
 def _issue_sso_ticket(token: str) -> str:
     """Single-use ticket that hands a session token to the frontend callback."""
+    now = time.time()
+    _prune_tickets(now)
     ticket = secrets.token_urlsafe(32)
-    _tickets[ticket] = (time.time() + SSO_TICKET_TTL, token)
+    _tickets[ticket] = (now + SSO_TICKET_TTL, token)
     return ticket
 
 
@@ -692,8 +715,9 @@ async def social_login_callback(
     if not social.configured():
         raise HTTPException(status_code=503, detail="Google login is not configured on this server")
     try:
-        nonce = social.take_state(state or "")
+        nonce, code_verifier = social.take_state(state or "")
     except social.SocialError as e:
+        # State failures are safe to show: they carry no provider detail.
         raise HTTPException(status_code=400, detail=str(e))
     if not code:
         raise HTTPException(status_code=400, detail="Missing authorization code")
@@ -701,16 +725,24 @@ async def social_login_callback(
         # Auth0 exchange + JWKS fetch + verification are blocking network
         # calls — run them off the event loop so one slow Google response
         # can't stall every request on this process (F-08).
-        tokens = await asyncio.to_thread(social.exchange_code, code)
+        tokens = await asyncio.to_thread(social.exchange_code, code, code_verifier)
     except social.SocialError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+        # Auth0's error text can name internal hosts and describe the tenant's
+        # configuration, so it is logged rather than returned to the browser.
+        logger.warning("auth0 code exchange failed: %s", e)
+        raise HTTPException(
+            status_code=502, detail="Could not complete sign-in with Google. Please try again."
+        )
     id_token = tokens.get("id_token")
     if not id_token:
-        raise HTTPException(status_code=502, detail="Auth0 did not return an id token")
+        raise HTTPException(status_code=502, detail="Could not complete sign-in with Google. Please try again.")
     try:
         claims = await asyncio.to_thread(social.verify_id_token, id_token, nonce)
     except social.SocialError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        # Same here: a rejected token can be a real attack (wrong connection,
+        # forged signature), and the reason belongs in the log, not the URL bar.
+        logger.warning("auth0 id token rejected: %s", e)
+        raise HTTPException(status_code=400, detail="Google sign-in could not be verified. Please try again.")
 
     user = _realize_social_user(claims)
     token = _issue_session(user["id"])
@@ -724,6 +756,7 @@ async def social_login_callback(
 @router.post("/social/session", response_model=AuthResponse)
 async def social_session(body: SocialSessionRequest) -> AuthResponse:
     """Exchange the single-use ticket for the Ketsa session (token + user + wallet)."""
+    _prune_tickets(time.time())
     entry = _tickets.pop(body.ticket, None)
     if entry is None:
         raise HTTPException(status_code=400, detail="Invalid or expired login — please try again")

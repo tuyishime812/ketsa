@@ -64,6 +64,16 @@ const nextConfig = {
           { key: 'Cross-Origin-Resource-Policy', value: 'same-origin' },
         ],
       },
+      // The social-login callback receives a single-use ticket in the query
+      // string. It is a bearer credential for the whole session, so nothing
+      // from this page may be sent as a Referer — not even to our own origin
+      // (sub-resources and client-side navigations would otherwise carry the
+      // full URL). The page redeems the ticket immediately and replaces the
+      // address bar; `no-referrer` closes the window before that happens.
+      {
+        source: '/auth/callback',
+        headers: [{ key: 'Referrer-Policy', value: 'no-referrer' }],
+      },
     ];
   },
 };

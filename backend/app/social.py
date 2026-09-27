@@ -25,6 +25,8 @@ pure stdlib + PyJWT (cryptography for RS256).
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
 import secrets
@@ -40,8 +42,13 @@ import jwt  # PyJWT (RS256 verification)
 
 STATE_TTL_SECONDS = 600          # how long an /authorize state+nonce is valid
 JWKS_CACHE_TTL = 3600            # re-fetch Auth0 signing keys at most hourly
-CONNECTION = "google-oauth2"     # Auth0 connection to force Google sign-in
+DEFAULT_CONNECTION = "google-oauth2"  # Auth0 connection to force at /authorize
 SCOPE = "openid profile email"
+
+# Hard cap on in-flight login attempts. Entries expire, but a burst inside a
+# single TTL window would otherwise be unbounded — the same cap the password
+# login-attempt tracker uses (CWE-770).
+MAX_PENDING_STATES = 5_000
 
 # --- configuration -----------------------------------------------------------
 
@@ -57,6 +64,32 @@ def _env(key: str) -> str:
 
 def domain() -> str:
     return _env("KETSA_AUTH0_DOMAIN").rstrip("/")
+
+
+def connection() -> str:
+    """The Auth0 connection this site authenticates against.
+
+    Tunable so adding a second provider (Apple, Facebook, an enterprise
+    connection) is one env change rather than a code change — and, more
+    importantly, so the *callback* guard below can never disagree with what
+    /authorize asked for: both read this.
+    """
+    return _env("KETSA_AUTH0_CONNECTION") or DEFAULT_CONNECTION
+
+
+def expected_sub_prefix() -> str:
+    """The subject prefix that proves which connection minted a token.
+
+    Auth0 encodes the issuing connection in the subject as "<connection>|<id>",
+    e.g. "google-oauth2|1234567890". `begin_login` asks for `connection()`, but
+    /authorize does not *bind* state to it: a caller can reuse a server-minted
+    state against a different connection in the same tenant. So the callback
+    must check the prefix itself, or a token from any other connection (an
+    Auth0 database, a SAML/OIDC enterprise connection, or anything added for
+    testing) would pass every other check and be linked to an existing account
+    by email.
+    """
+    return f"{connection()}|"
 
 
 def client_id() -> str:
@@ -86,22 +119,48 @@ def configured() -> bool:
 
 # --- OAuth state / nonce store ------------------------------------------------
 
-_states: dict[str, dict[str, float | str]] = {}
+_states: dict[str, dict[str, Any]] = {}
 
 
 def _prune_states(now: float) -> None:
-    expired = [s for s, v in _states.items() if v["exp"] < now]
-    for s in expired:
+    """Drop expired attempts, then hard-cap the dict if it is still too big.
+
+    Expiry alone bounds the *steady-state* size (rate x TTL) but not a burst
+    inside one window, so the cap is what actually guarantees an upper bound.
+    """
+    for s in [s for s, v in _states.items() if v["exp"] < now]:
         _states.pop(s, None)
+    if len(_states) > MAX_PENDING_STATES:
+        # Drop the soonest-to-expire entries first.
+        for s in sorted(_states, key=lambda k: _states[k]["exp"])[: len(_states) - MAX_PENDING_STATES]:
+            _states.pop(s, None)
+
+
+def _pkce_pair() -> tuple[str, str]:
+    """A PKCE (S256) code verifier and its challenge.
+
+    The client secret already makes this a confidential flow, so PKCE is not
+    strictly required — but it means a stolen/intercepted authorization code
+    is useless on its own, and it is what Auth0 recommends for every client.
+    """
+    verifier = secrets.token_urlsafe(64)  # 43-128 chars, per RFC 7636
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+    return verifier, challenge
 
 
 def begin_login() -> str:
-    """Mint state+nonce and return the Auth0 /authorize URL for Google."""
+    """Mint state+nonce+PKCE verifier and return the Auth0 /authorize URL."""
     now = time.time()
     _prune_states(now)
     state = secrets.token_urlsafe(24)
     nonce = secrets.token_urlsafe(24)
-    _states[state] = {"exp": now + STATE_TTL_SECONDS, "nonce": nonce}
+    verifier, challenge = _pkce_pair()
+    _states[state] = {
+        "exp": now + STATE_TTL_SECONDS,
+        "nonce": nonce,
+        "verifier": verifier,
+    }
     qs = urllib.parse.urlencode({
         "client_id": client_id(),
         "redirect_uri": redirect_uri(),
@@ -109,13 +168,20 @@ def begin_login() -> str:
         "scope": SCOPE,
         "state": state,
         "nonce": nonce,
-        "connection": CONNECTION,
+        "connection": connection(),
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
     })
     return f"https://{domain()}/authorize?{qs}"
 
 
-def take_state(state: str) -> str:
-    """Consume and validate a state value; returns the bound nonce."""
+def take_state(state: str) -> tuple[str, str]:
+    """Consume and validate a state value.
+
+    Returns ``(nonce, code_verifier)`` — both bound to the state, both
+    single-use (the entry is popped before it is validated, so a replayed
+    state finds nothing).
+    """
     if not state:
         raise SocialError("Missing state parameter")
     entry = _states.pop(state, None)
@@ -123,7 +189,7 @@ def take_state(state: str) -> str:
         raise SocialError("Unknown or expired login state — please try again")
     if entry["exp"] < time.time():
         raise SocialError("Login state expired — please try again")
-    return str(entry["nonce"])
+    return str(entry["nonce"]), str(entry["verifier"])
 
 
 # --- low-level HTTP ------------------------------------------------------------
@@ -155,8 +221,8 @@ def _http_post_form(url: str, data: dict[str, Any], timeout: int = 30) -> dict[s
 
 # --- token exchange + verification --------------------------------------------
 
-def exchange_code(code: str) -> dict[str, Any]:
-    """Swap the authorization code for tokens using the client secret."""
+def exchange_code(code: str, code_verifier: str) -> dict[str, Any]:
+    """Swap the authorization code for tokens using the client secret + PKCE."""
     if not code:
         raise SocialError("Missing authorization code")
     payload = _http_post_form(
@@ -167,6 +233,7 @@ def exchange_code(code: str) -> dict[str, Any]:
             "client_secret": client_secret(),
             "code": code,
             "redirect_uri": redirect_uri(),
+            "code_verifier": code_verifier,
         },
     )
     if payload.get("error"):
@@ -206,7 +273,7 @@ def jwks() -> dict[str, Any]:
 
 
 def verify_id_token(id_token: str, expected_nonce: str) -> dict[str, Any]:
-    """Verify an Auth0 id token (signature, issuer, audience, exp, nonce).
+    """Verify an Auth0 id token (signature, issuer, audience, exp, nonce, connection).
 
     Returns the verified claims. Any failure raises ``SocialError`` — a token
     is never trusted without a full verification pass.
@@ -240,6 +307,22 @@ def verify_id_token(id_token: str, expected_nonce: str) -> dict[str, Any]:
     # PyJWT verifies standard claims but not app-level ones.
     if payload.get("nonce") != expected_nonce:
         raise SocialError("id token nonce mismatch")
+
+    # The load-bearing check. A valid signature only proves "some connection in
+    # this tenant minted this" — every connection shares the issuer, the
+    # audience and the signing keys. Without this, a token from a second
+    # connection (an Auth0 database, an enterprise SAML/OIDC connection, a
+    # sandbox tenant member added for testing) would be accepted, and because
+    # those connections let the *account holder* assert their own email, the
+    # login would be silently linked to a victim's existing Ketsa account —
+    # wallet, balance and all. `begin_login` asking for the connection is not a
+    # substitute: /authorize does not bind `state` to the connection, so a
+    # caller holding a valid state can authenticate against a different one and
+    # still complete this callback.
+    sub = payload.get("sub")
+    if not isinstance(sub, str) or not sub.startswith(expected_sub_prefix()):
+        raise SocialError("Sign-in was not completed with the expected provider")
+
     if not isinstance(payload.get("email"), str):
         # No usable email: only the sub can identify this user.
         payload["email"] = ""

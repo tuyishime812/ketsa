@@ -222,7 +222,7 @@ The `/api/*` HTTP calls go through Next's rewrite proxy regardless.
 # Backend
 cd backend
 .venv\Scripts\python.exe -m pytest
-# 179 tests: endpoints, models/seed consistency, 404/405, CORS,
+# 198 tests: endpoints, models/seed consistency, 404/405, CORS,
 # security headers, OpenAPI gating, rate limiting, admin auth + CRUD + user
 # management, admin login brute-force throttling, the matching engine
 # (wallets, books, execution, WS feed), account auth (register/login,
@@ -230,9 +230,10 @@ cd backend
 # leaderboard + notifications, wandePay payments (deposits, withdrawals,
 # idempotent crediting, refunds, transaction + daily caps), the
 # withdrawable-balance rule (real money vs. play money, legacy seeds),
-# WebSocket subscription authorization + connection cap, and market
-# resolution (settlement/payout, trading locks, admin endpoint,
-# wallet-scoped WS notification routing).
+# WebSocket subscription authorization + connection cap, Auth0 social login
+# (PKCE, state/nonce, connection binding, ticket + state store bounds, no
+# provider-detail leakage), and market resolution (settlement/payout,
+# trading locks, admin endpoint, wallet-scoped WS notification routing).
 
 # Frontend
 cd frontend
@@ -282,6 +283,7 @@ and wired through `docker-compose.yml`.
 | `KETSA_AUTH0_DOMAIN`         | backend   | Auth0 tenant (e.g. `ketsa.us.auth0.com`) — enables "Continue with Google" | — (social off; button returns 503) |
 | `KETSA_AUTH0_CLIENT_ID`      | backend   | Auth0 regular-web-app client id                      | — |
 | `KETSA_AUTH0_CLIENT_SECRET`  | backend   | Auth0 client secret (secret; never commit)           | — |
+| `KETSA_AUTH0_CONNECTION`     | backend   | Auth0 connection accepted at the callback (guards against a token from any other connection in the tenant) | `google-oauth2` |
 | `KETSA_PUBLIC_BASE_URL`      | backend   | Public backend origin; Auth0 callback URI is `<this>/api/auth/social/callback` | `http://127.0.0.1:8000` |
 | `KETSA_FRONTEND_URL`         | backend   | Where the browser lands after Google login (`/auth/callback`) | `http://localhost:3000` |
 | `KETSA_RESEND_API_KEY`       | backend   | Resend API key — emails signup-verification + password-reset OTPs (absent ⇒ no mail sent; codes logged for dev) | — (email OTP off) |
@@ -385,6 +387,39 @@ request (resolving the caller by wallet id) uses a PostgREST
 those comments claimed was enforced only in application code and a
 concurrent-registration race could slip past it). Re-run `schema.sql` once —
 it is idempotent and changes no data.
+
+**Auth0 social login (Google).** The whole Authorization Code flow runs
+server-side — no Auth0 JS SDK in the bundle, and the session token never
+travels in a URL. The browser only ever sees a 60-second, single-use ticket.
+Defences worth knowing about:
+
+- **PKCE (S256)** is used in addition to the client secret, so a stolen
+  authorization code is useless on its own.
+- **State and nonce** are server-minted, single-use, and bound to one login
+  attempt (login-CSRF / replay guard).
+- **The callback verifies the token's connection**, not just its signature.
+  Auth0 puts the issuing connection in the subject (`google-oauth2|<id>`) and
+  shares the issuer, audience and signing keys across every connection in the
+  tenant — so a valid signature only proves *some* connection signed it. Since
+  `/authorize` does not bind `state` to the connection, a caller holding a
+  valid state could authenticate against a different connection and complete
+  the callback. Those connections let the account holder assert their own
+  email, which would have silently linked the login to an existing Ketsa
+  account — wallet and balance included. The check is derived from
+  `KETSA_AUTH0_CONNECTION`, the same value `/authorize` sends, so the two
+  cannot disagree. **Enabling a second connection in the tenant is therefore
+  safe**, but it stays unusable here until you point that env var at it.
+- **Provider error text never reaches the browser.** Auth0's own
+  `error_description` can name internal hosts and describe the tenant's
+  configuration, so failures are logged server-side and returned as a generic
+  message.
+- The `/auth/callback` page sends `Referrer-Policy: no-referrer` so the
+  ticket in its query string cannot escape via a `Referer` header.
+
+Account linking is deliberately conservative: an existing password account is
+only linked when the token carries a **verified** email, and a record already
+bound to a *different* `auth0_sub` is rejected with a 409 rather than
+re-linked.
 
 **Known dependency note (PostCSS).** `npm audit` reports a high/moderate
 finding for **postcss bundled inside `next@15.5.x`** (`GHSA-qx2v-qp2m-jg93`).

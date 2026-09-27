@@ -146,6 +146,20 @@ protected `/api/admin/*` through the same-origin `/api` path.
    for this application. If the Auth0 env vars are absent the button flow
    returns `503` and the modal hides nothing — the site just keeps
    email/password auth.
+
+   > **Only the `google-oauth2` connection can complete a login.** The backend
+   > checks that the token's subject starts with `KETSA_AUTH0_CONNECTION`
+   > (default `google-oauth2`). This is deliberate: a valid Auth0 signature
+   > only proves *some* connection in your tenant signed the token, and
+   > `/authorize` does not bind `state` to a connection — so without the
+   > check, a token from a second connection (Auth0's built-in database, an
+   > enterprise SAML/OIDC connection, a sandbox member added for testing)
+   > would be accepted and linked by email to an existing account, wallet and
+   > balance included.
+   >
+   > You do not need to remove other connections from the tenant; they are
+   > simply inert here. If you deliberately add a provider, enable it **and**
+   > set `KETSA_AUTH0_CONNECTION` to its name.
 5. **Transactional email via Resend (recommended).** Two auth flows depend on
    it: **email-OTP signup verification** (an email registration is held
    pending — no account, no seeded wallet — until the user enters the 6-digit
