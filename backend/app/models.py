@@ -88,6 +88,10 @@ class Wallet(BaseModel):
     id: str
     name: str
     balance: float
+    # Real money paid in via wandePay — the ceiling on a withdrawal. Absent on
+    # wallets persisted before the field existed, so default to 0.0 (a legacy
+    # free seed stays play money and is never cashable).
+    withdrawable: float = 0.0
     currency: str = "MWK"
     equity: float
     realized_pnl: float

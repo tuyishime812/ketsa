@@ -59,6 +59,15 @@ export default function PaymentsPanel() {
       setError('Minimum payment is 100 MWK.');
       return;
     }
+    if (mode === 'withdraw' && amt > wallet.withdrawable) {
+      // Catch it here too: the server enforces the same ceiling, but telling
+      // the user before they hit a 400 saves a round trip.
+      setError(
+        `You can withdraw up to ${fmtBalance(wallet.withdrawable, wallet.currency)} — ` +
+          'only real money you deposited is cashable out.',
+      );
+      return;
+    }
     if (!validNumber(number)) {
       setError('Enter a valid 10-digit mobile number (e.g. 0998 123 456).');
       return;
@@ -141,7 +150,8 @@ export default function PaymentsPanel() {
       <p className="mb-4 text-[12.5px] text-ink-2">
         {mode === 'deposit'
           ? `Top up your balance with real money via Airtel Money or TNM Mpamba.`
-          : `Payout your balance back to your mobile money (min 100 MWK).`}
+          : `Payout real money you deposited back to your mobile money (min 100 MWK). ` +
+            `Play balance and trading winnings are not cashable out.`}
       </p>
 
       <div className="grid gap-4 sm:grid-cols-2">
@@ -155,10 +165,20 @@ export default function PaymentsPanel() {
             inputMode="decimal"
             min="100"
             step="1"
+            max={mode === 'withdraw' ? wallet?.withdrawable : undefined}
             placeholder="500"
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
           />
+          {mode === 'withdraw' && wallet && wallet.withdrawable > 0 && (
+            <button
+              type="button"
+              className="mt-2 font-mono text-[10.5px] uppercase tracking-[.07em] text-ink-3 underline hover:text-ink-2"
+              onClick={() => setAmount(String(Math.floor(wallet.withdrawable)))}
+            >
+              Max {fmtBalance(wallet.withdrawable, wallet.currency)}
+            </button>
+          )}
         </label>
         <label className="block">
           <span className="mb-2 block font-mono text-[10.5px] uppercase tracking-[.07em] text-ink-3">
@@ -199,7 +219,7 @@ export default function PaymentsPanel() {
           ? 'Processing…'
           : mode === 'deposit'
             ? 'Deposit via wandePay'
-            : `Withdraw ${wallet ? fmtBalance(wallet.balance, wallet.currency) : ''} available`}
+            : `Withdraw ${wallet ? fmtBalance(wallet.withdrawable, wallet.currency) : ''} withdrawable`}
       </button>
 
       {notice && <p className="mt-3 text-[12.5px] text-pos">{notice}</p>}

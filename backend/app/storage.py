@@ -748,43 +748,72 @@ class SupabaseBackend:
         self.init()
         return self._get_row(USERS_TABLE, user_id)
 
+    def _user_by_json_field(
+        self, field: str, value: str, *, match=None
+    ) -> dict | None:
+        """Look a user up by a top-level key inside the `value` JSONB column.
+
+        Uses a PostgREST `value->>field=eq.<value>` filter so the expression
+        indexes in `schema.sql` are actually used. Fetching the whole table and
+        filtering in Python is O(users) per call, and `wallet_id` sits on the
+        hot path of every authenticated request, so that would make the API
+        slower the more accounts sign up.
+
+        If the filtered query itself errors (e.g. the index is missing on an
+        older project) we fall back to a full scan so the app still works.
+        ``match`` is an optional extra predicate applied during that fallback
+        scan, for rows stored before the field was normalised.
+        """
+        if not value:
+            return None
+        try:
+            res = (
+                self.client.table(USERS_TABLE)
+                .select("*")
+                .eq(f"value->>{field}", value)
+                .limit(1)
+                .execute()
+            )
+            rows = res.data or []
+            if rows:
+                return _as_json(rows[0].get("value"))
+            return None
+        except Exception:
+            pass
+        for u in self._list_rows(USERS_TABLE):
+            if u.get(field) == value or (match is not None and match(u)):
+                return u
+        return None
+
     def get_user_by_email(self, email: str) -> dict | None:
         self.init()
         if not email:
             return None
         needle = email.lower()
-        for u in self._list_rows(USERS_TABLE):
-            if (u.get("email") or "").lower() == needle:
-                return u
-        return None
+        return self._user_by_json_field(
+            "email", needle, match=lambda u: (u.get("email") or "").lower() == needle
+        )
 
     def get_user_by_auth0_sub(self, sub: str) -> dict | None:
         self.init()
         if not sub:
             return None
-        for u in self._list_rows(USERS_TABLE):
-            if u.get("auth0_sub") == sub:
-                return u
-        return None
+        return self._user_by_json_field("auth0_sub", sub)
 
     def get_user_by_phone(self, phone: str) -> dict | None:
         self.init()
         if not phone:
             return None
         needle = "".join(phone.split()).lstrip("0")
-        for u in self._list_rows(USERS_TABLE):
-            if (u.get("phone") or "").lstrip("0") == needle:
-                return u
-        return None
+        return self._user_by_json_field(
+            "phone", needle, match=lambda u: (u.get("phone") or "").lstrip("0") == needle
+        )
 
     def get_user_by_wallet_id(self, wallet_id: str) -> dict | None:
         self.init()
-        if not wallet_id:
-            return None
-        for u in self._list_rows(USERS_TABLE):
-            if u.get("wallet_id") == wallet_id:
-                return u
-        return None
+        # Hot path — wallet ids are always server-minted in canonical form, so
+        # there is nothing to normalise and no reason to widen the match.
+        return self._user_by_json_field("wallet_id", wallet_id)
 
     def upsert_user(self, user: dict) -> None:
         self.init()

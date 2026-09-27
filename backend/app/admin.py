@@ -8,6 +8,13 @@ Tokens are random and held in memory, so restarting the server invalidates
 them (a fresh login is required). This is intentional: the admin gate is a
 simple, low-overhead safeguard for a marketing site, not a multi-user RBAC
 system.
+
+Because one password guards the whole site (it can delete accounts, reset
+any user's password, and resolve markets — which settles real money), the
+login endpoint is brute-force throttled per client IP exactly like the user
+account login in `auth.py`. Without that, the shared password was reachable
+at the global request rate limit (~120/min/IP), which is an online-guessing
+budget rather than a control.
 """
 
 import hashlib
@@ -15,7 +22,7 @@ import os
 import secrets
 import time
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
 
 from . import store
@@ -33,6 +40,39 @@ TOKEN_TTL = 12 * 3600
 # Password hashing (PBKDF2-HMAC-SHA256) for the optional stored admin password.
 _SALT_LEN = 16
 _PBKDF2_ITER = 100_000
+
+# Brute-force throttle for POST /login, keyed by client IP.
+LOGIN_MAX_FAILURES = 10
+LOGIN_LOCKOUT_SECONDS = 900
+_login_attempts: dict[str, list[float]] = {}
+
+
+def _login_window() -> int:
+    try:
+        return int(os.getenv("KETSA_ADMIN_LOCKOUT_SECONDS", str(LOGIN_LOCKOUT_SECONDS)))
+    except ValueError:
+        return LOGIN_LOCKOUT_SECONDS
+
+
+def _login_max_failures() -> int:
+    try:
+        return int(os.getenv("KETSA_ADMIN_MAX_FAILURES", str(LOGIN_MAX_FAILURES)))
+    except ValueError:
+        return LOGIN_MAX_FAILURES
+
+
+def _prune_login_attempts(now: float, window: int) -> None:
+    """Drop expired attempt logs so the tracker can't grow unboundedly."""
+    for ip, stamps in list(_login_attempts.items()):
+        kept = [t for t in stamps if now - t < window]
+        if kept:
+            _login_attempts[ip] = kept
+        else:
+            _login_attempts.pop(ip, None)
+
+
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
 
 
 def _env_password() -> str:
@@ -108,10 +148,31 @@ class MessageResponse(BaseModel):
 # --- Auth -------------------------------------------------------------------
 
 @router.post("/login", response_model=LoginResponse)
-async def login(body: LoginRequest) -> LoginResponse:
+async def login(body: LoginRequest, request: Request) -> LoginResponse:
+    # Per-IP lockout. The admin password is the single key to the whole site
+    # (user management, password resets, market resolution/settlement), so
+    # unlimited guessing is not acceptable. A success clears the counter.
+    now = time.time()
+    window = _login_window()
+    max_failures = _login_max_failures()
+    _prune_login_attempts(now, window)
+
+    ip = _client_ip(request)
+    fails = [t for t in _login_attempts.get(ip, []) if now - t < window]
+    if len(fails) >= max_failures:
+        retry_in = max(1, int(window - (now - min(fails))))
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many failed attempts. Try again in {retry_in}s.",
+        )
+
     # Constant-time-ish comparison to reduce trivial timing signal.
     if not _check_password(body.password):
+        fails.append(now)
+        _login_attempts[ip] = fails
         raise HTTPException(status_code=401, detail="Invalid password")
+
+    _login_attempts.pop(ip, None)
     token = secrets.token_urlsafe(32)
     _tokens[_hash_token(token)] = time.time() + TOKEN_TTL
     return LoginResponse(token=token)

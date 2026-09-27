@@ -97,6 +97,10 @@ class ConnectionManager:
         self._connections.discard(websocket)
         self._subs.pop(websocket, None)
 
+    @property
+    def connection_count(self) -> int:
+        return len(self._connections)
+
     def subscribe(self, websocket: WebSocket, wallet_id: str) -> None:
         self._subs[websocket] = wallet_id
 
@@ -224,6 +228,9 @@ def create_app() -> "FastAPI":
     max_deposit_mwk = _env_float("KETSA_MAX_DEPOSIT_MWK", 1_000_000.0)
     max_withdrawal_mwk = _env_float("KETSA_MAX_WITHDRAWAL_MWK", 1_000_000.0)
     daily_withdrawal_limit_mwk = _env_float("KETSA_DAILY_WITHDRAWAL_LIMIT_MWK", 3_000_000.0)
+    # Hard ceiling on concurrent WebSocket clients, so the live feed can't be
+    # used to exhaust process memory (CWE-770).
+    ws_max_connections = int(os.getenv("KETSA_WS_MAX_CONNECTIONS", "2000"))
     manager = ConnectionManager()
 
     async def _tick_loop() -> None:
@@ -379,23 +386,49 @@ def create_app() -> "FastAPI":
         if not write_limiter.allow(client):
             raise HTTPException(status_code=429, detail="Too many requests. Please slow down.")
 
-    def _gate_wallet(authorization: str | None, wallet_id: str) -> None:
-        """Account-owned wallets are readable/usable only by their owner.
+    def _wallet_access(authorization: str | None, wallet_id: str) -> tuple[int, str] | None:
+        """Resolve whether a caller may use a wallet. ``None`` = allowed.
 
-        Guests (no Authorization header) may keep using *unclaimed* simulated
-        wallets — ids are server-minted and unguessable, and with the zero
-        seed they hold no real funds. A supplied but invalid token raises
-        401; a token for a different account raises 403, so account wallets
-        can't be dumped, traded or drained by anyone who guesses/leaks an id.
+        Account-owned wallets are usable only by their owner. Guests (no
+        Authorization header) may keep using *unclaimed* simulated wallets —
+        ids are server-minted and unguessable, and with the zero seed they
+        hold no real funds. An invalid token is 401; a valid token for a
+        different account is 403, so account wallets can't be dumped, traded
+        or drained by anyone who guesses/leaks an id.
+
+        Returns ``(status_code, detail)`` when access is denied. This is the
+        single source of truth for wallet ownership — the HTTP routes raise on
+        it and the WebSocket subscription path (which cannot raise) reads it
+        directly, so the two can't drift apart.
+
+        ``authorization`` accepts either a full `Bearer <token>` header value
+        (the HTTP routes) or a bare token (the WebSocket sub frame), and an
+        invalid/expired token is converted to a denial rather than raised, so a
+        bad token can't tear down the socket.
         """
-        user = resolve_optional_user(authorization)
+        if not wallet_id:
+            return (400, "Missing wallet id")
+        raw = (authorization or "").strip()
+        if raw and not raw.startswith("Bearer "):
+            raw = f"Bearer {raw}"
+        try:
+            user = resolve_optional_user(raw or None)
+        except HTTPException as e:
+            return (e.status_code, str(e.detail))
         owner = store.get_user_by_wallet_id(wallet_id)
         if owner is None:
-            return  # unclaimed sim wallet — open to whoever holds its id
+            return None  # unclaimed sim wallet — open to whoever holds its id
         if user is None:
-            raise HTTPException(status_code=401, detail="This wallet belongs to an account. Please log in.")
+            return (401, "This wallet belongs to an account. Please log in.")
         if user["wallet_id"] != wallet_id:
-            raise HTTPException(status_code=403, detail="This wallet belongs to another account")
+            return (403, "This wallet belongs to another account")
+        return None
+
+    def _gate_wallet(authorization: str | None, wallet_id: str) -> None:
+        """HTTP wrapper around :func:`_wallet_access` that raises on denial."""
+        denied = _wallet_access(authorization, wallet_id)
+        if denied is not None:
+            raise HTTPException(status_code=denied[0], detail=denied[1])
 
     def _require_own_wallet(user: dict, wallet_id: str) -> None:
         """Money endpoints require an authenticated account and its wallet."""
@@ -708,6 +741,11 @@ def create_app() -> "FastAPI":
 
     @app.websocket("/api/ws")
     async def market_ws(websocket: WebSocket) -> None:
+        # Cap concurrent sockets so a single client can't exhaust memory
+        # (CWE-770). The public market feed is fine; over the cap we refuse.
+        if manager.connection_count >= ws_max_connections:
+            await websocket.close(code=1013)
+            return
         await manager.connect(websocket)
         try:
             # First message may be a wallet subscription. Everything after is
@@ -720,8 +758,22 @@ def create_app() -> "FastAPI":
                 pass
             if isinstance(first, dict) and str(first.get("type")) == "sub":
                 wallet_id = str(first.get("wallet_id") or "").strip()
-                if wallet_id:
+                # Subscribing a wallet is a read of that wallet's private
+                # notification stream (deposits, withdrawals, mobile-money
+                # numbers, fills, settlement payouts), so it is authorized
+                # exactly like the HTTP notification endpoints. Without this
+                # the socket was a straight bypass of the F-02 ownership gate:
+                # anyone who learned a wallet id received its live money feed.
+                token = str(first.get("token") or "").strip() or None
+                denied = _wallet_access(token, wallet_id) if wallet_id else (400, "Missing wallet id")
+                if denied is None:
                     manager.subscribe(websocket, wallet_id)
+                else:
+                    await websocket.send_text(
+                        json.dumps(
+                            {"type": "sub_error", "status": denied[0], "detail": denied[1]}
+                        )
+                    )
             while True:
                 await websocket.receive_text()
         except WebSocketDisconnect:

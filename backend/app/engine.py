@@ -533,6 +533,10 @@ class Marketplace:
             "id": fresh_id,
             "name": (name or "Trader").strip() or "Trader",
             "balance": WALLET_START_BALANCE,
+            # Real money actually paid in (deposits + refunds). Withdrawals may
+            # only draw on this, never on play balance. Absent on wallets
+            # persisted before this field existed -> read as 0.0.
+            "deposited": 0.0,
             "realized": 0.0,
             "positions": {},
             "history": [],
@@ -542,24 +546,41 @@ class Marketplace:
         return self.wallet_view(fresh_id)
 
     def credit_balance(self, wallet_id: str, amount: float) -> None:
-        """Add funds to a wallet's available balance (e.g. a completed deposit).
+        """Add real funds to a wallet's balance (a completed deposit, or a refund).
 
-        Callers are responsible for gating on idempotency (a payment record
-        must only credit once).
+        Every caller passes money that genuinely arrived via wandePay, so this
+        raises the withdrawable pool as well as the spendable balance. Callers
+        are responsible for gating on idempotency (a payment record must only
+        credit once).
         """
         wallet = self._wallets.get(wallet_id)
         if wallet is None:
             raise ValueError("Unknown wallet")
         wallet["balance"] = _round2(wallet["balance"] + amount)
+        wallet["deposited"] = _round2(wallet.get("deposited", 0.0) + amount)
         self._persist(wallet_id)
 
     def debit_balance(self, wallet_id: str, amount: float) -> None:
-        """Reserve funds for a withdrawal; raises if the balance is short."""
+        """Reserve funds for a withdrawal; raises if real funds are short.
+
+        Withdrawals draw on ``deposited`` only — the money that actually
+        arrived through wandePay. Play balance (a legacy free seed, or trading
+        winnings) is spendable on markets but is never cashable out, so the
+        zero-balance change can't be sidestepped by withdrawing money the
+        house never received.
+        """
         wallet = self._wallets.get(wallet_id)
         if wallet is None:
             raise ValueError("Unknown wallet")
+        deposited = wallet.get("deposited", 0.0)
+        if deposited + _EPS < amount:
+            raise ValueError(
+                "Insufficient deposited balance for this withdrawal. "
+                "Only real money paid in through mobile money can be cashed out."
+            )
         if wallet["balance"] + _EPS < amount:
             raise ValueError("Insufficient balance for this withdrawal")
+        wallet["deposited"] = _round2(deposited - amount)
         wallet["balance"] = _round2(wallet["balance"] - amount)
         self._persist(wallet_id)
 
@@ -610,6 +631,9 @@ class Marketplace:
             "id": wallet["id"],
             "name": wallet["name"],
             "balance": _round2(wallet["balance"]),
+            # Cashable-out real money. `balance` is what can be traded with;
+            # this is the ceiling on a withdrawal.
+            "withdrawable": _round2(wallet.get("deposited", 0.0)),
             "currency": WALLET_CURRENCY,
             "equity": _round2(equity),
             "realized_pnl": _round2(wallet["realized"]),

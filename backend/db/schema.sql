@@ -43,18 +43,44 @@ create table if not exists public.ketsa_users (
 -- Auth0 social login: users created via "Continue with Google" carry their
 -- Auth0 subject ("auth0_sub") inside the JSONB value. Index the lookup the
 -- backend performs when a Google user returns (find-or-create by subject).
-create index if not exists ketsa_users_auth0_sub_idx
-  on public.ketsa_users ((value ->> 'auth0_sub'));
+--
+-- These three lookups are UNIQUE, not just indexed: the backend resolves an
+-- account by each of these keys, so two rows sharing a value would make
+-- "log in as this phone number" ambiguous (a takeover waiting to happen).
+-- Uniqueness was previously only enforced in application code, which a
+-- concurrent-registration race could slip past. A plain index could not
+-- express the constraint, so it was cosmetic. Safe to re-run.
+--
+-- `null` values (accounts that don't use that identifier) are exempt, which
+-- is what we want: most accounts have no auth0_sub, and most have no phone.
+create unique index if not exists ketsa_users_auth0_sub_idx
+  on public.ketsa_users ((value ->> 'auth0_sub'))
+  where value ->> 'auth0_sub' is not null;
 
--- Phone-number accounts: users may register/log in with a Malawian phone
--- instead of an email; index the per-phone lookup (unique across accounts).
-create index if not exists ketsa_users_phone_idx
-  on public.ketsa_users ((value ->> 'phone'));
+create unique index if not exists ketsa_users_phone_idx
+  on public.ketsa_users ((value ->> 'phone'))
+  where value ->> 'phone' is not null;
+
+-- Wallet ownership: EVERY authenticated request resolves the caller's account
+-- by wallet id (the ownership gate on wallet reads, trades and notifications).
+-- This index is what keeps that check O(log n) instead of a full table scan.
+create unique index if not exists ketsa_users_wallet_id_idx
+  on public.ketsa_users ((value ->> 'wallet_id'))
+  where value ->> 'wallet_id' is not null;
 
 create table if not exists public.ketsa_notifications (
   id    text primary key,
   value jsonb not null default '{}'::jsonb
 );
+
+-- Both per-wallet feeds are read newest-first for a single wallet on every
+-- page load / poll, so index the (wallet, time) pair rather than filtering
+-- the whole table in the API.
+create index if not exists ketsa_notifications_wallet_idx
+  on public.ketsa_notifications ((value ->> 'wallet_id'), (value ->> 'ts') desc);
+
+create index if not exists ketsa_payments_wallet_idx
+  on public.ketsa_payments ((value ->> 'wallet_id'), (value ->> 'created') desc);
 
 -- Row Level Security. The anon/publishable key is PUBLIC (it ships in the
 -- browser bundle), so without RLS anyone holding it could read every wallet

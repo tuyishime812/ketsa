@@ -79,6 +79,8 @@ export interface Wallet {
   id: string;
   name: string;
   balance: number;
+  /** Real money paid in via mobile money — the ceiling on a withdrawal. */
+  withdrawable: number;
   currency: string; // e.g. MWK
   equity: number;
   realized_pnl: number;

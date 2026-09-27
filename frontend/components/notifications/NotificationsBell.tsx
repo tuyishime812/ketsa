@@ -7,6 +7,7 @@ import { useWallet } from '@/components/wallet/WalletProvider';
 import { timeAgo } from '@/lib/utils';
 import { fetchNotificationsSession } from '@/lib/api';
 import { onPush, startPush, subscribeWallet } from '@/lib/push';
+import { loadStoredSession } from '@/lib/wallet';
 
 const TYPE_STYLES: Record<NotificationItem['type'], string> = {
   fill: 'bg-pos-tint text-pos',
@@ -40,7 +41,10 @@ export default function NotificationsBell() {
   useEffect(() => {
     if (!wallet) return;
     startPush();
-    subscribeWallet(wallet.id);
+    // The server authorizes a wallet subscription against the account token,
+    // so an account wallet only subscribes with its bearer token. A guest
+    // wallet has none and is allowed through on its unguessable id alone.
+    subscribeWallet(wallet.id, loadStoredSession()?.token ?? null);
     const off = onPush((ev) => {
       if (ev.type !== 'notification') return;
       const notif = ev.notification as NotificationItem;

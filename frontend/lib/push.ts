@@ -3,7 +3,13 @@
 //
 // The server broadcasts one stream over /api/ws: market ticks/trades for
 // everyone, plus wallet-scoped `notification` events that are only delivered
-// to sockets that first sent { type: "sub", wallet_id }.
+// to sockets that first sent { type: "sub", wallet_id, token }.
+//
+// The token matters: subscribing a wallet is a read of that wallet's private
+// feed (deposits, withdrawals, mobile-money numbers, settlement payouts), so
+// the server authorizes it with the same ownership check as the HTTP
+// notification endpoints. An account wallet subscribed without a matching
+// token is refused with a `sub_error` frame.
 
 export interface PushEvent {
   type: string;
@@ -21,6 +27,7 @@ const WS_URL =
 const listeners = new Set<Listener>();
 let socket: WebSocket | null = null;
 let walletId: string | null = null;
+let walletToken: string | null = null;
 let reconnectTimer: number | null = null;
 let heartbeatTimer: number | null = null;
 let retry = 0;
@@ -49,6 +56,15 @@ function teardown() {
   socket = null;
 }
 
+function sendSub() {
+  if (!socket || !walletId) return;
+  try {
+    socket.send(JSON.stringify({ type: 'sub', wallet_id: walletId, token: walletToken }));
+  } catch {
+    /* the close handler reconnects and re-subscribes */
+  }
+}
+
 function open() {
   if (typeof window === 'undefined' || socket) return;
   try {
@@ -59,9 +75,7 @@ function open() {
   }
   socket.onopen = () => {
     retry = 0;
-    if (walletId) {
-      socket?.send(JSON.stringify({ type: 'sub', wallet_id: walletId }));
-    }
+    sendSub();
     // Keep the connection alive past idle proxies.
     heartbeatTimer = window.setInterval(() => {
       try {
@@ -120,12 +134,14 @@ export function startPush() {
 
 /**
  * Subscribe the shared socket to a wallet so the server routes that wallet's
- * private notifications to this client.
+ * private notifications to this client. Pass the account's bearer token —
+ * without it the server refuses an account-owned wallet.
  */
-export function subscribeWallet(id: string | null) {
+export function subscribeWallet(id: string | null, token: string | null = null) {
   walletId = id;
+  walletToken = token;
   if (id && typeof window !== 'undefined' && socket?.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify({ type: 'sub', wallet_id: id }));
+    sendSub();
   }
 }
 

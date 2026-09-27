@@ -198,8 +198,45 @@ protected `/api/admin/*` through the same-origin `/api` path.
 - [ ] (If payments enabled) `/portfolio` shows the Payments panel and creating a
       deposit/withdrawal does not error; `KETSA_WANDE_TOKEN` is set in the host's
       secret manager and **not** committed to the repo.
+- [ ] **The backend runs a single replica/worker.** See the warning below — this
+      is a correctness requirement, not a scaling preference.
+- [ ] (If Supabase) `schema.sql` has been re-run since the `ketsa_users_wallet_id_idx`
+      / unique `phone` + `auth0_sub` indexes were added. Verify with
+      `select indexname from pg_indexes where tablename = 'ketsa_users';`
 - [ ] Headers present in browser devtools on the homepage: `Content-Security-Policy`,
       `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`.
+
+---
+
+## ⚠ Run exactly ONE backend process while real money is in play
+
+This is the single most important operational constraint in this file.
+
+The engine's order books and trade tape are **in-memory**, and every
+balance-mutating operation (trades, deposit credits, withdrawal debits and
+refunds, resolution settlement payouts) is serialized behind one
+`asyncio.Lock`. That lock is **per process**. So with `uvicorn --workers N`, or
+two replicas behind a load balancer:
+
+- each process keeps its **own** order books and trade tape, so prices and
+  matching diverge between them;
+- each process resolves the same persisted wallet balance independently, so
+  **the same funds can be spent twice** (classic double-spend);
+- the per-transaction and daily MWK caps (`KETSA_MAX_DEPOSIT_MWK`,
+  `KETSA_MAX_WITHDRAWAL_LIMIT_MWK`, `KETSA_DAILY_WITHDRAWAL_LIMIT_MWK`) are
+  enforced per process, so your real limits are effectively **N×** what you
+  configured;
+- the in-memory rate limiters are per-instance too, so they multiply the same way.
+
+**Do:** run one instance (`uvicorn app.main:app --port 8000`, no `--workers`).
+Put a shared rate limiter in front (Caddy / NGINX / Cloudflare) if you need
+edge throttling. Vertical scale first.
+
+**Before scaling out:** move the engine's authoritative state into Postgres and
+take row-level locks (`SELECT … FOR UPDATE`) on the wallet row inside the same
+transaction that mutates it, and move the limits/rate limiting to shared
+storage (Redis). Until that exists, a second replica is a double-spend bug with
+extra steps.
 
 ---
 

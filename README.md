@@ -157,8 +157,12 @@ With both services running you can trade each market for real on the site:
   - **Money movement requires an account.** Deposits and withdrawals are only
     accepted for the authenticated account's own wallet, with per-transaction
     and daily caps (`KETSA_MAX_DEPOSIT_MWK`, `KETSA_MAX_WITHDRAWAL_MWK`,
-    `KETSA_DAILY_WITHDRAWAL_LIMIT_MWK`). Withdrawals fail if the wallet has no
-    real, deposited balance.
+    `KETSA_DAILY_WITHDRAWAL_LIMIT_MWK`). A withdrawal can only draw on
+    **real money you actually deposited** — the wallet view reports this as
+    `withdrawable`, and it is the ceiling on any payout. Play balance (a legacy
+    free seed) and trading winnings are spendable on markets but are never
+    cashable out, so the house can never be asked to pay out funds it did not
+    receive.
   - **Email signups are verified.** With Resend configured, an email
     registration returns a pending state and emails a 6-digit code — the
     account (and its wallet) is only created once the code is entered,
@@ -187,7 +191,12 @@ With both services running you can trade each market for real on the site:
 - **Live updates.** A WebSocket feed (`ws://…/api/ws`) streams market ticks,
   fills, **resolutions** and **leaderboard changes** to all open pages; clients
   can subscribe a wallet on the same socket to receive that wallet's private
-  notification events. Order books and the trade tape refresh every few
+  notification events. **Subscribing a wallet is authorized**, exactly like
+  the HTTP notification endpoints: an account-owned wallet requires the
+  account's bearer token in the `{"type":"sub","wallet_id":…,"token":…}` frame
+  and is otherwise refused with a `sub_error` frame. The public market feed
+  needs no token. Concurrent sockets are capped by
+  `KETSA_WS_MAX_CONNECTIONS`. Order books and the trade tape refresh every few
   seconds as a fallback.
 - **Persistence.** Today the engine keeps books and the trade tape in memory,
   but **wallets are persisted** through the storage backend — a funded balance
@@ -213,13 +222,16 @@ The `/api/*` HTTP calls go through Next's rewrite proxy regardless.
 # Backend
 cd backend
 .venv\Scripts\python.exe -m pytest
-# 117 tests: endpoints, models/seed consistency, 404/405, CORS,
+# 179 tests: endpoints, models/seed consistency, 404/405, CORS,
 # security headers, OpenAPI gating, rate limiting, admin auth + CRUD + user
-# management, the matching engine (wallets, books, execution, WS feed),
-# account auth (register/login, sessions, throttling, change password,
-# wallet-binding on writes), leaderboard + notifications, wandePay
-# payments (deposits, withdrawals, idempotent crediting, refunds), and
-# market resolution (settlement/payout, trading locks, admin endpoint,
+# management, admin login brute-force throttling, the matching engine
+# (wallets, books, execution, WS feed), account auth (register/login,
+# sessions, throttling, change password, wallet-binding on writes),
+# leaderboard + notifications, wandePay payments (deposits, withdrawals,
+# idempotent crediting, refunds, transaction + daily caps), the
+# withdrawable-balance rule (real money vs. play money, legacy seeds),
+# WebSocket subscription authorization + connection cap, and market
+# resolution (settlement/payout, trading locks, admin endpoint,
 # wallet-scoped WS notification routing).
 
 # Frontend
@@ -249,6 +261,13 @@ and wired through `docker-compose.yml`.
 | `KETSA_ALLOWED_ORIGINS`      | backend   | Comma-separated CORS origin allowlist                | `http://localhost:3000,http://127.0.0.1:3000` |
 | `KETSA_EXPOSE_DOCS`          | backend   | `1` to enable `/docs` `/redoc` `/openapi.json`       | `0` (off) |
 | `KETSA_RATE_LIMIT_PER_MIN`   | backend   | Requests/IP/60s fixed window (`0` disables)          | `120` |
+| `KETSA_WRITE_RATE_LIMIT_PER_MIN` | backend | Stricter per-IP budget for write endpoints (wallet mints, trades, payments) | `30` |
+| `KETSA_WS_MAX_CONNECTIONS`   | backend   | Concurrent WebSocket client cap (memory guard)       | `2000` |
+| `KETSA_MAX_DEPOSIT_MWK`      | backend   | Max MWK per deposit transaction                     | `1000000` |
+| `KETSA_MAX_WITHDRAWAL_MWK`   | backend   | Max MWK per withdrawal transaction                  | `1000000` |
+| `KETSA_DAILY_WITHDRAWAL_LIMIT_MWK` | backend | Max MWK withdrawn per wallet per rolling 24h    | `3000000` |
+| `KETSA_ADMIN_MAX_FAILURES`   | backend   | Failed admin logins per IP before lockout           | `10` |
+| `KETSA_ADMIN_LOCKOUT_SECONDS` | backend  | Admin lockout window after too many failures         | `900` |
 | `KETSA_BACKEND_URL`          | frontend  | Base URL of the FastAPI service (server-side fetch)  | `http://127.0.0.1:8000` |
 | `NEXT_PUBLIC_KETSA_BACKEND_URL` | frontend | Public backend origin embedded in the client bundle (WebSocket feed) | `http://127.0.0.1:8000` |
 | `KETSA_CSP`                  | frontend  | Optional override for the emitted CSP header         | built-in policy |
@@ -304,6 +323,27 @@ new password is hashed (PBKDF2-HMAC-SHA256) and stored in the backend, taking
 precedence over the environment value. Tokens are held in memory (no
 persistence), so a backend restart revokes all sessions.
 
+`POST /api/admin/login` is **brute-force throttled per client IP**
+(`KETSA_ADMIN_MAX_FAILURES`, default 10 failures →
+`KETSA_ADMIN_LOCKOUT_SECONDS`, default 900s lockout, cleared on success).
+This matters more than the account throttle: the admin password can delete
+accounts, reset any user's password, and resolve markets — which settles real
+money — so unlimited guessing is not an acceptable posture. PBKDF2 at 100k
+iterations makes each guess expensive but does not bound how many are
+attempted.
+
+**Single-replica requirement.** Run **exactly one** backend process while real
+money is in play. The engine's order books and trade tape live in memory, and
+the lock that serializes every balance mutation (trades, deposit credits,
+withdrawal debits and refunds, settlement payouts) is an `asyncio.Lock` — it
+serializes *within one process only*. Running `uvicorn --workers N`, or two
+replicas behind a load balancer, gives each process its own divergent books
+and its own view of the same persisted balance, so the same funds can be spent
+twice and the per-transaction/daily MWK caps multiply by the replica count.
+The in-memory rate limiters have the same per-instance caveat. Scale out only
+behind a single writer, or move the engine's authoritative state (and the
+lock) into Postgres with row-level locking first.
+
 **HTTP security headers (both services).**
 - `Content-Security-Policy`: `default-src 'self'` plus the allowances Next.js
   needs (`script-src 'unsafe-inline'` for RSC bootstrap, `style-src
@@ -319,9 +359,32 @@ persistence), so a backend restart revokes all sessions.
 the API schema publicly. Turn them on only for debugging.
 
 **Rate limiting.** A per-instance in-memory fixed-window limiter (default 120
-req/min/IP) returns `429` past the limit. It is not a substitute for a
+req/min/IP) returns `429` past the limit. Write endpoints (wallet mints,
+trades, deposits, withdrawals) additionally get a stricter per-IP budget
+(`KETSA_WRITE_RATE_LIMIT_PER_MIN`, default 30). Neither is a substitute for a
 distributed limiter when scaling horizontally — put a shared limiter (e.g.
-Caddy rate limit / NGINX) in front for production.
+Caddy rate limit / NGINX) in front for production. See
+**Single-replica requirement** above for why the balance-mutation lock needs
+the same treatment.
+
+**Withdrawal ceiling (real vs. play money).** Every wallet tracks two pools:
+`balance` (spendable on markets) and `withdrawable` (real money that actually
+arrived through wandePay, plus refunds). Only the second can be paid out. This
+is what stops a wallet persisted under the old free-money seed — or a trader
+running up winnings on house money — from cashing out funds the house never
+received. Wallets persisted before this field existed read `withdrawable` as
+`0.0`, so any legacy seed automatically becomes play-only with no data
+migration.
+
+**Storage lookups.** The account lookup that backs *every* authenticated
+request (resolving the caller by wallet id) uses a PostgREST
+`value->>wallet_id=eq.…` filter, not a full-table read, so
+`schema.sql`'s expression indexes are actually used. `schema.sql` now creates
+`ketsa_users_wallet_id_idx` for that path and makes the `phone` and
+`auth0_sub` indexes **unique** (they were plain indexes, so the uniqueness
+those comments claimed was enforced only in application code and a
+concurrent-registration race could slip past it). Re-run `schema.sql` once —
+it is idempotent and changes no data.
 
 **Known dependency note (PostCSS).** `npm audit` reports a high/moderate
 finding for **postcss bundled inside `next@15.5.x`** (`GHSA-qx2v-qp2m-jg93`).
