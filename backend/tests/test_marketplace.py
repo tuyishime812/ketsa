@@ -16,8 +16,16 @@ def _fresh() -> TestClient:
     return TestClient(create_app())
 
 
-def _wallet(client: TestClient, name="Tester") -> dict:
-    return client.post("/api/wallet", json={"name": name}).json()
+# Test wallets start at the real zero balance (no free mint); trading tests
+# fund them explicitly so order execution can be exercised.
+FUNDS = 1000.0
+
+
+def _wallet(client: TestClient, name="Tester", funds: float = FUNDS) -> dict:
+    w = client.post("/api/wallet", json={"name": name}).json()
+    if funds:
+        engine.credit_balance(w["id"], funds)
+    return client.get(f"/api/wallet/{w['id']}").json()
 
 
 @pytest.fixture()
@@ -29,8 +37,8 @@ def client() -> TestClient:
 
 
 def test_wallet_create_and_reuse(client: TestClient) -> None:
-    w = _wallet(client, "Alice")
-    assert w["balance"] == WALLET_START_BALANCE
+    w = _wallet(client, "Alice", funds=0.0)  # new wallets mint at zero
+    assert w["balance"] == WALLET_START_BALANCE == 0.0
     assert w["currency"] == "MWK"
     assert round(w["equity"], 2) == round(WALLET_START_BALANCE, 2)
     assert w["positions"] == []
@@ -39,6 +47,10 @@ def test_wallet_create_and_reuse(client: TestClient) -> None:
     again = client.post("/api/wallet", json={"id": w["id"], "name": "Bob"}).json()
     assert again["id"] == w["id"]
     assert again["name"] == "Alice"  # existing wallet wins over new name
+    # A client-supplied id for an unknown wallet is ignored — a fresh
+    # server-minted id is returned instead (no id squatting).
+    minted = client.post("/api/wallet", json={"id": "0x0000000000000000000000000000000000000000", "name": "Squatter"}).json()
+    assert minted["id"] != "0x0000000000000000000000000000000000000000"
     fetched = client.get(f"/api/wallet/{w['id']}").json()
     assert fetched["id"] == w["id"]
 
@@ -117,7 +129,7 @@ def test_buy_yes_updates_wallet_and_market(client: TestClient) -> None:
     assert pos["outcome"] == "yes"
     assert pos["shares"] > 0
     wallet_now = client.get(f"/api/wallet/{w['id']}").json()
-    assert wallet_now["balance"] == pytest.approx(WALLET_START_BALANCE - 25.0, abs=0.01)
+    assert wallet_now["balance"] == pytest.approx(FUNDS - 25.0, abs=0.01)
     # Market price moved toward/at the ask, and the tape now has a trade.
     after = client.get("/api/markets/btc-120k").json()
     assert after["yes"] >= before["yes"]
@@ -180,7 +192,7 @@ def test_buy_beyond_balance_rejected(client: TestClient) -> None:
             "market_id": "ai-10t",
             "outcome": "yes",
             "side": "buy",
-            "amount": 50_000.0,  # book depth is deeper, but the wallet has $1k
+            "amount": 50_000.0,  # book depth is deeper, but the wallet has 1,000 MWK funded
         },
     )
     assert res.status_code == 400
@@ -204,7 +216,7 @@ def test_buy_no_then_sell_no(client: TestClient) -> None:
     pos = buy["wallet"]["positions"][0]
     assert pos["outcome"] == "no"
     assert pos["shares"] > 0
-    assert buy["wallet"]["balance"] == pytest.approx(WALLET_START_BALANCE - 30.0, abs=0.01)
+    assert buy["wallet"]["balance"] == pytest.approx(FUNDS - 30.0, abs=0.01)
     shares = pos["shares"]
     sell = client.post(
         "/api/trade",

@@ -141,20 +141,27 @@ With both services running, log in at **`http://localhost:3000/admin`**:
 
 With both services running you can trade each market for real on the site:
 
-- **Play money.** Every visitor gets a simulated wallet seeded with **MK 1,000**
-  (stored in `localStorage`). Click **Connect wallet** in the nav to create one.
+- **Simulated wallet.** Every visitor can create a play wallet (stored in
+  `localStorage`) to explore the order books — but wallets **mint at zero**:
+  no free-money seed. Real funds come from deposits.
 - **Accounts.** Optional email **or phone** accounts (`/api/auth/register`)
   let you keep a name and identifier (email address or Malawian mobile number,
   e.g. `0991 234 567`) on a wallet. The wallet's **equity and positions live on
   the storage backend** and your `Authorization: Bearer` token (30-day sliding)
-  locks the account to its own wallet — trading or paying into another wallet
-  returns `403`. Failed logins are throttled per identifier (`KETSA_AUTH_MAX_FAILURES`
-  / `KETSA_AUTH_LOCKOUT_SECONDS`); you can change your password from the
-  Portfolio ("Account" card), which revokes all other sessions and issues a
-  fresh token.
+  locks the account to its own wallet — account-owned wallets return `401`
+  without your token and `403` to any other account (deposits, withdrawals,
+  ledger reads and trading are all account-scoped). Failed logins are throttled
+  per identifier (`KETSA_AUTH_MAX_FAILURES` / `KETSA_AUTH_LOCKOUT_SECONDS`); you
+  can change your password from the Portfolio ("Account" card), which revokes
+  all other sessions and issues a fresh token.
+  - **Money movement requires an account.** Deposits and withdrawals are only
+    accepted for the authenticated account's own wallet, with per-transaction
+    and daily caps (`KETSA_MAX_DEPOSIT_MWK`, `KETSA_MAX_WITHDRAWAL_MWK`,
+    `KETSA_DAILY_WITHDRAWAL_LIMIT_MWK`). Withdrawals fail if the wallet has no
+    real, deposited balance.
   - **Email signups are verified.** With Resend configured, an email
     registration returns a pending state and emails a 6-digit code — the
-    account (and its seeded wallet) is only created once the code is entered,
+    account (and its wallet) is only created once the code is entered,
     so plaintext addresses can't be squatted. Resend also powers
     **forgot-password**: enter the account email, enter the emailed code plus
     a new password, and all existing sessions are revoked. Phone-only accounts

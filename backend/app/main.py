@@ -22,13 +22,14 @@ import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from . import payments as wande
 from . import store
 from .admin import MessageResponse, require_admin, router as admin_router
-from .auth import resolve_optional_user, router as auth_router
+from .auth import require_user, resolve_optional_user, router as auth_router
 from .config import load_env_file
 from .engine import engine
 from .storage import get_all_settings, init_db
@@ -60,6 +61,14 @@ from .models import (
 )
 
 CATEGORIES = ['politics', 'crypto', 'sports', 'culture', 'tech', 'climate']
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name, "").strip()
+    try:
+        return float(raw) if raw else default
+    except ValueError:
+        return default
 
 
 class ConnectionManager:
@@ -207,6 +216,14 @@ def create_app() -> "FastAPI":
     expose_docs = os.getenv("KETSA_EXPOSE_DOCS", "0").lower() in ("1", "true", "yes")
     rate_limit_per_min = int(os.getenv("KETSA_RATE_LIMIT_PER_MIN", "120"))
     limiter = _RateLimiter(rate_limit_per_min)
+    # Write endpoints (wallet mints, trades, payments) get a much stricter
+    # per-IP budget on top of the global limiter (F-07 hardening).
+    write_rate_limit_per_min = int(os.getenv("KETSA_WRITE_RATE_LIMIT_PER_MIN", "30"))
+    write_limiter = _RateLimiter(write_rate_limit_per_min)
+    # Money-movement caps (MWK) — env-tunable, sane-bounded by default (F-05).
+    max_deposit_mwk = _env_float("KETSA_MAX_DEPOSIT_MWK", 1_000_000.0)
+    max_withdrawal_mwk = _env_float("KETSA_MAX_WITHDRAWAL_MWK", 1_000_000.0)
+    daily_withdrawal_limit_mwk = _env_float("KETSA_DAILY_WITHDRAWAL_LIMIT_MWK", 3_000_000.0)
     manager = ConnectionManager()
 
     async def _tick_loop() -> None:
@@ -267,6 +284,25 @@ def create_app() -> "FastAPI":
     app.include_router(admin_router)
     app.include_router(auth_router)
 
+    @app.exception_handler(RequestValidationError)
+    async def _validation_error_handler(request: Request, exc: RequestValidationError):
+        """Sanitized 422s: never echo raw input values back.
+
+        Raw echo is how NaN/Infinity (or hostile strings) leak into error
+        responses — Python's JSON encoder refuses NaN, so a rejection of
+        ``{"amount": NaN}`` would otherwise crash the error path itself.
+        """
+        if not (request.url.path.endswith("/payments/deposits")
+                or request.url.path.endswith("/payments/withdrawals")
+                or request.url.path.endswith("/trade")):
+            # Default FastAPI validation errors everywhere else.
+            return JSONResponse(status_code=422, content={"detail": exc.errors()})
+        messages = []
+        for err in exc.errors():
+            loc = ".".join(str(p) for p in err.get("loc", []) if p != "body")
+            messages.append(f"{loc}: {err.get('msg', 'invalid')}" if loc else str(err.get("msg", "invalid")))
+        return JSONResponse(status_code=422, content={"detail": messages})
+
     @app.get("/api/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
@@ -300,11 +336,23 @@ def create_app() -> "FastAPI":
     # --- Simulated wallet / trading --------------------------------------
 
     @app.post("/api/wallet", response_model=Wallet)
-    async def connect_wallet(body: WalletConnectRequest) -> Wallet:
-        return Wallet(**engine.connect_wallet(body.id, body.name))
+    async def connect_wallet(
+        body: WalletConnectRequest,
+        request: Request,
+        authorization: str | None = Header(default=None),
+    ) -> Wallet:
+        _require_write_capacity(request)
+        w = engine.connect_wallet(body.id, body.name)
+        # Restoring an existing wallet by id is account-gated (F-02): an
+        # account-owned wallet can only be re-connected by its owner.
+        _gate_wallet(authorization, w["id"])
+        return Wallet(**w)
 
     @app.get("/api/wallet/{wallet_id}", response_model=Wallet)
-    async def get_wallet(wallet_id: str) -> Wallet:
+    async def get_wallet(
+        wallet_id: str, authorization: str | None = Header(default=None)
+    ) -> Wallet:
+        _gate_wallet(authorization, wallet_id)
         w = engine.wallet_view(wallet_id)
         if w is None:
             raise HTTPException(status_code=404, detail="Wallet not found")
@@ -313,7 +361,10 @@ def create_app() -> "FastAPI":
     # --- Real-money payments (wandePay — MWK) -------------------------------
 
     _TERMINAL_FAIL = ("FAILED", "DECLINED", "REVERSED", "CANCELLED", "ERROR")
-    _money_lock = asyncio.Lock()
+    # Serializes every balance-mutating operation (trades, deposits, credits,
+    # withdrawal debits/refunds, resolution settlements) so concurrent requests
+    # can never double-credit, double-claim or race a refund against a spend.
+    _engine_lock = asyncio.Lock()
 
     def _require_payments() -> None:
         if not wande.configured():
@@ -323,16 +374,32 @@ def create_app() -> "FastAPI":
         if engine.wallet_view(wallet_id) is None:
             raise HTTPException(status_code=404, detail="Wallet not found")
 
-    def _gate_wallet_owner(authorization: str | None, wallet_id: str) -> None:
-        """Account-owned wallets require the owning user's bearer token.
+    def _require_write_capacity(request: Request) -> None:
+        client = request.client.host if request.client else "unknown"
+        if not write_limiter.allow(client):
+            raise HTTPException(status_code=429, detail="Too many requests. Please slow down.")
 
-        Guests (no Authorization header) keep the simulated-wallet flow as-is.
-        A supplied but invalid token raises 401; a token for a different
-        account raises 403 so account wallets can't be drained by anyone who
-        guesses/leaks the wallet id.
+    def _gate_wallet(authorization: str | None, wallet_id: str) -> None:
+        """Account-owned wallets are readable/usable only by their owner.
+
+        Guests (no Authorization header) may keep using *unclaimed* simulated
+        wallets — ids are server-minted and unguessable, and with the zero
+        seed they hold no real funds. A supplied but invalid token raises
+        401; a token for a different account raises 403, so account wallets
+        can't be dumped, traded or drained by anyone who guesses/leaks an id.
         """
         user = resolve_optional_user(authorization)
-        if user is not None and user["wallet_id"] != wallet_id:
+        owner = store.get_user_by_wallet_id(wallet_id)
+        if owner is None:
+            return  # unclaimed sim wallet — open to whoever holds its id
+        if user is None:
+            raise HTTPException(status_code=401, detail="This wallet belongs to an account. Please log in.")
+        if user["wallet_id"] != wallet_id:
+            raise HTTPException(status_code=403, detail="This wallet belongs to another account")
+
+    def _require_own_wallet(user: dict, wallet_id: str) -> None:
+        """Money endpoints require an authenticated account and its wallet."""
+        if user["wallet_id"] != wallet_id:
             raise HTTPException(status_code=403, detail="This wallet belongs to another account")
 
     def _payment_payload(rec: dict) -> dict:
@@ -340,11 +407,15 @@ def create_app() -> "FastAPI":
 
     @app.post("/api/payments/deposits", response_model=Payment)
     async def create_deposit(
-        body: DepositRequest, authorization: str | None = Header(default=None)
+        body: DepositRequest,
+        request: Request,
+        authorization: str | None = Header(default=None),
     ) -> Payment:
         _require_payments()
+        _require_write_capacity(request)
+        user = require_user(authorization)
         _require_wallet(body.wallet_id)
-        _gate_wallet_owner(authorization, body.wallet_id)
+        _require_own_wallet(user, body.wallet_id)
         try:
             number = wande.normalize_number(body.number)
         except wande.WandeError as e:
@@ -353,6 +424,13 @@ def create_app() -> "FastAPI":
             raise HTTPException(status_code=400, detail="Unknown correspondent")
         if body.amount < wande.MIN_AMOUNT_MWK:
             raise HTTPException(status_code=400, detail=f"Minimum deposit is {int(wande.MIN_AMOUNT_MWK)} MWK")
+        if not round(float(body.amount), 2) == float(body.amount):
+            raise HTTPException(status_code=400, detail="Amount must have at most 2 decimal places")
+        if body.amount > max_deposit_mwk:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Deposits are capped at {max_deposit_mwk:g} MWK per transaction",
+            )
         try:
             payload = await asyncio.to_thread(
                 wande.create_deposit, body.amount, number, body.correspondent
@@ -382,17 +460,31 @@ def create_app() -> "FastAPI":
         return _payment_payload(record)
 
     @app.get("/api/payments", response_model=list[Payment])
-    async def list_payments(wallet_id: str | None = None) -> list[Payment]:
-        return [_payment_payload(p) for p in store.list_payments(wallet_id)]
+    async def list_payments(
+        wallet_id: str | None = None,
+        authorization: str | None = Header(default=None),
+    ) -> list[Payment]:
+        # A user can only ever see their own wallet's money movement — the
+        # unauthenticated cross-wallet ledger dump is closed (F-02).
+        user = require_user(authorization)
+        own = user["wallet_id"]
+        if wallet_id is not None and wallet_id != own:
+            raise HTTPException(status_code=403, detail="This wallet belongs to another account")
+        return [_payment_payload(p) for p in store.list_payments(own)]
 
     @app.get("/api/payments/{payment_id}", response_model=Payment)
-    async def payment_status(payment_id: str) -> Payment:
+    async def payment_status(
+        payment_id: str, authorization: str | None = Header(default=None)
+    ) -> Payment:
         _require_payments()
+        user = require_user(authorization)
         rec = store.get_payment(payment_id)
         if rec is None:
             raise HTTPException(status_code=404, detail="Payment not found")
+        if rec["wallet_id"] != user["wallet_id"]:
+            raise HTTPException(status_code=403, detail="This payment belongs to another account")
 
-        async with _money_lock:
+        async with _engine_lock:
             rec = store.get_payment(payment_id)  # re-read inside lock
             if rec["status"] != "pending":
                 return _payment_payload(rec)
@@ -460,11 +552,15 @@ def create_app() -> "FastAPI":
 
     @app.post("/api/payments/withdrawals", response_model=Payment)
     async def create_withdrawal(
-        body: WithdrawalRequest, authorization: str | None = Header(default=None)
+        body: WithdrawalRequest,
+        request: Request,
+        authorization: str | None = Header(default=None),
     ) -> Payment:
         _require_payments()
+        _require_write_capacity(request)
+        user = require_user(authorization)  # guests can no longer move money out (F-03)
         _require_wallet(body.wallet_id)
-        _gate_wallet_owner(authorization, body.wallet_id)
+        _require_own_wallet(user, body.wallet_id)
         try:
             number = wande.normalize_number(body.number)
         except wande.WandeError as e:
@@ -473,63 +569,85 @@ def create_app() -> "FastAPI":
             raise HTTPException(status_code=400, detail="Unknown correspondent")
         if body.amount < wande.MIN_AMOUNT_MWK:
             raise HTTPException(status_code=400, detail=f"Minimum withdrawal is {int(wande.MIN_AMOUNT_MWK)} MWK")
-        try:
-            engine.debit_balance(body.wallet_id, body.amount)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-        try:
-            payload = await asyncio.to_thread(
-                wande.create_withdrawal, body.amount, number, body.correspondent
+        if body.amount > max_withdrawal_mwk:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Withdrawals are capped at {max_withdrawal_mwk:g} MWK per transaction",
             )
-        except wande.WandeError as e:
-            engine.credit_balance(body.wallet_id, body.amount)
-            raise HTTPException(status_code=502, detail=str(e))
-        payout = (payload.get("data") or {})
-        payout_id = payout.get("payoutId")
-        if not payout_id:
-            engine.credit_balance(body.wallet_id, body.amount)
-            raise HTTPException(status_code=502, detail="wandePay did not return a payout id")
-        now = time.time()
-        record = {
-            "id": uuid.uuid4().hex,
-            "wallet_id": body.wallet_id,
-            "kind": "withdraw",
-            "amount": round(float(body.amount), 2),
-            "number": number,
-            "correspondent": body.correspondent,
-            "status": "pending",
-            "credited": False,
-            "rolled_back": False,
-            "wande_id": str(payout_id),
-            "message": payload.get("message"),
-            "created": now,
-            "updated": now,
-        }
-        store.upsert_payment(record)
-        engine.notify(
-            record["wallet_id"],
-            "withdraw",
-            "Withdrawal initiated",
-            f"{record['amount']:.2f} MWK is being sent to {number}.",
+        if not round(float(body.amount), 2) == float(body.amount):
+            raise HTTPException(status_code=400, detail="Amount must have at most 2 decimal places")
+        recent = sum(
+            p["amount"]
+            for p in store.list_payments(body.wallet_id)
+            if p["kind"] == "withdraw" and p["created"] >= time.time() - 86400
         )
-        return _payment_payload(record)
+        if recent + body.amount > daily_withdrawal_limit_mwk:
+            raise HTTPException(
+                status_code=400,
+                detail="Daily withdrawal limit reached for this wallet",
+            )
+        async with _engine_lock:
+            try:
+                engine.debit_balance(body.wallet_id, body.amount)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            try:
+                payload = await asyncio.to_thread(
+                    wande.create_withdrawal, body.amount, number, body.correspondent
+                )
+            except wande.WandeError as e:
+                engine.credit_balance(body.wallet_id, body.amount)
+                raise HTTPException(status_code=502, detail=str(e))
+            payout = (payload.get("data") or {})
+            payout_id = payout.get("payoutId")
+            if not payout_id:
+                engine.credit_balance(body.wallet_id, body.amount)
+                raise HTTPException(status_code=502, detail="wandePay did not return a payout id")
+            now = time.time()
+            record = {
+                "id": uuid.uuid4().hex,
+                "wallet_id": body.wallet_id,
+                "kind": "withdraw",
+                "amount": round(float(body.amount), 2),
+                "number": number,
+                "correspondent": body.correspondent,
+                "status": "pending",
+                "credited": False,
+                "rolled_back": False,
+                "wande_id": str(payout_id),
+                "message": payload.get("message"),
+                "created": now,
+                "updated": now,
+            }
+            store.upsert_payment(record)
+            engine.notify(
+                record["wallet_id"],
+                "withdraw",
+                "Withdrawal initiated",
+                f"{record['amount']:.2f} MWK is being sent to {number}.",
+            )
+            return _payment_payload(record)
 
     @app.post("/api/trade", response_model=TradeResponse)
     async def place_trade(
-        body: TradeRequest, authorization: str | None = Header(default=None)
+        body: TradeRequest,
+        request: Request,
+        authorization: str | None = Header(default=None),
     ) -> TradeResponse:
-        _gate_wallet_owner(authorization, body.wallet_id)
-        try:
-            result = engine.place_trade(
-                body.wallet_id,
-                body.market_id,
-                body.outcome,
-                body.side,
-                amount=body.amount,
-                shares=body.shares,
-            )
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+        _require_write_capacity(request)
+        _gate_wallet(authorization, body.wallet_id)
+        async with _engine_lock:
+            try:
+                result = engine.place_trade(
+                    body.wallet_id,
+                    body.market_id,
+                    body.outcome,
+                    body.side,
+                    amount=body.amount,
+                    shares=body.shares,
+                )
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
         await _pump_events(manager)
         return TradeResponse(**result)
 
@@ -541,10 +659,11 @@ def create_app() -> "FastAPI":
     async def admin_markets_resolve(
         market_id: str, body: ResolveMarketRequest
     ) -> MessageResponse:
-        try:
-            summary = engine.resolve_market(market_id, body.outcome)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+        async with _engine_lock:
+            try:
+                summary = engine.resolve_market(market_id, body.outcome)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
         await _pump_events(manager)
         detail = (
             f"Resolved {market_id} → {body.outcome.upper()} at "
@@ -564,14 +683,24 @@ def create_app() -> "FastAPI":
     # --- In-app notifications ---------------------------------------------
 
     @app.get("/api/wallet/{wallet_id}/notifications", response_model=list[Notification])
-    async def wallet_notifications(wallet_id: str, limit: int = 25) -> list[Notification]:
+    async def wallet_notifications(
+        wallet_id: str,
+        limit: int = 25,
+        authorization: str | None = Header(default=None),
+    ) -> list[Notification]:
+        _gate_wallet(authorization, wallet_id)
         if engine.wallet_view(wallet_id) is None:
             raise HTTPException(status_code=404, detail="Wallet not found")
         items = store.list_notifications(wallet_id, max(1, min(limit, 100)))
         return [Notification(**n) for n in items]
 
     @app.post("/api/wallet/{wallet_id}/notifications/read", response_model=dict)
-    async def wallet_notifications_read(wallet_id: str, body: MarkReadRequest) -> dict:
+    async def wallet_notifications_read(
+        wallet_id: str,
+        body: MarkReadRequest,
+        authorization: str | None = Header(default=None),
+    ) -> dict:
+        _gate_wallet(authorization, wallet_id)
         if engine.wallet_view(wallet_id) is None:
             raise HTTPException(status_code=404, detail="Wallet not found")
         marked = store.mark_notifications_read(wallet_id, body.ids or None)

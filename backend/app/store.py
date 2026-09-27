@@ -108,6 +108,10 @@ def get_user_by_auth0_sub(sub: str) -> dict | None:
     return get_backend().get_user_by_auth0_sub(sub)
 
 
+def get_user_by_wallet_id(wallet_id: str) -> dict | None:
+    return get_backend().get_user_by_wallet_id(wallet_id)
+
+
 def upsert_user(user: dict) -> None:
     get_backend().upsert_user(user)
 

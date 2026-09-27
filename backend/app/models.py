@@ -5,9 +5,10 @@ Next.js frontend consumes. Keep field names/types in sync with
 `frontend/lib/types.ts`.
 """
 
+import math
 from typing import List, Literal, Optional, Tuple
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 Category = Literal['politics', 'crypto', 'sports', 'culture', 'tech', 'climate']
 Trend = Literal['up', 'down']
@@ -161,6 +162,15 @@ class TradeRequest(BaseModel):
     amount: Optional[float] = None  # dollars — required for buys
     shares: Optional[float] = None  # shares — required for sells
 
+    @field_validator("amount", "shares")
+    @classmethod
+    def _finite_positive(cls, v: Optional[float], info) -> Optional[float]:
+        # JSON parsers accept NaN/Infinity literals; money math must never
+        # receive them (false balance checks, poisoned ledgers).
+        if v is not None and (not math.isfinite(v) or v <= 0):
+            raise ValueError(f"{info.field_name} must be a finite, positive number")
+        return v
+
 
 class TradeResponse(BaseModel):
     wallet: Wallet
@@ -242,12 +252,26 @@ class DepositRequest(BaseModel):
     number: str
     correspondent: str  # AIRTEL_MWI | TNM_MWI
 
+    @field_validator("amount")
+    @classmethod
+    def _finite_positive(cls, v: float) -> float:
+        if not math.isfinite(v) or v <= 0:
+            raise ValueError("amount must be a finite, positive number")
+        return v
+
 
 class WithdrawalRequest(BaseModel):
     wallet_id: str
     amount: float
     number: str
     correspondent: str  # AIRTEL_MWI | TNM_MWI
+
+    @field_validator("amount")
+    @classmethod
+    def _finite_positive(cls, v: float) -> float:
+        if not math.isfinite(v) or v <= 0:
+            raise ValueError("amount must be a finite, positive number")
+        return v
 
 
 class Payment(BaseModel):

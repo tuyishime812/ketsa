@@ -11,6 +11,7 @@ Auth is intentionally lightweight and mirrors the admin gate in `admin.py`:
     existing simulated-wallet experience and the account flow share one engine.
 """
 
+import asyncio
 import hashlib
 import os
 import re
@@ -290,8 +291,8 @@ def _create_account(*, identifier: str, email: str, phone: str, name: str, passw
         wallet["id"],
         "system",
         "Welcome to Ketsa",
-        f"Your account is live with {wallet['balance']:.0f} {wallet['currency']}. "
-        "Trade a market to get started.",
+        "Your account is ready. Deposit via mobile money (wandePay) to fund "
+        "your wallet, then trade any open market.",
     )
     return user
 
@@ -412,8 +413,8 @@ async def register(
         email, phone = identifier, ""
         if store.get_user_by_email(email):
             raise HTTPException(status_code=409, detail="An account with this email already exists")
-        # Proof-of-inbox first: no account, no wallet (no 1,000 MWK mint) until
-        # the emailed code comes back. Pending signups expire with the OTP.
+        # Proof-of-inbox first: no account, no wallet until the emailed code
+        # comes back. Pending signups expire with the OTP.
         try:
             code = _issue_otp(
                 f"signup:{email}",
@@ -697,14 +698,17 @@ async def social_login_callback(
     if not code:
         raise HTTPException(status_code=400, detail="Missing authorization code")
     try:
-        tokens = social.exchange_code(code)
+        # Auth0 exchange + JWKS fetch + verification are blocking network
+        # calls — run them off the event loop so one slow Google response
+        # can't stall every request on this process (F-08).
+        tokens = await asyncio.to_thread(social.exchange_code, code)
     except social.SocialError as e:
         raise HTTPException(status_code=502, detail=str(e))
     id_token = tokens.get("id_token")
     if not id_token:
         raise HTTPException(status_code=502, detail="Auth0 did not return an id token")
     try:
-        claims = social.verify_id_token(id_token, nonce)
+        claims = await asyncio.to_thread(social.verify_id_token, id_token, nonce)
     except social.SocialError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

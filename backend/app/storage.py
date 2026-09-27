@@ -208,6 +208,7 @@ class StoreBackend(Protocol):
     def get_user_by_email(self, email: str) -> dict | None: ...
     def get_user_by_phone(self, phone: str) -> dict | None: ...
     def get_user_by_auth0_sub(self, sub: str) -> dict | None: ...
+    def get_user_by_wallet_id(self, wallet_id: str) -> dict | None: ...
     def upsert_user(self, user: dict) -> None: ...
     def list_users(self) -> list[dict]: ...
     def delete_user(self, user_id: str) -> bool: ...
@@ -411,6 +412,15 @@ class MemoryBackend:
         needle = "".join(phone.split()).lstrip("0")
         for u in self._users.values():
             if u.get("phone", "").lstrip("0") == needle:
+                return copy.deepcopy(u)
+        return None
+
+    def get_user_by_wallet_id(self, wallet_id: str) -> dict | None:
+        self.init()
+        if not wallet_id:
+            return None
+        for u in self._users.values():
+            if u.get("wallet_id") == wallet_id:
                 return copy.deepcopy(u)
         return None
 
@@ -764,6 +774,15 @@ class SupabaseBackend:
         needle = "".join(phone.split()).lstrip("0")
         for u in self._list_rows(USERS_TABLE):
             if (u.get("phone") or "").lstrip("0") == needle:
+                return u
+        return None
+
+    def get_user_by_wallet_id(self, wallet_id: str) -> dict | None:
+        self.init()
+        if not wallet_id:
+            return None
+        for u in self._list_rows(USERS_TABLE):
+            if u.get("wallet_id") == wallet_id:
                 return u
         return None
 

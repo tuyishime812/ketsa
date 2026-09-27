@@ -5,11 +5,17 @@ push."""
 import pytest
 from fastapi.testclient import TestClient
 
-from app.engine import engine, WALLET_START_BALANCE
+from app.engine import engine
 
 
-def _wallet(client: TestClient, name="Tester") -> dict:
-    return client.post("/api/wallet", json={"name": name}).json()
+FUNDS = 1000.0  # explicit test funding — real wallets mint at zero
+
+
+def _wallet(client: TestClient, name="Tester", funds: float = FUNDS) -> dict:
+    w = client.post("/api/wallet", json={"name": name}).json()
+    if funds:
+        engine.credit_balance(w["id"], funds)
+    return client.get(f"/api/wallet/{w['id']}").json()
 
 
 def _buy(client: TestClient, wallet_id: str, market_id: str, outcome: str,
@@ -46,7 +52,7 @@ def test_resolve_yes_pays_winners_and_clears_positions(client: TestClient) -> No
     assert result["total_payout"] == pytest.approx(shares, abs=0.01)
 
     wallet = client.get(f"/api/wallet/{w['id']}").json()
-    assert wallet["balance"] == pytest.approx(WALLET_START_BALANCE - 40.0 + shares, abs=0.01)
+    assert wallet["balance"] == pytest.approx(FUNDS - 40.0 + shares, abs=0.01)
     assert all(p["market_id"] != "nova-finals" for p in wallet["positions"])
     res_entries = [h for h in wallet["history"] if h.get("kind") == "resolution"]
     assert len(res_entries) == 1
@@ -68,7 +74,7 @@ def test_resolve_no_pays_no_holders_and_writes_loss_for_yes(client: TestClient) 
     assert result["wallets_settled"] == 2
 
     wallet = client.get(f"/api/wallet/{w['id']}").json()
-    assert wallet["balance"] == pytest.approx(WALLET_START_BALANCE - 30.0 + shares, abs=0.01)
+    assert wallet["balance"] == pytest.approx(FUNDS - 30.0 + shares, abs=0.01)
     assert all(p["market_id"] != "fed-cuts" for p in wallet["positions"])
     entry = [h for h in wallet["history"] if h.get("kind") == "resolution"][0]
     assert entry["price"] == 100  # NO became worth 100¢
@@ -76,7 +82,7 @@ def test_resolve_no_pays_no_holders_and_writes_loss_for_yes(client: TestClient) 
     # A YES holder loses: no payout, position zeroed, and a 0¢ resolution
     # entry is recorded so the ledger stays complete.
     wallet2 = client.get(f"/api/wallet/{w2['id']}").json()
-    assert wallet2["balance"] == pytest.approx(WALLET_START_BALANCE - 25.0, abs=0.01)
+    assert wallet2["balance"] == pytest.approx(FUNDS - 25.0, abs=0.01)
     assert all(p["market_id"] != "fed-cuts" for p in wallet2["positions"])
     loss = [h for h in wallet2["history"] if h.get("kind") == "resolution"][0]
     assert loss["price"] == 0

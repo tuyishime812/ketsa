@@ -31,7 +31,7 @@ from . import store
 CENTS_MIN = 1
 CENTS_MAX = 99
 MAX_PTS = 48
-WALLET_START_BALANCE = 1000.0
+WALLET_START_BALANCE = 0.0  # no free money: real funds come from deposits only
 WALLET_CURRENCY = "MWK"
 BOOK_DEPTH = 5
 MIN_LIQUIDITY = 200.0
@@ -509,16 +509,28 @@ class Marketplace:
         self._emit(payload)
 
     def connect_wallet(self, wallet_id: str | None = None, name: str = "Trader") -> dict:
-        wallet_id = (wallet_id or "").strip() or ("0x" + secrets.token_hex(20))
-        if wallet_id in self._wallets:
-            return self.wallet_view(wallet_id)
-        persisted = store.get_wallet(wallet_id)
-        if persisted is not None:
-            # Restore a funded wallet (e.g. after a backend restart).
-            self._wallets[wallet_id] = persisted
-            return self.wallet_view(wallet_id)
-        self._wallets[wallet_id] = {
-            "id": wallet_id,
+        """Get-or-create a wallet; ids are always server-minted.
+
+        A caller-supplied ``wallet_id`` is honored *only* as a restore key for
+        a wallet that already exists (server-minted in the past, e.g. surviving
+        a backend restart). If no such wallet exists the id is ignored and a
+        fresh, unguessable id is minted — a client can never choose the id of a
+        wallet, so squatting/forging another user's wallet is impossible.
+        """
+        request_id = (wallet_id or "").strip()
+        if request_id:
+            existing = self._wallets.get(request_id)
+            if existing is not None:
+                return self.wallet_view(request_id)
+            persisted = store.get_wallet(request_id)
+            if persisted is not None:
+                # Restore a persisting wallet (e.g. after a backend restart).
+                self._wallets[request_id] = persisted
+                return self.wallet_view(request_id)
+        # Mint a fresh wallet at a server-chosen id (no client influence).
+        fresh_id = "0x" + secrets.token_hex(20)
+        self._wallets[fresh_id] = {
+            "id": fresh_id,
             "name": (name or "Trader").strip() or "Trader",
             "balance": WALLET_START_BALANCE,
             "realized": 0.0,
@@ -526,8 +538,8 @@ class Marketplace:
             "history": [],
             "created": time.time(),
         }
-        self._persist(wallet_id)
-        return self.wallet_view(wallet_id)
+        self._persist(fresh_id)
+        return self.wallet_view(fresh_id)
 
     def credit_balance(self, wallet_id: str, amount: float) -> None:
         """Add funds to a wallet's available balance (e.g. a completed deposit).

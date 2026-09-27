@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import auth as auth_mod
+from app.engine import engine
 from conftest import register_user
 
 
@@ -21,7 +22,7 @@ def test_register_creates_account_and_wallet(client: TestClient) -> None:
     assert body["user"]["email"] == "alice@ketsa.io"
     assert "wallet_id" in body["user"]
     assert body["wallet"]["id"] == body["user"]["wallet_id"]
-    assert body["wallet"]["balance"] > 0
+    assert body["wallet"]["balance"] == 0.0  # no free money — deposits fund wallets
 
 
 def test_register_validation(client: TestClient) -> None:
@@ -109,7 +110,8 @@ def test_logout_invalidates_session(client: TestClient) -> None:
 def test_register_creates_welcome_notification(client: TestClient) -> None:
     reg = _register(client)
     wid = reg["wallet"]["id"]
-    notes = client.get(f"/api/wallet/{wid}/notifications").json()
+    headers = {"Authorization": f"Bearer {reg['token']}"}
+    notes = client.get(f"/api/wallet/{wid}/notifications", headers=headers).json()
     assert len(notes) >= 1
     assert notes[0]["type"] == "system"
     assert "Welcome" in notes[0]["title"]
@@ -193,6 +195,7 @@ def _create_guest_wallet(client: TestClient) -> str:
 
 def test_guest_trade_without_token(client: TestClient) -> None:
     wid = _create_guest_wallet(client)
+    engine.credit_balance(wid, 1000.0)  # no free mint — fund for the test
     resp = client.post(
         "/api/trade",
         json={"wallet_id": wid, "market_id": "btc-120k", "outcome": "yes", "side": "buy", "amount": 25.0},
@@ -202,6 +205,7 @@ def test_guest_trade_without_token(client: TestClient) -> None:
 
 def test_account_trade_with_own_token(client: TestClient) -> None:
     reg = _register(client, email="gate@ketsa.io")
+    engine.credit_balance(reg["wallet"]["id"], 1000.0)  # no free mint — fund for the test
     resp = client.post(
         "/api/trade",
         json={
@@ -395,12 +399,12 @@ def test_email_signup_waits_for_otp(client: TestClient) -> None:
     # Wrong code rejected.
     assert _verify(client, email, "000000").status_code == 401
 
-    # Correct code completes the signup with a funded wallet.
+    # Correct code completes the signup with a wallet (zero-funded — no mint).
     res = _verify(client, email, code)
     assert res.status_code == 200, res.text
     assert res.json()["user"]["id"] == email
     assert res.json()["user"]["email"] == email
-    assert res.json()["wallet"]["balance"] > 0
+    assert res.json()["wallet"]["balance"] == 0.0
 
     # The code is single-use — and the account now exists, so the verify
     # route answers 409 (account exists) before it would even look at the code.

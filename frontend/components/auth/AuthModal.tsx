@@ -385,7 +385,7 @@ export default function AuthModal({
             </h2>
             <ul className="mt-6 space-y-3 text-[13px] text-white/70">
               {[
-                'Start with a play wallet funded with MK 1,000',
+                'Create an account and fund your wallet with real MWK via wandePay',
                 'Buy Yes or No and cash out the instant odds move',
                 'Top up with real money through wandePay',
               ].map((t) => (

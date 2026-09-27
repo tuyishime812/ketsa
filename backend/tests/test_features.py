@@ -2,6 +2,7 @@
 
 from fastapi.testclient import TestClient
 
+from app.engine import engine
 from conftest import register_user
 
 
@@ -39,10 +40,13 @@ def test_leaderboard_respects_limit(client: TestClient) -> None:
     assert len(rows) == 2
 
 
-def _create_guest(client: TestClient, name: str) -> dict:
+def _create_guest(client: TestClient, name: str, funds: float = 1000.0) -> dict:
     resp = client.post("/api/wallet", json={"name": name})
     assert resp.status_code == 200
-    return resp.json()
+    w = resp.json()
+    if funds:
+        engine.credit_balance(w["id"], funds)  # test-only funding (no free mint)
+    return w
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +121,8 @@ def test_admin_users_list(client: TestClient) -> None:
 
     row = next(r for r in rows if r["email"] == "adminview@ketsa.io")
     assert row["name"] == "Alice Trader"
-    assert row["wallet_equity"] and row["wallet_equity"] > 0
+    assert row["wallet_equity"] is not None
+    assert row["wallet_equity"] >= 0
     assert row["positions"] >= 0
 
 
