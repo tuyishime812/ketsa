@@ -85,6 +85,24 @@ The admin "reset content" endpoint re-seeds both backends to the original data
 > FastAPI backend (port 8000) and the Next.js frontend (port 3000) together,
 > so the site runs on the live demo data served by the API — no need to start
 > two terminals. Ctrl+C stops both.
+>
+> **If either port is already taken** (another project, a stray process), move
+> them — the launcher pins everything downstream, so nothing else needs editing:
+>
+> ```bash
+> KETSA_API_PORT=8001 KETSA_WEB_PORT=3001 npm run dev     # macOS/Linux
+> $env:KETSA_API_PORT=8001; $env:KETSA_WEB_PORT=3001; npm run dev   # PowerShell
+> ```
+>
+> `KETSA_API_PORT` and `KETSA_WEB_PORT` feed the `/api/*` rewrite, the
+> WebSocket origin, **and** the backend's own `KETSA_PUBLIC_BASE_URL` /
+> `KETSA_FRONTEND_URL`. That last part matters for social login: Auth0
+> redirects the browser back to `<public base>/api/auth/social/callback`, so
+> if you move the API port you **must** add the new callback URL to the Auth0
+> application's *Allowed Callback URLs* or Google login fails on the last hop.
+> The launcher prints the exact URL it expects when the ports are non-default.
+> It does not print it for the defaults, where it is
+> `http://127.0.0.1:8000/api/auth/social/callback`.
 
 ### 1. Backend (FastAPI)
 
@@ -109,7 +127,16 @@ npm run dev
 ```
 
 Open `http://localhost:3000`. The `/api/*` rewrite talks to the backend on
-`127.0.0.1:8000` by default (override with `KETSA_BACKEND_URL`).
+`127.0.0.1:8000` by default (override with `KETSA_BACKEND_URL`, or use the
+one-command launcher above if the ports are taken).
+
+Note that only `NEXT_PUBLIC_*` variables are inlined into the client bundle.
+`lib/api.ts` reads `KETSA_BACKEND_URL` for **server-side** fetches, which is
+correct — the same-origin `AUTH_BASE = '/api/auth'` rewrite carries every auth
+and social-login call, so those never depend on a bundled backend URL. The
+WebSocket origin (`lib/push.ts`, `components/market/MarketFeed.tsx`) does read
+`NEXT_PUBLIC_KETSA_BACKEND_URL` in the browser, so that one is set for both
+services by the launcher.
 
 ### 3. Admin panel
 
@@ -271,6 +298,8 @@ and wired through `docker-compose.yml`.
 | `KETSA_ADMIN_LOCKOUT_SECONDS` | backend  | Admin lockout window after too many failures         | `900` |
 | `KETSA_BACKEND_URL`          | frontend  | Base URL of the FastAPI service (server-side fetch)  | `http://127.0.0.1:8000` |
 | `NEXT_PUBLIC_KETSA_BACKEND_URL` | frontend | Public backend origin embedded in the client bundle (WebSocket feed) | `http://127.0.0.1:8000` |
+| `KETSA_API_PORT`             | dev only  | Port `npm run dev` gives the FastAPI backend; also pins the backend's `KETSA_PUBLIC_BASE_URL` | `8000` |
+| `KETSA_WEB_PORT`             | dev only  | Port `npm run dev` gives Next.js; also pins the backend's `KETSA_FRONTEND_URL` | `3000` |
 | `KETSA_CSP`                  | frontend  | Optional override for the emitted CSP header         | built-in policy |
 | `KETSA_ADMIN_PASSWORD`       | backend   | Password for the `/admin` panel (the only auth key)  | `ketsa-admin` |
 | `KETSA_DB_BACKEND`           | backend   | Storage backend: `memory` (default) or `supabase`   | `memory` |
