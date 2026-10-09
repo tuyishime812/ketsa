@@ -185,15 +185,20 @@ protected `/api/admin/*` through the same-origin `/api` path.
    you'll get the dashboard with a sidebar of editors. Changes save
    immediately and appear on the public site.
 
-> **Note on the dev rewrite vs. production.** In local dev, `next.config.js`
-> rewrites `/api/*` → the backend so the browser calls it same-origin. In
-> **production**, the public page fetches the backend **server-side** directly
-> (see "How data gets from backend → page"), so `/admin` uses the frontend's
-> own `/api` path which Vercel routes as a serverless function that proxies to
-> `KETSA_BACKEND_URL`. Because the admin API is same-origin to the frontend,
-> the backend's CORS allowlist does not need to grant the admin origin, and the
-> CSP header (`default-src 'self'`) already permits `/api` calls. Admin
-> requests still require the bearer token from login.
+> **How the browser reaches the API.** Every browser-side call — auth
+> (`/api/auth/*`), admin (`/api/admin/*`), wallet, trades, payments and
+> notifications — is same-origin to the frontend and handled by a **runtime
+> catch-all proxy** at `app/api/[...path]/route.ts`, which forwards to
+> `KETSA_BACKEND_URL` read at **request** time. Because the proxy runs
+> server-side and same-origin, the backend's CORS allowlist does not need to
+> grant the frontend origin for these calls, and the CSP already permits
+> same-origin `/api`. Requests still require the bearer token where applicable.
+>
+> (This proxy replaces the old `next.config.js` rewrite, which was evaluated at
+> **build** time and therefore baked in `http://127.0.0.1:8000` on hosts where
+> `KETSA_BACKEND_URL` is present only at runtime — Vercel then answered every
+> `/api/*` request with `404 DNS_HOSTNAME_RESOLVED_PRIVATE`, which broke the
+> Log in / Create account buttons while the server-rendered page still worked.)
 
 ---
 
@@ -278,14 +283,15 @@ extra steps.
    avoids. The upstream error is logged on the server and never sent to the
    browser.
 
-### Why there's no `/api` rewrite in production
-In **local dev**, `next.config.js` rewrites `/api/*` → the backend so your
-browser can call the API same-origin. In **production** the browser never calls
-`/api` — the server component fetches the backend directly over the network and
-passes data down as props. The client components (`Markets`, `Dashboard`,
-`WatchPanel`) render from those props and update locally for the live-price
-"feel". This is exactly the design already in the repo — no extra proxy config
-is required.
+### How `/api` reaches the backend
+Server-rendered data (`/api/home`, `/api/markets`, …) is fetched
+server-to-server by the server components. Browser-side calls — auth, admin,
+wallet, trades, payments and notifications — are handled by the runtime
+catch-all proxy `app/api/[...path]/route.ts`, which forwards to the same
+`KETSA_BACKEND_URL`, read at request time. The client components (`Markets`,
+`Dashboard`, `WatchPanel`) render from the server props and update locally for
+the live-price "feel"; the live WebSocket feed connects directly to the backend
+origin in `NEXT_PUBLIC_KETSA_BACKEND_URL`.
 
 ### Admin writes in production
 The **admin panel is the one place the browser does call `/api`** in production:

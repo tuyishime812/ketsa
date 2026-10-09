@@ -1,22 +1,20 @@
 /** @type {import('next').NextConfig} */
-const backendUrl = process.env.KETSA_BACKEND_URL || 'http://127.0.0.1:8000';
+// Public backend origin, used only to build the browser CSP below. The
+// browser-side /api/* traffic is handled by the runtime proxy in
+// `app/api/[...path]/route.ts`, which resolves its own destination from the
+// request-time environment — so routing no longer depends on build-time vars
+// (the cause of `404 DNS_HOSTNAME_RESOLVED_PRIVATE` in production).
+const publicBackendUrl =
+  process.env.NEXT_PUBLIC_KETSA_BACKEND_URL ||
+  process.env.KETSA_BACKEND_URL ||
+  'http://127.0.0.1:8000';
 // ws/wss variant of the backend origin for the live market feed.
-const backendWs = backendUrl.replace(/^http/, 'ws');
+const backendWs = publicBackendUrl.replace(/^http/, 'ws');
 
 const nextConfig = {
   reactStrictMode: true,
   // Self-contained server output for a slim Docker runtime (Dockerfile.frontend).
   output: 'standalone',
-  async rewrites() {
-    // In development, proxy /api calls to the Ketsa API service.
-    const backend = backendUrl;
-    return [
-      {
-        source: '/api/:path*',
-        destination: `${backend}/api/:path*`,
-      },
-    ];
-  },
   async headers() {
     // Browser security headers applied to every response the Next.js server
     // emits (HTML pages and static assets).
@@ -31,16 +29,17 @@ const nextConfig = {
     //   * `style-src 'unsafe-inline'` is required for React inline `style`
     //     attributes used throughout the UI (animations, progress widths).
     //   * `connect-src` additionally lists the backend HTTP + WS origins so the
-    //     trading API and the live order-book feed can be reached directly from
-    //     the browser (the same-origin /api rewrite proxies most HTTP calls,
-    //     but WebSockets must connect to the backend directly).
+    //     live order-book WebSocket feed can be reached directly from the
+    //     browser. HTTP API calls go same-origin through the runtime proxy in
+    //     `app/api/[...path]/route.ts`; WebSockets must connect to the backend
+    //     directly, so its origin must be allowed here.
     const csp = process.env.KETSA_CSP || [
       "default-src 'self'",
       "script-src 'self' 'unsafe-inline'",
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data:",
       "font-src 'self'",
-      `connect-src 'self' ${backendUrl} ${backendWs}`,
+      `connect-src 'self' ${publicBackendUrl} ${backendWs}`,
       "base-uri 'self'",
       "form-action 'self'",
       "frame-ancestors 'none'",

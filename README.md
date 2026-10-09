@@ -328,7 +328,7 @@ and wired through `docker-compose.yml`.
 | `KETSA_DAILY_WITHDRAWAL_LIMIT_MWK` | backend | Max MWK withdrawn per wallet per rolling 24h    | `3000000` |
 | `KETSA_ADMIN_MAX_FAILURES`   | backend   | Failed admin logins per IP before lockout           | `10` |
 | `KETSA_ADMIN_LOCKOUT_SECONDS` | backend  | Admin lockout window after too many failures         | `900` |
-| `KETSA_BACKEND_URL`          | frontend  | Base URL of the FastAPI service (server-side fetch)  | `http://127.0.0.1:8000` |
+| `KETSA_BACKEND_URL`          | frontend  | Base URL of the FastAPI service (server-side fetch + the runtime `/api/*` proxy in `app/api/[...path]/route.ts`) | `http://127.0.0.1:8000` |
 | `NEXT_PUBLIC_KETSA_BACKEND_URL` | frontend | Public backend origin embedded in the client bundle (WebSocket feed) | `http://127.0.0.1:8000` |
 | `KETSA_API_PORT`             | dev only  | Port `npm run dev` gives the FastAPI backend; also pins the backend's `KETSA_PUBLIC_BASE_URL` | `8000` |
 | `KETSA_WEB_PORT`             | dev only  | Port `npm run dev` gives Next.js; also pins the backend's `KETSA_FRONTEND_URL` | `3000` |
