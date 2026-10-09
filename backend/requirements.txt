@@ -2,5 +2,16 @@ fastapi==0.141.1
 uvicorn[standard]==0.52.4
 pydantic==2.13.5
 supabase==2.31.0
-PyJWT==2.10.1
+
+# supabase-auth 2.31.0 (pulled in by supabase==2.31.0) declares
+#   pyjwt[crypto]>=2.12.0
+# so this pin must stay >= 2.12.0. It was previously 2.10.1, which made the
+# file unsatisfiable: `pip install -r requirements.txt` failed with
+# ResolutionImpossible on every clean environment (CI, Dockerfile.backend, and
+# any Railway/Render/Fly build). 2.13.0 is the version the test suite is green
+# on, so it is the floor we pin rather than chasing the newest release.
+#
+# The [crypto] extra is satisfied by the cryptography pin below; app.social
+# only ever verifies RS256 against the Auth0 JWKS, never a symmetric alg.
+PyJWT==2.13.0
 cryptography==44.0.1
