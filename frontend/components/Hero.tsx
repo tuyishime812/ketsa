@@ -2,6 +2,7 @@ import Link from 'next/link';
 import Reveal from './Reveal';
 import { CountUp } from './CountUp';
 import WatchPanel from './WatchPanel';
+import AuthCta from './auth/AuthCta';
 import type { HeroContent, Proof, WatchItem } from '@/lib/types';
 
 export default function Hero({
@@ -37,14 +38,22 @@ export default function Hero({
           </Reveal>
 
           <Reveal delay={280}>
-            <div className="mt-8 flex flex-wrap gap-3">
+            <div className="mt-8 flex flex-wrap items-center gap-3">
               <a href="#markets" className="btn btn--brand btn--lg">
                 Explore markets
               </a>
-              <Link href="/markets" className="btn btn--ghost btn--lg">
-                Browse all markets
-              </Link>
+              <AuthCta variant="lg" />
             </div>
+          </Reveal>
+
+          <Reveal delay={320}>
+            <p className="mt-4 text-[13px] text-ink-3">
+              Or keep browsing as a guest with a{' '}
+              <Link href="/markets" className="font-semibold text-brand hover:text-ink">
+                play wallet
+              </Link>{' '}
+              — no account needed.
+            </p>
           </Reveal>
 
           <Reveal delay={360}>

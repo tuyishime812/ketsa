@@ -10,8 +10,11 @@ FROM node:22-alpine AS builder
 WORKDIR /srv/app
 COPY --from=deps /srv/app/node_modules ./node_modules
 COPY frontend/ ./
-# Server-side data fetching falls back to bundled data, so the build does not
-# require a running backend.
+# Every data-backed page is `force-dynamic`, so `next build` prerenders none of
+# them and does NOT need a reachable backend here. Data is fetched per request
+# at runtime (see the KETSA_BACKEND_URL env in docker-compose.yml); there is no
+# bundled dataset to fall back on, so pages render
+# components/DataUnavailable.tsx if it is misconfigured.
 RUN npm run build
 
 # --- Runtime stage (non-root) ---

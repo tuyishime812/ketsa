@@ -8,7 +8,7 @@ const nextConfig = {
   // Self-contained server output for a slim Docker runtime (Dockerfile.frontend).
   output: 'standalone',
   async rewrites() {
-    // In development, proxy /api calls to the FastAPI backend.
+    // In development, proxy /api calls to the Ketsa API service.
     const backend = backendUrl;
     return [
       {

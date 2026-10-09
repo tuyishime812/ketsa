@@ -38,7 +38,7 @@ export default function ManageEditor({ token }: { token: string }) {
     setMsg(null);
     try {
       await adminPost(token, '/reset', {});
-      setMsg('Content reset to the seed defaults.');
+      setMsg('Content reset to the backend defaults.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Reset failed');
     }
@@ -76,8 +76,8 @@ export default function ManageEditor({ token }: { token: string }) {
       <Card title="Danger zone">
         <p className="admin-muted">
           Reset every market, watch, ticker, dashboard series, stats, proof and
-          site setting back to the bundled seed defaults. Your stored admin
-          password is kept.
+          site setting back to the default content held by the backend. Your
+          stored admin password is kept.
         </p>
         <div className="admin-form-actions">
           <DangerButton onConfirm={resetContent} label="Reset content to defaults" />

@@ -31,7 +31,7 @@ ketsa/
 │   │   └── admin/           Admin login + dashboard (sidebar, per-section editors)
 │   ├── components/          Public UI sections (Hero, Markets, Dashboard, ...)
 │   │   └── admin/           Admin editors (Markets, Hero, Ticker, Watch, ...)
-│   └── lib/                 API client, types, fallback data, utils
+│   └── lib/                 API client, types, utils
 ├── Dockerfile.backend
 ├── Dockerfile.frontend
 └── docker-compose.yml
@@ -41,9 +41,13 @@ ketsa/
 
 1. The Next.js page (`app/page.tsx`) is a **server component**; on each request
    it calls the backend `GET /api/home` via `lib/api.ts`.
-2. If the backend is unreachable it renders bundled **fallback data**
-   (`lib/fallbackData.ts`) so the page never blanks out, and shows a small
-   "using bundled data" badge.
+2. There is **no bundled demo/fallback dataset**. If the API is unreachable the
+   page catches the fetch error and renders `components/DataUnavailable.tsx`
+   ("Temporarily unavailable"); the reason is logged server-side only and never
+   reaches the browser. `app/error.tsx` backs that up for anything unexpected.
+   This is deliberate: every figure on the site is presented to the user as a
+   real price, so a placeholder number rendering as if it were live market data
+   is worse than a visible error.
 3. In local dev, `next.config.js` **rewrites** `/api/*` to the backend, so the
    browser only ever talks to the Next.js origin.
 
@@ -474,8 +478,10 @@ shell and no default login. The backend `requirements.txt` is pinned.
 Any Node + Python PaaS works:
 
 - **Frontend** — Vercel/deploy: build `frontend/`, set `KETSA_BACKEND_URL` to
-  the hosted API. Since the page **falls back** to bundled data, it also works
-  as a purely static/standalone site, though live data needs the API.
+  the hosted API. The API is **required** at runtime: every page fetches live
+  data and renders `components/DataUnavailable.tsx` if it cannot be reached, so
+  a missing or wrong `KETSA_BACKEND_URL` shows the "temporarily unavailable"
+  page rather than the site.
 - **Backend** — Railway/Render/Fly: run `uvicorn app.main:app`, expose `8000`,
   set `KETSA_ALLOWED_ORIGINS` to the real frontend origin and
   `KETSA_ADMIN_PASSWORD` to a strong value. For persistence across redeploys

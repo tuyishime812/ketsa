@@ -1,6 +1,6 @@
 import { fetchHomeData } from '@/lib/api';
-import { fallbackHomeData } from '@/lib/fallbackData';
 import Nav from '@/components/Nav';
+import DataUnavailable from '@/components/DataUnavailable';
 import Hero from '@/components/Hero';
 import Ticker from '@/components/Ticker';
 import Markets from '@/components/Markets';
@@ -11,18 +11,30 @@ import Footer from '@/components/Footer';
 export const dynamic = 'force-dynamic';
 
 export default async function HomePage() {
-  let data = fallbackHomeData;
-  let fromApi = false;
+  // Live data only. There is deliberately no bundled seed/demo fallback: every
+  // figure on this page (prices, volume, trader counts, the hero badge) is shown
+  // to the user as real, so serving placeholder numbers when the API is down
+  // would be fabricated market data. Fail closed with an honest message
+  // instead, and log the reason server-side (the browser never sees it).
+  const data = await fetchHomeData().catch((err: unknown) => {
+    console.error('GET /api/home failed:', err);
+    return null;
+  });
 
-  try {
-    data = await fetchHomeData();
-    fromApi = true;
-  } catch {
-    // Backend not reachable (e.g. dev machine hasn't started FastAPI yet).
-    // Fall back to the bundled seed data so the page still renders.
+  // The API always returns settings (they back the admin content editor).
+  if (!data?.settings) {
+    console.error('home payload missing settings');
+    return (
+      <>
+        <Nav />
+        <main id="top">
+          <DataUnavailable what="market data" />
+        </main>
+      </>
+    );
   }
 
-  const settings = data.settings ?? fallbackHomeData.settings!;
+  const settings = data.settings;
 
   return (
     <>
@@ -36,11 +48,6 @@ export default async function HomePage() {
         <CtaBand copy={settings.cta} />
       </main>
       <Footer copy={settings.footer} />
-      {!fromApi && (
-        <div className="fixed bottom-4 right-4 z-[200] rounded-full bg-brand px-4 py-2 font-mono text-xs text-white shadow-lg">
-          Demo using bundled data — start the FastAPI backend to go live
-        </div>
-      )}
     </>
   );
 }

@@ -9,11 +9,13 @@ Prerequisites: code is on GitHub (`origin/main`), and CI is green.
 
 ---
 
-## Step 0 — Everything is optional, nothing breaks
+## Step 0 — The backend is required
 
-The frontend **gracefully falls back** to bundled seed data when it can't reach
-the backend. So you can deploy the frontend alone and it will still render —
-it just won't show "live" data. Add the backend whenever you're ready.
+The frontend has **no bundled demo dataset** — every page fetches live data
+from the API and renders `components/DataUnavailable.tsx` ("Temporarily
+unavailable") when it can't. Deploy the backend first and set
+`KETSA_BACKEND_URL`; deploying the frontend alone will render only the
+unavailable page.
 
 ---
 
@@ -68,8 +70,9 @@ Pick one host (Railway, Render, or Fly). All run the same FastAPI app.
    - Optional: `KETSA_CSP` to override the Content-Security-Policy.
 5. Deploy → open `https://<your-app>.vercel.app`.
 
-**Verify it's truly live (not fallback):**
-- No "Demo using bundled data" badge in the bottom-right corner.
+**Verify the data is live:**
+- The homepage renders real market cards and the ticker (not the
+  "Temporarily unavailable" page from `components/DataUnavailable.tsx`).
 - `curl https://<your-app>.vercel.app/api/health` returns ok (the product
   proxy isn't required for data, but confirms routing).
 
@@ -200,7 +203,8 @@ protected `/api/admin/*` through the same-origin `/api` path.
 ## Step 4 — Post-deploy checklist
 
 - [ ] GitHub Actions CI is green on `main`.
-- [ ] `https://<frontend>` renders, no fallback badge.
+- [ ] `https://<frontend>` renders live data (not the "Temporarily unavailable"
+      page).
 - [ ] `https://<frontend>/robots.txt` shows the real domain (confirms
       `KETSA_SITE_URL` was set at build time).
 - [ ] `https://<frontend>/sitemap.xml` returns an XML urlset.
@@ -262,8 +266,12 @@ extra steps.
 2. This is a **server-to-server** call — no CORS applies, so the backend only
    needs its own `KETSA_ALLOWED_ORIGINS` set if you ever call it from a browser
    (e.g. debugging). It's set anyway as defense-in-depth.
-3. If the backend is down/unreachable, the page renders `lib/fallbackData.ts`
-   and shows the "using bundled data" badge. Nothing 500s.
+3. If the backend is down/unreachable the page catches the fetch error and
+   renders `components/DataUnavailable.tsx` ("Temporarily unavailable") with a
+   retry link. There is no bundled seed data to fall back to by design — a
+   placeholder price rendered as if it were live is the failure mode this
+   avoids. The upstream error is logged on the server and never sent to the
+   browser.
 
 ### Why there's no `/api` rewrite in production
 In **local dev**, `next.config.js` rewrites `/api/*` → the backend so your

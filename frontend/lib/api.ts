@@ -1,7 +1,7 @@
-// Thin fetch wrapper for the Ketsa FastAPI backend.
+// Thin fetch wrapper for the Ketsa API service.
 //
-// In development, `next.config.js` rewrites `/api/*` to the FastAPI server so
-// the browser only ever talks to the same origin (avoids CORS in the browser
+// In development, `next.config.js` rewrites `/api/*` to the upstream API server
+// so the browser only ever talks to the same origin (avoids CORS in the browser
 // and keeps the API URL out of client bundles). At build time we read the
 // data server-side via `fetchHomeData()`.
 
@@ -398,7 +398,7 @@ export function markNotificationsReadSession(
  * Admin API helpers.
  *
  * These talk to the same-origin `/api/*` proxy at runtime (see next.config.js),
- * which forwards to FastAPI. All authenticated calls send the bearer token
+ * which forwards to the Ketsa API. All authenticated calls send the bearer token
  * returned by `adminLogin`. Tokens are stored in localStorage by the UI.
  */
 
