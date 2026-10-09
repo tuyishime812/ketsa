@@ -17,10 +17,12 @@ import {
   loginSession,
   logoutSession,
   registerSession,
+  requestLoginCode as requestLoginCodeRequest,
   resendRegisterOtp as resendRegisterOtpRequest,
   resetPassword as resetPasswordRequest,
   startSocialLogin,
   verifyEmail as verifyEmailRequest,
+  verifyLoginCode as verifyLoginCodeRequest,
 } from '@/lib/api';
 import type { User, Wallet } from '@/lib/types';
 import {
@@ -49,6 +51,14 @@ interface WalletContextValue {
   openAuth: (mode?: AuthMode) => void;
   closeAuth: () => void;
   login: (identifier: string, password: string) => Promise<void>;
+  /**
+   * Email a one-time sign-in code (passwordless). Resolves true when the
+   * backend accepted the request. The reply is deliberately uniform for every
+   * identifier, so `true` does NOT confirm the address has an account.
+   */
+  requestLoginCode: (identifier: string) => Promise<boolean>;
+  /** Complete a passwordless sign-in with the emailed code. */
+  loginWithCode: (email: string, otp: string) => Promise<void>;
   /**
    * Register. Email signups return 'pending' (OTP emailed — the auth modal
    * shows the verify step); phone signups or an error return null.
@@ -146,6 +156,20 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     })().finally(() => setLoading(false));
   }, [refresh]);
 
+  // Safety net for `loading`.
+  //
+  // While it is true, AuthCta/CtaBand render non-interactive <span aria-hidden>
+  // stand-ins instead of buttons — the CTAs look right but do nothing. The
+  // effect above only clears it once the restore fetches settle, and the fetch
+  // layer issues no AbortSignal/timeout of its own, so a hung or very slow
+  // request would leave the primary "Log in" / "Create account" buttons inert
+  // indefinitely. Cap it so the CTAs always become clickable; the normal path
+  // still wins because it clears the flag first, and clearing twice is a no-op.
+  useEffect(() => {
+    const failsafe = setTimeout(() => setLoading(false), 8000);
+    return () => clearTimeout(failsafe);
+  }, []);
+
   const connect = useCallback(async (name?: string) => {
     setConnecting(true);
     try {
@@ -208,6 +232,41 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         setAuthOpen(false);
       } catch (err) {
         setAuthError(err instanceof Error ? err.message : 'Login failed');
+      } finally {
+        setAuthBusy(false);
+      }
+    },
+    [finishAuth],
+  );
+
+  const requestLoginCode = useCallback(async (identifier: string) => {
+    setAuthBusy(true);
+    setAuthError(null);
+    try {
+      await requestLoginCodeRequest(identifier);
+      return true;
+    } catch (err) {
+      setAuthError(
+        err instanceof Error ? err.message : 'Could not send the sign-in code',
+      );
+      return false;
+    } finally {
+      setAuthBusy(false);
+    }
+  }, []);
+
+  const loginWithCode = useCallback(
+    async (email: string, otp: string) => {
+      setAuthBusy(true);
+      setAuthError(null);
+      try {
+        const session = await verifyLoginCodeRequest(email, otp);
+        finishAuth(session);
+        setAuthOpen(false);
+      } catch (err) {
+        setAuthError(
+          err instanceof Error ? err.message : 'That code was not accepted',
+        );
       } finally {
         setAuthBusy(false);
       }
@@ -350,6 +409,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         openAuth,
         closeAuth,
         login,
+        requestLoginCode,
+        loginWithCode,
         register,
         pendingEmail,
         verifyEmail,
@@ -380,6 +441,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           onLogin={(identifier, password) => {
             void login(identifier, password);
           }}
+          onRequestLoginCode={(identifier) => requestLoginCode(identifier)}
+          onLoginWithCode={(email, otp) => loginWithCode(email, otp)}
           onRegister={(name, identifier, password) =>
             register(name, identifier, password)
           }

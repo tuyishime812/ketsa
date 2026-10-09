@@ -19,7 +19,7 @@ import re
 import secrets
 import time
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
@@ -67,6 +67,43 @@ def _prune_tickets(now: float) -> None:
 LOGIN_MAX_FAILURES = 5
 LOGIN_WINDOW_SECONDS = 900
 _login_attempts: dict[str, list[float]] = {}
+
+# Passwordless sign-in by emailed code.
+#
+# Two independent brakes, because they stop different attacks:
+#   * the per-address OTP resend cooldown (inside _issue_otp) stops one mailbox
+#     being flooded;
+#   * the per-IP request window below stops an attacker rotating through a list
+#     of victim addresses at the public per-IP rate limit, which would turn the
+#     app into an open mail relay and burn the Resend daily quota (spam-relay
+#     abuse / resource exhaustion, CWE-441 + CWE-770).
+CODE_REQUEST_MAX = 5
+CODE_REQUEST_WINDOW_SECONDS = 900
+_code_requests: dict[str, list[float]] = {}
+
+
+def _code_request_max() -> int:
+    try:
+        return int(os.getenv("KETSA_CODE_REQUEST_MAX", str(CODE_REQUEST_MAX)))
+    except ValueError:
+        return CODE_REQUEST_MAX
+
+
+def _code_request_window() -> int:
+    try:
+        return int(os.getenv("KETSA_CODE_REQUEST_WINDOW", str(CODE_REQUEST_WINDOW_SECONDS)))
+    except ValueError:
+        return CODE_REQUEST_WINDOW_SECONDS
+
+
+def _prune_code_requests(now: float, window: int) -> None:
+    """Drop expired request stamps so the per-IP tracker can't grow unbounded."""
+    for ip, stamps in list(_code_requests.items()):
+        kept = [t for t in stamps if now - t < window]
+        if kept:
+            _code_requests[ip] = kept
+        else:
+            _code_requests.pop(ip, None)
 
 _SALT_LEN = 16
 _PBKDF2_ITER = 100_000
@@ -269,6 +306,17 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class LoginCodeRequest(BaseModel):
+    """Ask for a sign-in code to be emailed. Email addresses only."""
+
+    identifier: str
+
+
+class VerifyLoginCodeRequest(BaseModel):
+    email: str
+    otp: str
+
+
 class ChangePasswordRequest(BaseModel):
     current: str
     new: str
@@ -448,7 +496,20 @@ async def register(
                 status_code=429,
                 detail="A verification code was recently sent to this email. Try again shortly.",
             )
-        mailer.send_otp_email(email, code, "signup", _otp_ttl() // 60, name=name)
+        sent = mailer.send_otp_email(email, code, "signup", _otp_ttl() // 60, name=name)
+        if not sent:
+            # The code never left the building. Discard it so the user can retry
+            # at once instead of being locked out by the resend cooldown for a
+            # code they never received, and tell the caller the truth rather
+            # than routing them to a verify step that can never be completed —
+            # that dead end is indistinguishable from a broken button.
+            # This path is taken identically for every address, so it leaks
+            # nothing beyond the existence disclosure the 409 above already makes.
+            _otps.pop(f"signup:{email}", None)
+            raise HTTPException(
+                status_code=502,
+                detail="We couldn't send the verification email. Please try again in a moment.",
+            )
         response.status_code = 202  # pending — account appears only after OTP
         return PendingVerifyResponse(email=email)
     else:
@@ -508,9 +569,20 @@ async def resend_register_otp(body: ResendOtpRequest, response: Response) -> Pen
         )
     entry = _otps.get(f"signup:{email}", {})
     payload = entry.get("payload") or {}
-    mailer.send_otp_email(
+    sent = mailer.send_otp_email(
         email, code, "signup", _otp_ttl() // 60, name=str(payload.get("name") or "")
     )
+    if not sent:
+        # Report the failure rather than pretending the code is on its way.
+        # State is left as-is on purpose: the pending signup (and its payload)
+        # must survive, and clearing the cooldown here would let a caller loop
+        # this endpoint against the provider without limit. The honest message
+        # costs the user one cooldown window; losing their signup would cost
+        # them the whole form.
+        raise HTTPException(
+            status_code=502,
+            detail="We couldn't send the verification email. Please try again in a moment.",
+        )
     response.status_code = 202
     return PendingVerifyResponse(email=email)
 
@@ -536,6 +608,11 @@ async def forgot_password(body: ForgotPasswordRequest) -> dict:
         code = _issue_otp(f"reset:{user['id']}")
     except _OtpCooldown:
         return {"ok": True}  # silently swallowed on purpose (no oracle)
+    # Deliberately ignore the delivery result. This send only happens when the
+    # identifier matched an account, so surfacing a failure here would answer
+    # "does this account exist?" with a different status code — a textbook
+    # enumeration oracle (CWE-203). The uniform 200 is the security property;
+    # delivery problems are reported server-side instead (see mailer.py).
     mailer.send_otp_email(identifier, code, "reset", _otp_ttl() // 60)
     return {"ok": True}
 
@@ -594,6 +671,81 @@ async def login(body: LoginRequest) -> AuthResponse:
         raise HTTPException(status_code=401, detail="Invalid email/phone or password")
 
     _login_attempts.pop(identifier, None)
+    token = _issue_session(user["id"])
+    return AuthResponse(token=token, user=_user_public(user), wallet=_wallet_for_user(user))
+
+
+# --- Passwordless sign-in by emailed code -------------------------------------
+# Deliberately additive: the password login above is untouched, so a phone-only
+# account, a user who prefers a password, and any existing client keep working.
+
+
+@router.post("/login/code")
+async def request_login_code(body: LoginCodeRequest, request: Request) -> dict:
+    """Email a one-time sign-in code so a user can log in without a password.
+
+    Always answers ``200 {"ok": true}`` — for unknown accounts, phone
+    identifiers, malformed input, invalid addresses and cooldown-suppressed
+    resends alike — so this endpoint cannot be used to enumerate which email
+    addresses have accounts (CWE-203 / user enumeration).
+
+    The 429 below is keyed on the *client IP*, not the account, so it leaks
+    nothing about the address being mailed.
+    """
+    ip = request.client.host if request.client else "unknown"
+    now = time.time()
+    window = _code_request_window()
+    _prune_code_requests(now, window)
+    hits = _code_requests.setdefault(ip, [])
+    if len(hits) >= _code_request_max():
+        raise HTTPException(
+            status_code=429,
+            detail="Too many sign-in code requests. Try again later.",
+        )
+    hits.append(now)
+
+    try:
+        kind, identifier = normalize_identifier(body.identifier)
+    except ValueError:
+        return {"ok": True}
+    # Phone accounts are password-only: this path is email-delivery and a phone
+    # account has no email to deliver to.
+    if kind != "email":
+        return {"ok": True}
+    user = store.get_user_by_email(identifier)
+    if user is None:
+        return {"ok": True}
+    try:
+        code = _issue_otp(f"login:{user['id']}")
+    except _OtpCooldown:
+        return {"ok": True}  # silently swallowed on purpose (no oracle)
+    # Delivery result deliberately discarded — same reasoning as forgot-password
+    # above: this send only runs when the account exists, so a distinct failure
+    # status would turn the endpoint into a user-enumeration oracle (CWE-203).
+    mailer.send_otp_email(
+        identifier, code, "login", _otp_ttl() // 60, name=str(user.get("name") or "")
+    )
+    return {"ok": True}
+
+
+@router.post("/login/code/verify", response_model=AuthResponse)
+async def verify_login_code(body: VerifyLoginCodeRequest) -> AuthResponse:
+    """Exchange a valid emailed sign-in code for a normal session.
+
+    The code is bound to the user id that requested it and burns on use, so it
+    cannot be replayed. Unknown email and bad/expired/used code produce the
+    same 401, matching /reset-password and revealing nothing about accounts.
+    """
+    email = body.email.strip().lower()
+    if not _EMAIL_RE.match(email):
+        raise HTTPException(status_code=401, detail="Invalid or expired code")
+    user = store.get_user_by_email(email)
+    key = f"login:{user['id']}" if user is not None else None
+    if key is None or _consume_otp(key, body.otp.strip()) is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired code")
+    # A successful code is proof enough; clear any password-failure streak so a
+    # user who fumbled the form isn't left throttled after signing in.
+    _login_attempts.pop(email, None)
     token = _issue_session(user["id"])
     return AuthResponse(token=token, user=_user_public(user), wallet=_wallet_for_user(user))
 

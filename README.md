@@ -203,6 +203,29 @@ With both services running you can trade each market for real on the site:
     can't self-reset yet (no SMS provider) — an admin resets those from the
     dashboard. Without `KETSA_RESEND_API_KEY` the resend flows still respond,
     but no mail goes out (codes land in the server log for local testing).
+  - **Passwordless sign-in by email code.** The login modal also offers
+    "Sign in with a code instead of a password": enter the account email and
+    Resend delivers a 6-digit code ("Resend code" re-sends it, subject to the
+    same cooldown). This is *additive* — password login is unchanged and
+    phone-only accounts still sign in with a password, since this path needs
+    an inbox. `POST /api/auth/login/code` answers `{"ok": true}` for **every**
+    input — unknown address, phone number, malformed value, or a suppressed
+    resend — so it cannot be used to discover which addresses are registered.
+    Because the reply is deliberately uninformative, the UI shows the code
+    step either way; that's the same trade-off `forgot-password` already makes.
+    Codes are bound to one account, stored only as a SHA-256 digest, burned on
+    use, attempt-capped and TTL'd by the same OTP engine as signup/reset.
+  - **Broadcast (admin).** Admin → Broadcast emails one announcement to every
+    account that has an email address (phone-only accounts are skipped). The
+    send runs as a background job — `POST /api/admin/broadcast` returns a
+    `job_id` immediately and `GET /api/admin/broadcast/<job_id>` reports
+    progress — because a per-recipient HTTPS round trip takes far longer than
+    an HTTP request may wait. Guards: admin token required, one job at a time,
+    recipients de-duplicated and capped (`BROADCAST_MAX_RECIPIENTS`), one
+    message per recipient (never a shared To/CC/Bcc, which would disclose the
+    user list), and the admin's subject/body is HTML-escaped into the mail
+    template so admin copy renders as text rather than as markup. There is no
+    unsubscribe, so reserve it for genuinely important announcements.
 - **Leaderboard.** `/leaderboard` ranks every wallet that has traded by live
   equity (P&L shown per row); refresh every 30s and immediately whenever a
   market resolves or a deposit/refund lands.
@@ -253,7 +276,7 @@ The `/api/*` HTTP calls go through Next's rewrite proxy regardless.
 # Backend
 cd backend
 .venv\Scripts\python.exe -m pytest
-# 198 tests: endpoints, models/seed consistency, 404/405, CORS,
+# 232 tests: endpoints, models/seed consistency, 404/405, CORS,
 # security headers, OpenAPI gating, rate limiting, admin auth + CRUD + user
 # management, admin login brute-force throttling, the matching engine
 # (wallets, books, execution, WS feed), account auth (register/login,
@@ -263,8 +286,13 @@ cd backend
 # withdrawable-balance rule (real money vs. play money, legacy seeds),
 # WebSocket subscription authorization + connection cap, Auth0 social login
 # (PKCE, state/nonce, connection binding, ticket + state store bounds, no
-# provider-detail leakage), and market resolution (settlement/payout,
-# trading locks, admin endpoint, wallet-scoped WS notification routing).
+# provider-detail leakage), OTP email delivery policy (honest failure on
+# signup vs. no-enumeration on account-discovery endpoints), passwordless
+# email-code sign-in (single-use, account-bound, expiry, per-IP relay
+# throttle), admin broadcast (admin-only, one job at a time, dedupe + cap,
+# HTML-escaped copy, CRLF-safe subject, progress), and market resolution
+# (settlement/payout, trading locks, admin endpoint, wallet-scoped WS
+# notification routing).
 
 # Frontend
 cd frontend
@@ -319,11 +347,13 @@ and wired through `docker-compose.yml`.
 | `KETSA_AUTH0_CONNECTION`     | backend   | Auth0 connection accepted at the callback (guards against a token from any other connection in the tenant) | `google-oauth2` |
 | `KETSA_PUBLIC_BASE_URL`      | backend   | Public backend origin; Auth0 callback URI is `<this>/api/auth/social/callback` | `http://127.0.0.1:8000` |
 | `KETSA_FRONTEND_URL`         | backend   | Where the browser lands after Google login (`/auth/callback`) | `http://localhost:3000` |
-| `KETSA_RESEND_API_KEY`       | backend   | Resend API key — emails signup-verification + password-reset OTPs (absent ⇒ no mail sent; codes logged for dev) | — (email OTP off) |
-| `KETSA_RESEND_FROM`          | backend   | "From" address for OTP emails; must be on a domain verified in Resend | `Ketsa <onboarding@resend.dev>` |
+| `KETSA_RESEND_API_KEY`       | backend   | Resend API key — emails signup-verification, sign-in and password-reset OTPs, plus admin broadcasts (absent ⇒ no mail sent; codes logged for dev) | — (email OTP off) |
+| `KETSA_RESEND_FROM`          | backend   | "From" address for OTP + broadcast emails; must be on a domain verified in Resend (the default sandbox sender only accepts `delivered@resend.dev`) | `Ketsa <onboarding@resend.dev>` |
 | `KETSA_OTP_TTL_SECONDS`      | backend   | One-time code lifetime                                   | `600` |
 | `KETSA_OTP_MAX_ATTEMPTS`     | backend   | Wrong entries before a code is burned                     | `5` |
 | `KETSA_OTP_RESEND_SECONDS`   | backend   | Cooldown before a new code is emailed to the same address | `60` |
+| `KETSA_CODE_REQUEST_MAX`     | backend   | Sign-in code requests allowed per IP per window (stops the endpoint being used as a mail relay) | `5` |
+| `KETSA_CODE_REQUEST_WINDOW`  | backend   | That per-IP window, in seconds                            | `900` |
 
 ---
 

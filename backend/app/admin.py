@@ -17,7 +17,9 @@ at the global request rate limit (~120/min/IP), which is an online-guessing
 budget rather than a control.
 """
 
+import asyncio
 import hashlib
+import logging
 import os
 import secrets
 import time
@@ -25,11 +27,13 @@ import time
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
 
-from . import store
+from . import mailer, store
 from .auth import hash_password, lookup_user_by_identifier, revoke_user_sessions
 from .engine import engine
 from .models import AdminUserView
 from .storage import get_all_settings, get_setting, reset_db, set_setting
+
+logger = logging.getLogger("ketsa.admin")
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -349,3 +353,167 @@ async def admin_user_delete(user_id: str) -> MessageResponse:
     deleted = store.delete_user(user_id)
     revoke_user_sessions(user_id)
     return MessageResponse(ok=deleted, detail=("deleted" if deleted else "not found"))
+
+
+# --- Broadcast: one announcement to every user with an email --------------------
+#
+# Runs as a background job with a status endpoint rather than inline: sending is
+# one blocking HTTPS round-trip per recipient, so a few thousand users takes
+# minutes — far longer than any HTTP client (or proxy) will wait, and doing it
+# inline would also stall the event loop for every other request (CWE-400).
+#
+# Threat model: this is the single most abusable endpoint in the app, because it
+# is gated by one shared password and it spends money (Resend quota) and touches
+# every user's inbox. Hence: one job at a time, a hard recipient cap, dedupe of
+# the recipient list, admin text escaped before it reaches the mail template, and
+# finished jobs pruned so the status store cannot grow without bound.
+
+BROADCAST_MAX_RECIPIENTS = 5_000
+# Pacing between recipients. Resend allows bursts but a tight loop against
+# several thousand addresses is the signature of spam, and can trip provider
+# rate limiting that would then also delay transactional OTP mail.
+BROADCAST_PAUSE_SECONDS = 0.05
+BROADCAST_MAX_JOBS = 50
+
+_broadcast_jobs: dict[str, dict] = {}
+
+
+class BroadcastRequest(BaseModel):
+    subject: str
+    body: str
+
+
+class BroadcastAccepted(BaseModel):
+    job_id: str
+    total: int
+
+
+class BroadcastStatus(BaseModel):
+    job_id: str
+    status: str  # running | done | error
+    total: int
+    sent: int
+    failed: int
+    subject: str
+    error: str | None = None
+
+
+def _prune_broadcast_jobs() -> None:
+    """Drop finished jobs beyond the retention window, newest kept."""
+    if len(_broadcast_jobs) <= BROADCAST_MAX_JOBS:
+        return
+    finished = sorted(
+        (j for j in _broadcast_jobs.items() if j[1]["status"] != "running"),
+        key=lambda kv: kv[1]["seq"],
+    )
+    for job_id, _ in finished[: len(_broadcast_jobs) - BROADCAST_MAX_JOBS]:
+        _broadcast_jobs.pop(job_id, None)
+
+
+async def _run_broadcast(
+    job_id: str, recipients: list[str], subject: str, text: str
+) -> None:
+    """Send one message per recipient. Never raises into the event loop."""
+    job = _broadcast_jobs[job_id]
+    try:
+        for address in recipients:
+            # One recipient per message: no shared To/CC/Bcc, which would
+            # disclose the user list to every recipient and to any relay.
+            ok = await asyncio.to_thread(
+                mailer.send_broadcast_email, address, subject, text
+            )
+            if ok:
+                job["sent"] += 1
+            else:
+                job["failed"] += 1
+            if BROADCAST_PAUSE_SECONDS > 0:
+                await asyncio.sleep(BROADCAST_PAUSE_SECONDS)
+        job["status"] = "done"
+    except asyncio.CancelledError:  # pragma: no cover — shutdown path
+        job["status"] = "error"
+        job["error"] = "Broadcast cancelled"
+        raise
+    except Exception:  # pragma: no cover — defensive
+        logger.exception("Broadcast %s failed", job_id)
+        job["status"] = "error"
+        # Never surface the exception text to the admin API: it can carry
+        # provider URLs, headers or recipient addresses.
+        job["error"] = "Broadcast failed"
+
+
+@router.post("/broadcast", response_model=BroadcastAccepted, dependencies=[Depends(require_admin)])
+async def admin_broadcast_start(body: BroadcastRequest) -> BroadcastAccepted:
+    """Queue one announcement to every user with an email address."""
+    subject = " ".join(str(body.subject or "").split())
+    text = str(body.body or "").strip()
+    if not subject:
+        raise HTTPException(status_code=400, detail="Subject is required")
+    if len(subject) > 200:
+        raise HTTPException(status_code=400, detail="Subject must be 200 characters or fewer")
+    if not text:
+        raise HTTPException(status_code=400, detail="Message body is required")
+    if len(text) > 20_000:
+        raise HTTPException(status_code=400, detail="Message must be 20000 characters or fewer")
+
+    # One job at a time. Without this, a compromised admin session can loop the
+    # endpoint and mail the entire user base repeatedly.
+    if any(j["status"] == "running" for j in _broadcast_jobs.values()):
+        raise HTTPException(status_code=409, detail="A broadcast is already running")
+
+    # Build the recipient list up front so a bad address fails fast rather than
+    # halfway through, and so the reported total is the real blast radius.
+    job_id = secrets.token_urlsafe(12)
+    recipients: list[str] = []
+    seen: set[str] = set()
+    for user in store.list_users():
+        address = str(user.get("email") or "").strip().lower()
+        if not address or address in seen:
+            continue
+        seen.add(address)
+        recipients.append(address)
+        if len(recipients) >= BROADCAST_MAX_RECIPIENTS:
+            logger.warning(
+                "Broadcast %s capped at %d recipients", job_id, BROADCAST_MAX_RECIPIENTS
+            )
+            break
+    if not recipients:
+        raise HTTPException(
+            status_code=400, detail="No users with an email address to broadcast to"
+        )
+
+    _broadcast_jobs[job_id] = {
+        "job_id": job_id,
+        "seq": time.time(),
+        "status": "running",
+        "total": len(recipients),
+        "sent": 0,
+        "failed": 0,
+        "subject": subject,
+        "error": None,
+        # Strong reference to the in-flight task. asyncio only keeps weak
+        # references to tasks, so without this a broadcast can be garbage
+        # collected mid-send and the remaining recipients silently never
+        # receive the message. Holding it also lets us join/shutdown cleanly.
+        "task": None,
+    }
+    _prune_broadcast_jobs()
+    task = asyncio.create_task(_run_broadcast(job_id, recipients, subject, text))
+    _broadcast_jobs[job_id]["task"] = task
+    return BroadcastAccepted(job_id=job_id, total=len(recipients))
+
+
+@router.get("/broadcast/{job_id}", response_model=BroadcastStatus, dependencies=[Depends(require_admin)])
+async def admin_broadcast_status(job_id: str) -> BroadcastStatus:
+    """Poll progress of a queued broadcast."""
+    job = _broadcast_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Unknown broadcast job")
+    return BroadcastStatus(
+        job_id=job["job_id"],
+        status=job["status"],
+        total=job["total"],
+        sent=job["sent"],
+        failed=job["failed"],
+        subject=job["subject"],
+        error=job["error"],
+    )

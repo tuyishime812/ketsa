@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 
 type Mode = 'login' | 'register';
 type IdKind = 'email' | 'phone';
-type Step = 'auth' | 'verify' | 'forgot';
+type Step = 'auth' | 'verify' | 'forgot' | 'logincode';
 
 interface AuthModalProps {
   initialMode?: Mode;
@@ -13,6 +13,14 @@ interface AuthModalProps {
   /** Email awaiting OTP verification, when a signup is in flight. */
   pendingEmail: string | null;
   onLogin: (identifier: string, password: string) => void;
+  /**
+   * Ask for a sign-in code to be emailed. Resolves true when the backend
+   * accepted the request — which is NOT confirmation that the address has an
+   * account, so the caller must show the code step either way.
+   */
+  onRequestLoginCode: (identifier: string) => Promise<boolean>;
+  /** Complete a passwordless sign-in with the emailed code. */
+  onLoginWithCode: (email: string, otp: string) => Promise<void>;
   /**
    * Register. Resolves 'pending' when the backend answered 202 (email OTP
    * emailed — the modal moves to the verify step) or null otherwise.
@@ -170,6 +178,8 @@ export default function AuthModal({
   error,
   pendingEmail,
   onLogin,
+  onRequestLoginCode,
+  onLoginWithCode,
   onRegister,
   onVerify,
   onResendOtp,
@@ -199,6 +209,10 @@ export default function AuthModal({
   const [newPw, setNewPw] = useState('');
   const [newPw2, setNewPw2] = useState('');
   const [resetDone, setResetDone] = useState(false);
+  // Passwordless sign-in step
+  const [codeEmail, setCodeEmail] = useState('');
+  const [codeSent, setCodeSent] = useState(false);
+  const [codeResent, setCodeResent] = useState(false);
 
   // A pending email signup flips the modal to the verify step.
   useEffect(() => {
@@ -274,6 +288,64 @@ export default function AuthModal({
     setOtp('');
     setResent(false);
     setLocalErrors({});
+  }
+
+  /** Switch from the password form to "email me a sign-in code". */
+  function startLoginCode() {
+    setMode('login');
+    setCodeEmail(identifier.trim());
+    setCodeSent(false);
+    setCodeResent(false);
+    setOtp('');
+    setStep('logincode');
+    setLocalErrors({});
+  }
+
+  /**
+   * Request the sign-in code. Note we advance to the code step whenever the
+   * request is accepted, whether or not the address actually has an account —
+   * the backend replies identically in both cases on purpose, so the UI must
+   * not reveal the difference.
+   */
+  async function submitLoginCode(e: React.FormEvent) {
+    e.preventDefault();
+    if (busy) return;
+    const address = codeEmail.trim();
+    if (!EMAIL_RE.test(address)) {
+      setLocalErrors({ codeEmail: 'Enter a valid email address' });
+      return;
+    }
+    setLocalErrors({});
+    const ok = await onRequestLoginCode(address);
+    if (ok) {
+      setCodeSent(true);
+      setCodeResent(false);
+      setOtp('');
+    }
+  }
+
+  async function submitVerifyLoginCode(e: React.FormEvent) {
+    e.preventDefault();
+    if (busy) return;
+    const code = otp.trim();
+    if (!OTP_RE.test(code)) {
+      setLocalErrors({ otp: 'Enter the 6-digit code from the email' });
+      return;
+    }
+    setLocalErrors({});
+    await onLoginWithCode(codeEmail.trim(), code);
+  }
+
+  /** Re-send the sign-in code (backend enforces a 60s cooldown). */
+  async function resendLoginCode() {
+    if (busy) return;
+    const ok = await onRequestLoginCode(codeEmail.trim());
+    if (ok) {
+      setCodeSent(true);
+      setCodeResent(true);
+      setOtp('');
+      setLocalErrors({});
+    }
   }
 
   async function submitForgot(e: React.FormEvent) {
@@ -581,6 +653,15 @@ export default function AuthModal({
                 >
                   Skip — continue with a play wallet instead
                 </button>
+                {mode === 'login' && idKind === 'email' && (
+                  <button
+                    type="button"
+                    className={`${linkBtn} mt-2`}
+                    onClick={busy ? undefined : startLoginCode}
+                  >
+                    Sign in with a code instead of a password
+                  </button>
+                )}
               </div>
             </>
           )}
@@ -627,6 +708,93 @@ export default function AuthModal({
                 </button>
               </div>
             </form>
+          )}
+
+          {step === 'logincode' && (
+            <div className="mt-6">
+              {!codeSent ? (
+                <form onSubmit={submitLoginCode} className="space-y-4" noValidate>
+                  <p className="text-[13.5px] leading-relaxed text-ink-2">
+                    Enter your email and we&apos;ll send a 6-digit code to sign
+                    in — no password needed.
+                  </p>
+                  <Field
+                    label="Email"
+                    type="email"
+                    value={codeEmail}
+                    onChange={setCodeEmail}
+                    placeholder="you@example.com"
+                    autoComplete="email"
+                    inputMode="email"
+                    error={localErrors.codeEmail}
+                  />
+                  {error && (
+                    <div className="rounded-[8px] border border-neg/25 bg-neg-tint px-[13px] py-[10px] text-[13px] font-medium text-neg">
+                      {error}
+                    </div>
+                  )}
+                  <button type="submit" className={submitBtn} disabled={busy}>
+                    {busy ? 'Sending…' : 'Email me a sign-in code'}
+                  </button>
+                  <div className="flex items-center justify-between pt-1">
+                    <button
+                      type="button"
+                      className={linkBtn}
+                      onClick={busy ? undefined : backToForm}
+                    >
+                      ← Back
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <form
+                  onSubmit={submitVerifyLoginCode}
+                  className="space-y-4"
+                  noValidate
+                >
+                  <p className="text-[13.5px] leading-relaxed text-ink-2">
+                    We emailed a 6-digit sign-in code to{' '}
+                    <span className="font-semibold text-ink">{codeEmail.trim()}</span>.
+                    Enter it below to sign in.
+                  </p>
+                  <Field
+                    label="Sign-in code"
+                    value={otp}
+                    onChange={(v) => setOtp(v.replace(/\D/g, '').slice(0, 6))}
+                    placeholder="••••••"
+                    inputMode="numeric"
+                    error={localErrors.otp}
+                  />
+                  {error && (
+                    <div className="rounded-[8px] border border-neg/25 bg-neg-tint px-[13px] py-[10px] text-[13px] font-medium text-neg">
+                      {error}
+                    </div>
+                  )}
+                  <button type="submit" className={submitBtn} disabled={busy}>
+                    {busy ? 'Signing in…' : 'Sign in'}
+                  </button>
+                  <div className="flex items-center justify-between pt-1">
+                    <button
+                      type="button"
+                      className={linkBtn}
+                      onClick={busy ? undefined : backToForm}
+                    >
+                      ← Back
+                    </button>
+                    <button
+                      type="button"
+                      className={linkBtn}
+                      onClick={busy ? undefined : resendLoginCode}
+                      disabled={busy}
+                    >
+                      {codeResent
+                        ? 'Code resent — check your inbox'
+                        : 'Resend code'}
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
           )}
 
           {step === 'forgot' && (

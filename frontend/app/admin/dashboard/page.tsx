@@ -18,6 +18,7 @@ import DashboardEditor from '@/components/admin/DashboardEditor';
 import FooterEditor from '@/components/admin/FooterEditor';
 import ManageEditor from '@/components/admin/ManageEditor';
 import UsersEditor from '@/components/admin/UsersEditor';
+import BroadcastEditor from '@/components/admin/BroadcastEditor';
 
 type TabKey =
   | 'markets'
@@ -27,6 +28,7 @@ type TabKey =
   | 'dashboard'
   | 'content'
   | 'users'
+  | 'broadcast'
   | 'manage';
 
 const TABS: { key: TabKey; label: string }[] = [
@@ -37,6 +39,7 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'dashboard', label: 'Dashboard' },
   { key: 'content', label: 'Content' },
   { key: 'users', label: 'Users' },
+  { key: 'broadcast', label: 'Broadcast' },
   { key: 'manage', label: 'Manage' },
 ];
 
@@ -164,6 +167,7 @@ export default function AdminDashboard() {
             <FooterEditor token={token} settings={settings} />
           )}
           {!loading && tab === 'users' && <UsersEditor token={token} />}
+      {!loading && tab === 'broadcast' && <BroadcastEditor token={token} />}
           {!loading && tab === 'manage' && <ManageEditor token={token} />}
         </div>
       </main>

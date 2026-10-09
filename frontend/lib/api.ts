@@ -321,6 +321,32 @@ export function loginSession(body: AuthCredentials): Promise<AuthSession> {
   });
 }
 
+/**
+ * Ask the backend to email a one-time sign-in code.
+ *
+ * The backend answers `{ ok: true }` for every identifier — known account,
+ * unknown address, phone number, malformed input and cooldown-suppressed
+ * resend alike — so this can never be used to discover which addresses are
+ * registered. The UI must therefore treat "sent" as unconfirmed and show the
+ * code step either way, exactly like forgot-password.
+ */
+export function requestLoginCode(
+  identifier: string,
+): Promise<{ ok: boolean }> {
+  return authRequest<{ ok: boolean }>('/login/code', {
+    method: 'POST',
+    body: JSON.stringify({ identifier }),
+  });
+}
+
+/** Exchange a valid emailed sign-in code for a session. */
+export function verifyLoginCode(email: string, otp: string): Promise<AuthSession> {
+  return authRequest<AuthSession>('/login/code/verify', {
+    method: 'POST',
+    body: JSON.stringify({ email, otp }),
+  });
+}
+
 export function logoutSession(token: string): Promise<{ ok: boolean }> {
   return authRequest<{ ok: boolean }>('/logout', {
     method: 'POST',
@@ -477,5 +503,45 @@ export function adminPut<T>(token: string, path: string, body: unknown): Promise
 
 export function adminDelete<T>(token: string, path: string): Promise<T> {
   return adminFetch<T>(token, path, { method: 'DELETE' });
+}
+
+// --- Broadcast (one admin announcement to every user with an email) ----------
+
+export interface BroadcastAccepted {
+  job_id: string;
+  total: number;
+}
+
+export interface BroadcastStatus {
+  job_id: string;
+  status: 'running' | 'done' | 'error';
+  total: number;
+  sent: number;
+  failed: number;
+  subject: string;
+  error: string | null;
+}
+
+/**
+ * Queue an announcement. Returns immediately with a job id: the backend sends
+ * one email per recipient in the background, because a few thousand recipients
+ * takes far longer than an HTTP request may wait.
+ */
+export function startBroadcast(
+  token: string,
+  subject: string,
+  body: string,
+): Promise<BroadcastAccepted> {
+  return adminPost<BroadcastAccepted>(token, '/broadcast', { subject, body });
+}
+
+export function getBroadcastStatus(
+  token: string,
+  jobId: string,
+): Promise<BroadcastStatus> {
+  return adminGet<BroadcastStatus>(
+    token,
+    `/broadcast/${encodeURIComponent(jobId)}`,
+  );
 }
 

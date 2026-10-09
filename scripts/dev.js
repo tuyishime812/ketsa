@@ -8,7 +8,9 @@
 //
 // The API port defaults to 8000 and can be overridden with KETSA_API_PORT; the
 // frontend port defaults to 3000 via KETSA_WEB_PORT. Both are needed when
-// something else already holds the defaults.
+// something else already holds the defaults. `--api-port N` / `--web-port N`
+// override the env vars; use `npm run dev:alt-ports` when another project owns
+// 3000/8000 on this machine.
 //
 // The port chosen here is what gets handed to Next (both the server-side fetches
 // and the public WebSocket origin), so the launcher and the frontend can never
@@ -30,9 +32,19 @@ const root = path.resolve(__dirname, '..');
 const backendDir = path.join(root, 'backend');
 const frontendDir = path.join(root, 'frontend');
 
-const apiPort = Number(process.env.KETSA_API_PORT || 8000);
+// `--api-port N` / `--web-port N` win over the env vars so a package.json
+// script can pin non-default ports without a cross-platform env shim
+// (Windows `set` vs POSIX `VAR=...`, i.e. without adding cross-env).
+function cliPort(flag) {
+  const i = process.argv.indexOf(`--${flag}`);
+  if (i === -1 || !process.argv[i + 1]) return undefined;
+  const value = Number(process.argv[i + 1]);
+  return Number.isInteger(value) && value > 0 && value < 65536 ? value : undefined;
+}
+
+const apiPort = cliPort('api-port') ?? Number(process.env.KETSA_API_PORT || 8000);
 const apiUrl = `http://127.0.0.1:${apiPort}`;
-const webPort = Number(process.env.KETSA_WEB_PORT || 3000);
+const webPort = cliPort('web-port') ?? Number(process.env.KETSA_WEB_PORT || 3000);
 const webUrl = `http://localhost:${webPort}`;
 
 const CYAN = '\u001b[36m';
