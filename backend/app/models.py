@@ -73,6 +73,15 @@ class Trade(BaseModel):
     kind: Literal['trade', 'resolution'] = 'trade'  # 'resolution' = payout entry
 
 
+class PositionLot(BaseModel):
+    """One individual buy, so a stacked position can be listed per bet."""
+    id: str
+    shares: float
+    price: int      # cents paid for this lot
+    notional: float  # dollars committed to this lot
+    ts: float
+
+
 class WalletPosition(BaseModel):
     market_id: str
     question: str
@@ -82,6 +91,10 @@ class WalletPosition(BaseModel):
     current_price: int
     value: float
     pnl_value: float
+    # Individual fills behind this position, oldest first. Empty for wallets
+    # persisted before lots were tracked; the aggregate fields above remain
+    # authoritative for cost basis and P&L.
+    lots: List[PositionLot] = []
 
 
 class Wallet(BaseModel):

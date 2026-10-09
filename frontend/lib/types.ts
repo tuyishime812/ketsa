@@ -1,5 +1,5 @@
 // Shared domain types for the Ketsa prediction-market frontend.
-// These mirror the Pydantic models exposed by the FastAPI backend.
+// These mirror the models exposed by the Ketsa API.
 
 export type Category =
   | 'politics'
@@ -64,6 +64,17 @@ export interface Trade {
   kind?: 'trade' | 'resolution'; // 'resolution' = payout entry at settlement
 }
 
+/** One individual buy. Repeat buys on the same market+outcome stay separate
+ *  lots so each bet is listed, while the parent position keeps the averaged
+ *  cost basis used for P&L. */
+export interface PositionLot {
+  id: string;
+  shares: number;
+  price: number; // cents paid for this lot
+  notional: number; // dollars committed
+  ts: number;
+}
+
 export interface WalletPosition {
   market_id: string;
   question: string;
@@ -73,6 +84,9 @@ export interface WalletPosition {
   current_price: number;
   value: number;
   pnl_value: number;
+  /** Individual fills behind this position, oldest first. Empty for wallets
+   *  persisted before lots were tracked. */
+  lots?: PositionLot[];
 }
 
 export interface Wallet {

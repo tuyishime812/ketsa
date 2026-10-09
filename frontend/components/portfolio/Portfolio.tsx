@@ -291,6 +291,53 @@ export default function Portfolio({
                       </div>
                     </div>
                   </div>
+
+                  {/* Each buy as its own row, so repeat bets on one market
+                      read as separate positions rather than one merged line. */}
+                  {r.p.lots && r.p.lots.length > 0 && (
+                    <div className="mt-4 border-t border-line pt-3">
+                      <div className="mb-2 flex items-center justify-between">
+                        <span className="font-mono text-[10px] font-semibold uppercase tracking-[.07em] text-ink-3">
+                          {r.p.lots.length === 1
+                            ? '1 bet'
+                            : `${r.p.lots.length} separate bets`}
+                        </span>
+                        <span className="font-mono text-[10px] uppercase tracking-[.06em] text-ink-3">
+                          each bet
+                        </span>
+                      </div>
+                      <ul className="flex flex-col gap-[5px]">
+                        {r.p.lots.map((l) => {
+                          const lotValue = l.shares * r.price / 100;
+                          const lotCost = l.shares * l.price / 100;
+                          const lotPnl = lotValue - lotCost;
+                          return (
+                            <li
+                              key={l.id}
+                              className="grid grid-cols-[1fr_auto_auto] items-center gap-3 rounded-[7px] bg-paper-alt px-3 py-2 font-mono text-[11.5px]"
+                            >
+                              <span className="truncate text-ink-2">
+                                {fmtShares(l.shares)} sh @ {fmtCents(l.price)}
+                                <span className="ml-2 text-ink-3">
+                                  {timeAgo(l.ts)}
+                                </span>
+                              </span>
+                              <span className="text-ink-2">
+                                {fmtBalance(l.notional, wallet.currency)}
+                              </span>
+                              <span
+                                className={`w-[86px] text-right font-semibold ${
+                                  lotPnl >= 0 ? 'text-pos' : 'text-neg'
+                                }`}
+                              >
+                                {fmtBalance(lotPnl, wallet.currency)}
+                              </span>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  )}
                 </div>
               ))}
 

@@ -268,12 +268,28 @@ class Marketplace:
                 if old_shares <= _EPS
                 else round((old_shares * entry["avg"] + shares * avg_outcome) / total)
             )
+            # Record this fill as its own lot so the UI can list every bet
+            # separately. The aggregate `entry` above remains authoritative for
+            # cost basis, so P&L is unaffected by this bookkeeping.
+            lots = wallet.setdefault("lots", {})
+            lot_id = secrets.token_hex(8)
+            lots[lot_id] = {
+                "id": lot_id,
+                "market_id": market_id,
+                "question": q,
+                "outcome": outcome,
+                "shares": _round4(shares),
+                "price": avg_outcome,
+                "notional": _round2(proceeds),
+                "ts": time.time(),
+            }
         else:
             wallet["balance"] += proceeds
             old_shares = entry["shares"]
             basis = min(old_shares, shares) * entry["avg"] / 100.0
             wallet["realized"] += proceeds - basis
             entry["shares"] = _round4(max(0.0, old_shares - shares))
+            self._consume_lots(wallet, market_id, outcome, shares)
         ts = time.time()
         wallet["history"].append(
             {
@@ -376,6 +392,30 @@ class Marketplace:
             "book": self.book_view(market_id),
             "trade": trade,
         }
+
+    def _consume_lots(self, wallet: dict, market_id: str, outcome: str, shares: float) -> None:
+        """Reduce open lots by ``shares``, oldest first (FIFO).
+
+        A sell is capped by the aggregate position elsewhere, so walking the
+        lots in time order cannot over-consume. Lots that fall to zero are
+        dropped so the UI never lists an empty row.
+        """
+        lots = wallet.get("lots") or {}
+        remaining = shares
+        # Sort by timestamp so FIFO order is stable regardless of dict order.
+        ordered = sorted(
+            (l for l in lots.values()
+             if l["market_id"] == market_id and l["outcome"] == outcome and l["shares"] > _EPS),
+            key=lambda l: l["ts"],
+        )
+        for lot in ordered:
+            if remaining <= _EPS:
+                break
+            take = min(lot["shares"], remaining)
+            lot["shares"] = _round4(lot["shares"] - take)
+            remaining -= take
+        for lot_id in [k for k, l in lots.items() if l["shares"] <= _EPS]:
+            del lots[lot_id]
 
     def _fill_buy_yes(self, book: dict, budget: float) -> tuple[list[dict], int, int]:
         remaining = budget
@@ -539,6 +579,10 @@ class Marketplace:
             "deposited": 0.0,
             "realized": 0.0,
             "positions": {},
+            # Per-fill lot ledger, keyed by lot id. The aggregate position stays
+            # the source of truth for cost basis and P&L; lots exist so the UI
+            # can show each individual bet instead of one averaged row.
+            "lots": {},
             "history": [],
             "created": time.time(),
         }
@@ -611,6 +655,28 @@ class Marketplace:
                 value = shares * cur / 100.0
                 pnl = value - shares * avg / 100.0
                 position_value += value
+                # The individual fills behind this averaged position, oldest
+                # first, so the UI can list every bet separately. Lots whose
+                # shares were sold off are already removed on trade.
+                lots = [
+                    {
+                        "id": l["id"],
+                        "shares": _round4(l["shares"]),
+                        "price": l["price"],
+                        "notional": _round2(l["notional"]),
+                        "ts": l["ts"],
+                    }
+                    for l in sorted(
+                        (
+                            l
+                            for l in (wallet.get("lots") or {}).values()
+                            if l["market_id"] == market_id
+                            and l["outcome"] == outcome
+                            and l["shares"] > _EPS
+                        ),
+                        key=lambda l: l["ts"],
+                    )
+                ]
                 positions.append(
                     {
                         "market_id": market_id,
@@ -621,6 +687,7 @@ class Marketplace:
                         "current_price": cur,
                         "value": _round2(value),
                         "pnl_value": _round2(pnl),
+                        "lots": lots,
                     }
                 )
         history = []
