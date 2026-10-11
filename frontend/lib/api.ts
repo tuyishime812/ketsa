@@ -1,9 +1,9 @@
 // Thin fetch wrapper for the Ketsa API service.
 //
-// In development, `next.config.js` rewrites `/api/*` to the upstream API server
-// so the browser only ever talks to the same origin (avoids CORS in the browser
-// and keeps the API URL out of client bundles). At build time we read the
-// data server-side via `fetchHomeData()`.
+// Browser-side calls go to the same-origin `/api/*`, served by the runtime
+// proxy in `app/api/[...path]/route.ts`, so the browser only ever talks to the
+// Next.js origin (avoids CORS in the browser and keeps the API URL out of
+// client bundles). Server components read data server-side via `fetchHomeData()`.
 
 import type {
   AuthCredentials,
@@ -123,7 +123,7 @@ export async function fetchMarketsGroup(): Promise<MarketsGroup> {
 }
 
 // ---------------------------------------------------------------------------
-// Client-side (browser) helpers. These hit the same-origin `/api/*` rewrite so
+// Client-side (browser) helpers. These hit the same-origin `/api/*` proxy so
 // no CORS configuration is required at runtime.
 // ---------------------------------------------------------------------------
 
@@ -220,7 +220,7 @@ export async function placeTrade(req: TradeRequest): Promise<TradeResponse> {
 
 // ---------------------------------------------------------------------------
 // User auth (register / login / session).
-// These hit the same-origin `/api/*` rewrite at runtime, like the client
+// These hit the same-origin `/api/*` proxy at runtime, like the client
 // helpers above.
 // ---------------------------------------------------------------------------
 

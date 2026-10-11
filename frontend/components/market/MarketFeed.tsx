@@ -12,7 +12,7 @@ import { fetchMarketsSession } from '@/lib/api';
 import type { Market } from '@/lib/types';
 
 // Browser only ever connects to the backend directly for the WebSocket feed
-// (the Next /api rewrite does not proxy upgrades). Prefer an explicit
+// (the Next /api proxy does not proxy upgrades). Prefer an explicit
 // NEXT_PUBLIC_KETSA_BACKEND_URL in production.
 const WS_URL =
   (process.env.NEXT_PUBLIC_KETSA_BACKEND_URL || 'http://127.0.0.1:8000').replace(

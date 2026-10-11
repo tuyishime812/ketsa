@@ -28,7 +28,8 @@ ketsa/
 │   └── requirements*.txt
 ├── frontend/                Next.js 15 + React 19 + Tailwind app
 │   ├── app/                 App Router pages (server components)
-│   │   └── admin/           Admin login + dashboard (sidebar, per-section editors)
+│   │   ├── admin/           Admin login + dashboard (sidebar, per-section editors)
+│   │   └── api/             Runtime /api/* proxy to the backend (browser calls)
 │   ├── components/          Public UI sections (Hero, Markets, Dashboard, ...)
 │   │   └── admin/           Admin editors (Markets, Hero, Ticker, Watch, ...)
 │   └── lib/                 API client, types, utils
@@ -48,8 +49,11 @@ ketsa/
    This is deliberate: every figure on the site is presented to the user as a
    real price, so a placeholder number rendering as if it were live market data
    is worse than a visible error.
-3. In local dev, `next.config.js` **rewrites** `/api/*` to the backend, so the
-   browser only ever talks to the Next.js origin.
+3. Browser-side calls — auth, admin, wallet, trades, payments and
+   notifications — hit same-origin `/api/*`, which is served by the **runtime
+   catch-all proxy** `app/api/[...path]/route.ts`. It forwards to
+   `KETSA_BACKEND_URL`, read at **request** time, so no build-time backend URL
+   is baked in and the browser only ever talks to the Next.js origin.
 
 ### Storage
 
@@ -98,7 +102,7 @@ The admin "reset content" endpoint re-seeds both backends to the original data
 > $env:KETSA_API_PORT=8001; $env:KETSA_WEB_PORT=3001; npm run dev   # PowerShell
 > ```
 >
-> `KETSA_API_PORT` and `KETSA_WEB_PORT` feed the `/api/*` rewrite, the
+> `KETSA_API_PORT` and `KETSA_WEB_PORT` feed the `/api/*` proxy, the
 > WebSocket origin, **and** the backend's own `KETSA_PUBLIC_BASE_URL` /
 > `KETSA_FRONTEND_URL`. That last part matters for social login: Auth0
 > redirects the browser back to `<public base>/api/auth/social/callback`, so
@@ -130,13 +134,13 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:3000`. The `/api/*` rewrite talks to the backend on
+Open `http://localhost:3000`. The `/api/*` proxy talks to the backend on
 `127.0.0.1:8000` by default (override with `KETSA_BACKEND_URL`, or use the
 one-command launcher above if the ports are taken).
 
 Note that only `NEXT_PUBLIC_*` variables are inlined into the client bundle.
 `lib/api.ts` reads `KETSA_BACKEND_URL` for **server-side** fetches, which is
-correct — the same-origin `AUTH_BASE = '/api/auth'` rewrite carries every auth
+correct — the same-origin `AUTH_BASE = '/api/auth'` proxy carries every auth
 and social-login call, so those never depend on a bundled backend URL. The
 WebSocket origin (`lib/push.ts`, `components/market/MarketFeed.tsx`) does read
 `NEXT_PUBLIC_KETSA_BACKEND_URL` in the browser, so that one is set for both
@@ -266,7 +270,7 @@ With both services running you can trade each market for real on the site:
 Note: when the backend is **not** reachable from the browser at the default
 `127.0.0.1:8000` (e.g. a Vercel frontend + hosted backend), set
 `NEXT_PUBLIC_KETSA_BACKEND_URL` so the WebSocket feed knows where to connect.
-The `/api/*` HTTP calls go through Next's rewrite proxy regardless.
+The `/api/*` HTTP calls go through the frontend's runtime proxy regardless.
 
 ---
 

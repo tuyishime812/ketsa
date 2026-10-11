@@ -294,13 +294,11 @@ the live-price "feel"; the live WebSocket feed connects directly to the backend
 origin in `NEXT_PUBLIC_KETSA_BACKEND_URL`.
 
 ### Admin writes in production
-The **admin panel is the one place the browser does call `/api`** in production:
-`/admin` posts JSON to `/api/admin/*`, which Vercel's serverless functions
-route to `KETSA_BACKEND_URL` same-origin to the frontend origin. Auth is a
-bearer token from `POST /api/admin/login` (password = `KETSA_ADMIN_PASSWORD`),
-held in `localStorage`. Writes update the backend's storage (Supabase in
-production, memory in dev), so a page refresh (and every subsequent visitor)
-sees the change.
+The `/admin` dashboard posts JSON to same-origin `/api/admin/*`, which the
+runtime proxy (above) forwards to `KETSA_BACKEND_URL`. Auth is a bearer token
+from `POST /api/admin/login` (password = `KETSA_ADMIN_PASSWORD`), held in
+`localStorage`. Writes update the backend's storage (Supabase in production,
+memory in dev), so a page refresh (and every subsequent visitor) sees the change.
 
 ### Payments are chosen + executed server-side
 The **browser never talks to wandePay**. The portfolio panel only submits

@@ -23,9 +23,10 @@
 // Security notes:
 //   * The upstream origin is fixed from the environment; only the path + query
 //     are forwarded, so a caller cannot retarget the proxy (no SSRF).
-//   * Hop-by-hop headers are stripped both ways, and the incoming
-//     `x-forwarded-for` is passed through so the backend's per-IP rate limiter
-//     can still see the real client.
+//   * Hop-by-hop headers are stripped both ways; the remaining request headers
+//     (including `authorization`) are forwarded unchanged. Note the backend
+//     keys its per-IP limits on the connection peer, so behind this proxy those
+//     limits are enforced per proxy instance, not per visitor.
 //   * The request body is buffered (bounded by the platform's request limit)
 //     and streamed back unchanged; nothing is logged beyond a failure line.
 
