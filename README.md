@@ -151,7 +151,8 @@ services by the launcher.
 With both services running, log in at **`http://localhost:3000/admin`**:
 
 - The first login uses the password from `KETSA_ADMIN_PASSWORD`
-  (default `` for local dev — **set a real one for production**).
+  (the local dev default is a throwaway: **you must set a strong, unique value
+  for production** — see `SECURITY.md`).
 - The dashboard has a sidebar with editors for **Markets, Hero, Ticker,
   Watch, Dashboard, Content, Users**, and **Manage** (hero/CTA copy, steps,
   footer, section headings). The **Users** tab lists every account with live

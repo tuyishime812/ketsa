@@ -1,0 +1,22 @@
+# Gitleaks configuration for the Ketsa repo.
+#
+# Adds to the default ruleset (which already covers Supabase service-role keys,
+# Resend keys, generic API keys/tokens, JWTs, private keys, etc.). The only
+# customisation here is an allowlist so the *example* env files and docs — which
+# are meant to contain obvious placeholders — do not raise false positives.
+#
+# Policy: NO real secret may exist anywhere in the tree or in git history.
+# See SECURITY.md for the incident-response and rotation procedure.
+extend:
+  useDefault = true
+
+[allowlist]
+description = "Committed example files and docs contain placeholders, never real credentials."
+paths = [
+  '''\.env\.example$''',
+  '''\.env\.production\.example$''',
+  '''(^|/)README\.md$''',
+  '''(^|/)DEPLOY\.md$''',
+  '''(^|/)RUNBOOK\.md$''',
+  '''(^|/)SECURITY\.md$''',
+]

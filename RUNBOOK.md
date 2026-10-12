@@ -54,6 +54,19 @@ BACKEND_ORIGIN  = https://<your-backend-domain>    # e.g. https://ketsa-api.onre
 
 ---
 
+## Step −1 — Rotate the leaked credentials (**BLOCKER, do first**)
+
+`backend/.env` with **live** secrets (wandePay token, Supabase service-role key,
+Resend key, Auth0 client secret, admin password) was committed in `de191c6` and
+pushed to `origin/main`. The file is now untracked, but the values are still in
+history and must be treated as publicly known.
+
+**Do not proceed past this gate until every one of those credentials has been
+rotated at the source and the file purged from history.** Full procedure and the
+audit checklist: [`SECURITY.md`](./SECURITY.md) → "ACTIVE INCIDENT".
+
+---
+
 ## Step 0 — Snapshot (2 min)
 
 Before changing anything, record the current live state so you can prove the

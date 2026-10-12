@@ -1,0 +1,24 @@
+name: Secret scan
+
+# Fails the build if a credential is committed, so a .env can never reach
+# origin again. Runs on every push and PR.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  gitleaks:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so a secret reintroduced in a new commit is caught
+          # even if the working tree looks clean.
+          fetch-depth: 0
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
