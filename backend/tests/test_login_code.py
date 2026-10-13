@@ -15,25 +15,23 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import auth as auth_mod
+from app import authstate
 from tests.conftest import register_user
 
 
 @pytest.fixture(autouse=True)
 def _clean_auth_state():
-    """The OTP/session/throttle stores are process-global by design.
+    """The OTP/session/throttle stores are shared state (authstate.py).
 
-    They intentionally live for the process lifetime in the real server, so
-    every test in this module has to start from empty or it inherits another
-    test's codes and per-IP request counts (TestClient reports the same
-    "testclient" IP for every request). Mirrors tests/test_social.py.
+    In the real server they intentionally live for the process lifetime (and
+    across restarts in production), so every test in this module has to start
+    from empty or it inherits another test's codes and per-IP request counts
+    (TestClient reports the same "testclient" IP for every request). Mirrors
+    tests/test_social.py.
     """
-    auth_mod._otps.clear()
-    auth_mod._sessions.clear()
-    auth_mod._login_attempts.clear()
-    auth_mod._code_requests.clear()
+    authstate.reset()
     yield
-    auth_mod._otps.clear()
-    auth_mod._code_requests.clear()
+    authstate.reset()
 
 
 @pytest.fixture()
@@ -133,8 +131,7 @@ def test_code_expires(client: TestClient, code_env) -> None:
     code = _login_codes(sent)[0]
 
     # Rewind the stored code's expiry rather than sleeping.
-    for entry in auth_mod._otps.values():
-        entry["expires"] = time.time() - 1
+    authstate.expire_all_otps(time.time() - 1)
 
     res = client.post(
         "/api/auth/login/code/verify", json={"email": "alice@ketsa.io", "otp": code}

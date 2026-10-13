@@ -4,7 +4,7 @@
 -- before pointing the backend at the project. All Ketsa content is stored as
 -- JSONB rows so the app never needs migrations for content changes.
 --
--- Five tables:
+-- Six tables:
 --   ketsa_kv           — markets + editable content (watch, ticker, dashboard,
 --                        stats, proof, settings). The "kind" column lets the
 --                        API scope queries; a content-reset only ever touches
@@ -16,6 +16,12 @@
 --                        wiped by resets.
 --   ketsa_users        — accounts (password + Auth0/Google sign-ins).
 --   ketsa_notifications — per-wallet in-app notification feed.
+--   ketsa_auth         — ephemeral auth state: bearer sessions, pending OTPs,
+--                        Auth0 SSO tickets and the login/code-request throttles.
+--                        Kept OUT of ketsa_kv so a content reset never logs
+--                        everyone out, and shared so it (a) survives a restart
+--                        or redeploy and (b) is the same across every backend
+--                        worker. Never wiped by the admin "reset content".
 
 create table if not exists public.ketsa_kv (
   id    text primary key,
@@ -82,6 +88,38 @@ create index if not exists ketsa_notifications_wallet_idx
 create index if not exists ketsa_payments_wallet_idx
   on public.ketsa_payments ((value ->> 'wallet_id'), (value ->> 'created') desc);
 
+-- Auth state store (sessions, OTPs, SSO tickets, throttles).
+--
+-- One table serves every ephemeral auth purpose. `id` is namespaced by kind
+-- ("session:<digest>", "otp:signup:<email>", "ticket:<t>", "throttle:<bucket>")
+-- so one sweep covers all of them. `secret_hash` holds a SHA-256 digest (never
+-- a plaintext code or token); `user_id` carries ownership for session/ticket
+-- rows so "revoke every session for this account" is one indexed delete;
+-- `attempts` is the OTP wrong-code counter that caps guessing; `payload`
+-- carries the pending-signup data or a throttle's timestamps.
+--
+-- `expires`/`issued` are Unix epoch seconds as double precision, not
+-- timestamptz: the application compares raw numbers, and a float both indexes
+-- for the sweep and round-trips without timezone parsing.
+--
+-- Deliberately separate from ketsa_kv so a content reset never logs everyone
+-- out. Safe to re-run.
+create table if not exists public.ketsa_auth (
+  id          text primary key,
+  ns          text not null,
+  secret_hash text,
+  user_id     text,
+  attempts    integer not null default 0,
+  payload     jsonb,
+  issued      double precision not null default 0,
+  expires     double precision not null
+);
+
+-- The sweep deletes by expiry; counts and the ticket cap filter by namespace
+-- (the composite also covers a bare `ns =`).
+create index if not exists ketsa_auth_expires_idx on public.ketsa_auth (expires);
+create index if not exists ketsa_auth_ns_user_idx on public.ketsa_auth (ns, user_id);
+
 -- Row Level Security. The anon/publishable key is PUBLIC (it ships in the
 -- browser bundle), so without RLS anyone holding it could read every wallet
 -- balance, payment record, user account and password hash. Enabling RLS with NO
@@ -93,3 +131,5 @@ alter table public.ketsa_wallets       enable row level security;
 alter table public.ketsa_payments      enable row level security;
 alter table public.ketsa_users         enable row level security;
 alter table public.ketsa_notifications enable row level security;
+-- Auth state carries live session digests and pending signups: same treatment.
+alter table public.ketsa_auth          enable row level security;

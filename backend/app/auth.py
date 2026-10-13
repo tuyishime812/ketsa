@@ -6,7 +6,8 @@ positions live in the storage backend, so funds survive restarts.
 
 Auth is intentionally lightweight and mirrors the admin gate in `admin.py`:
   * Passwords are hashed with PBKDF2-HMAC-SHA256 before storage.
-  * Sessions are random bearer tokens held in memory (restart invalidates them).
+  * Sessions are random bearer tokens whose digests live in the storage backend
+    (authstate.py), so they survive restarts and are shared across workers.
   * All trading/portfolio routes continue to be addressed by wallet id, so the
     existing simulated-wallet experience and the account flow share one engine.
 """
@@ -23,7 +24,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
-from . import mailer, social, store
+from . import authstate, mailer, social, store
 from .engine import engine
 from .models import User, Wallet
 
@@ -33,15 +34,18 @@ logger = logging.getLogger("ketsa.auth")
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
-# token digest -> (expiry, user id). Sessions last 30 days, sliding.
-_sessions: dict[str, tuple[float, str]] = {}
+# Sessions last 30 days, sliding. The digest -> (expiry, user id) map lives in
+# the storage backend (authstate.py), so a restart or redeploy keeps everyone
+# logged in and every worker shares one view. The sliding refresh is throttled
+# to one write per SESSION_SLIDE_INTERVAL so authenticated requests don't each
+# pay for a database write.
 SESSION_TTL = 30 * 24 * 3600
+SESSION_SLIDE_INTERVAL = 3600
 
-# Auth0 social login: single-use, short-lived tickets that carry a freshly
-# issued session token from the backend callback to the frontend /auth/callback
-# page. The ticket appears in a URL, so it must be unguessable, single-use and
-# short-lived (60s) — the real session token never travels in a URL.
-_tickets: dict[str, tuple[float, str]] = {}
+# Auth0 social login: single-use, short-lived tickets that identify the user to
+# the frontend /auth/callback page. The ticket appears in a URL, so it must be
+# unguessable, single-use and short-lived (60s) — no session material ever
+# travels in a URL, and the ticket stores a user id, never a token.
 SSO_TICKET_TTL = 60
 # Redeemed tickets are popped, but a ticket whose callback is never completed
 # (closed tab, back button, dropped mobile connection) would otherwise sit here
@@ -53,20 +57,20 @@ MAX_PENDING_TICKETS = 5_000
 
 
 def _prune_tickets(now: float) -> None:
-    """Evict expired tickets, then hard-cap the dict if it is still too big."""
-    for t in [t for t, (exp, _) in _tickets.items() if exp < now]:
-        _tickets.pop(t, None)
-    if len(_tickets) > MAX_PENDING_TICKETS:
-        for t in sorted(_tickets, key=lambda k: _tickets[k][0])[: len(_tickets) - MAX_PENDING_TICKETS]:
-            _tickets.pop(t, None)
+    """Evict expired tickets, then hard-cap the store if it is still too big."""
+    authstate.sweep(now)
+    pending = authstate.ticket_count()
+    if pending > MAX_PENDING_TICKETS:
+        for ticket in authstate.oldest_tickets(pending - MAX_PENDING_TICKETS):
+            authstate.delete_ticket(ticket)
 
 # Login throttling — per-identifier (email or phone) failed-attempt window
 # (env-tunable so tests can force short windows). Guards the (public,
 # per-IP limited) login endpoint against password guessing without locking
-# out honest guests on a shared IP.
+# out honest guests on a shared IP. Stamps live in the shared store so a
+# redeploy doesn't reset the fence and every worker counts the same failures.
 LOGIN_MAX_FAILURES = 5
 LOGIN_WINDOW_SECONDS = 900
-_login_attempts: dict[str, list[float]] = {}
 
 # Passwordless sign-in by emailed code.
 #
@@ -79,7 +83,6 @@ _login_attempts: dict[str, list[float]] = {}
 #     abuse / resource exhaustion, CWE-441 + CWE-770).
 CODE_REQUEST_MAX = 5
 CODE_REQUEST_WINDOW_SECONDS = 900
-_code_requests: dict[str, list[float]] = {}
 
 
 def _code_request_max() -> int:
@@ -94,16 +97,6 @@ def _code_request_window() -> int:
         return int(os.getenv("KETSA_CODE_REQUEST_WINDOW", str(CODE_REQUEST_WINDOW_SECONDS)))
     except ValueError:
         return CODE_REQUEST_WINDOW_SECONDS
-
-
-def _prune_code_requests(now: float, window: int) -> None:
-    """Drop expired request stamps so the per-IP tracker can't grow unbounded."""
-    for ip, stamps in list(_code_requests.items()):
-        kept = [t for t in stamps if now - t < window]
-        if kept:
-            _code_requests[ip] = kept
-        else:
-            _code_requests.pop(ip, None)
 
 _SALT_LEN = 16
 _PBKDF2_ITER = 100_000
@@ -166,7 +159,6 @@ def lookup_user_by_identifier(identifier: str) -> dict | None:
 _OTP_TTL_SECONDS = 10 * 60
 _OTP_MAX_ATTEMPTS = 5
 _OTP_RESEND_SECONDS = 60
-_otps: dict[str, dict] = {}
 
 
 class _OtpCooldown(Exception):
@@ -203,20 +195,19 @@ def _issue_otp(key: str, payload: dict | None = None) -> str:
     """
     now = time.time()
     # Opportunistic sweep: drop anything that expired so a resend can start
-    # fresh, and the map can never grow unbounded.
-    for stale in [k for k, v in _otps.items() if v["expires"] < now]:
-        _otps.pop(stale, None)
-    previous = _otps.get(key)
+    # fresh, and the store can never grow unbounded.
+    authstate.sweep(now)
+    previous = authstate.get_otp(key)
     if previous and now - previous["issued"] < _otp_resend_cooldown():
         raise _OtpCooldown()
     code = f"{secrets.randbelow(1_000_000):06d}"
-    _otps[key] = {
-        "hash": hashlib.sha256(code.encode("ascii")).hexdigest(),
-        "issued": now,
-        "expires": now + _otp_ttl(),
-        "attempts": 0,
-        "payload": payload if payload is not None else (previous or {}).get("payload"),
-    }
+    authstate.put_otp(
+        key,
+        hashlib.sha256(code.encode("ascii")).hexdigest(),
+        payload if payload is not None else (previous or {}).get("payload"),
+        issued=now,
+        expires=now + _otp_ttl(),
+    )
     return code
 
 
@@ -224,24 +215,22 @@ def _consume_otp(key: str, code: str) -> dict | None:
     """Validate and burn a one-time passcode.
 
     Returns the consumed entry on success (entry removed — single use, even
-    in memory; callers read ``entry.get("payload")``), or None for any
+    across processes; callers read ``entry.get("payload")``), or None for any
     failure: unknown key, expired code, too many attempts (code dead, entry
     kept so a resend can recover the payload), or a wrong code (entry kept,
-    attempts bumped). Comparison is constant-time.
+    attempts bumped). The code digest comparison happens inside the store's
+    atomic consume.
     """
-    entry = _otps.get(key)
-    if entry is None:
-        return None
     now = time.time()
-    if now > entry["expires"] or entry["attempts"] > _otp_max_attempts():
-        return None
-    entry["attempts"] += 1
-    if entry["attempts"] > _otp_max_attempts():
-        return None
+    max_attempts = _otp_max_attempts()
     validate = hashlib.sha256((code or "").strip().encode("ascii")).hexdigest()
-    if not secrets.compare_digest(entry["hash"], validate):
-        return None
-    return _otps.pop(key, None)
+    entry = authstate.consume_otp(key, validate, max_attempts=max_attempts, now=now)
+    if entry is not None:
+        return entry
+    # Wrong code / expired / dead: count the failed guess so the cap means a
+    # cap. The entry is kept so a resend can recover its payload.
+    authstate.bump_otp_attempts(key, max_attempts=max_attempts, now=now)
+    return None
 
 
 def _throttle_window() -> int:
@@ -256,17 +245,6 @@ def _throttle_max() -> int:
         return int(os.getenv("KETSA_AUTH_MAX_FAILURES", str(LOGIN_MAX_FAILURES)))
     except ValueError:
         return LOGIN_MAX_FAILURES
-
-
-def _prune_attempts(now: float, window: int) -> None:
-    """Drop expired attempt logs so the tracker can't grow unboundedly."""
-    if len(_login_attempts) > 2_000:
-        for email in [e for e, ts in _login_attempts.items() if not ts]:
-            _login_attempts.pop(email, None)
-        for email, ts in list(_login_attempts.items()):
-            ts[:] = [t for t in ts if now - t < window]
-            if not ts:
-                _login_attempts.pop(email, None)
 
 
 def hash_password(password: str) -> str:
@@ -385,28 +363,30 @@ def _hash_token(token: str) -> str:
 
 
 def _issue_session(user_id: str) -> str:
+    now = time.time()
     token = secrets.token_urlsafe(32)
-    _sessions[_hash_token(token)] = (time.time() + SESSION_TTL, user_id)
+    authstate.put_session(
+        _hash_token(token), user_id, issued=now, expires=now + SESSION_TTL
+    )
     return token
 
 
-def _issue_sso_ticket(token: str) -> str:
-    """Single-use ticket that hands a session token to the frontend callback."""
+def _issue_sso_ticket(user_id: str) -> str:
+    """Single-use ticket that lets the frontend claim a fresh session."""
     now = time.time()
     _prune_tickets(now)
     ticket = secrets.token_urlsafe(32)
-    _tickets[ticket] = (now + SSO_TICKET_TTL, token)
+    authstate.put_ticket(ticket, user_id, issued=now, expires=now + SSO_TICKET_TTL)
     return ticket
 
 
 def _revoke_session(token: str) -> None:
-    _sessions.pop(_hash_token(token), None)
+    authstate.delete_session(_hash_token(token))
 
 
 def revoke_user_sessions(user_id: str) -> None:
     """Drop every live session for a user (password change / admin reset)."""
-    for digest in [d for d, (_, uid) in _sessions.items() if uid == user_id]:
-        _sessions.pop(digest, None)
+    authstate.delete_sessions_for_user(user_id)
 
 
 def _user_public(user: dict) -> User:
@@ -429,12 +409,18 @@ def resolve_token(token: str) -> dict:
     """Resolve a raw bearer token to the authenticated user record."""
     digest = _hash_token(token)
     now = time.time()
-    entry = _sessions.get(digest)
-    if entry is None or entry[0] < now:
-        _sessions.pop(digest, None)
+    entry = authstate.get_session(digest)
+    if entry is None:
         raise HTTPException(status_code=401, detail="Session expired, please log in again")
-    _sessions[digest] = (now + SESSION_TTL, entry[1])  # sliding window
-    user = store.get_user(entry[1])
+    expiry, user_id = entry
+    if expiry < now:
+        authstate.delete_session(digest)
+        raise HTTPException(status_code=401, detail="Session expired, please log in again")
+    # Sliding window, but write at most once per SESSION_SLIDE_INTERVAL so
+    # authenticated requests don't each trigger a database write.
+    if expiry - now < SESSION_TTL - SESSION_SLIDE_INTERVAL:
+        authstate.touch_session(digest, now + SESSION_TTL)
+    user = store.get_user(user_id)
     if user is None:
         raise HTTPException(status_code=401, detail="Account not found")
     return user
@@ -463,7 +449,7 @@ def resolve_optional_user(authorization: str | None) -> dict | None:
 # --- Routes -----------------------------------------------------------------
 
 @router.post("/register", response_model=AuthResponse | PendingVerifyResponse)
-async def register(
+def register(
     body: RegisterRequest, response: Response
 ) -> AuthResponse | PendingVerifyResponse:
     name = body.name.strip()
@@ -505,7 +491,7 @@ async def register(
             # that dead end is indistinguishable from a broken button.
             # This path is taken identically for every address, so it leaks
             # nothing beyond the existence disclosure the 409 above already makes.
-            _otps.pop(f"signup:{email}", None)
+            authstate.delete_otp(f"signup:{email}")
             raise HTTPException(
                 status_code=502,
                 detail="We couldn't send the verification email. Please try again in a moment.",
@@ -528,7 +514,7 @@ async def register(
 
 
 @router.post("/register/verify", response_model=AuthResponse)
-async def verify_email(body: VerifyEmailRequest) -> AuthResponse:
+def verify_email(body: VerifyEmailRequest) -> AuthResponse:
     """Complete an email signup with the emailed one-time passcode."""
     email = body.email.strip().lower()
     if not _EMAIL_RE.match(email):
@@ -553,12 +539,12 @@ async def verify_email(body: VerifyEmailRequest) -> AuthResponse:
 
 
 @router.post("/register/resend", response_model=PendingVerifyResponse)
-async def resend_register_otp(body: ResendOtpRequest, response: Response) -> PendingVerifyResponse:
+def resend_register_otp(body: ResendOtpRequest, response: Response) -> PendingVerifyResponse:
     """Re-email the signup code for a pending registration (cooldown-gated)."""
     email = body.email.strip().lower()
     if not _EMAIL_RE.match(email):
         raise HTTPException(status_code=400, detail="Enter a valid email address")
-    if _otps.get(f"signup:{email}") is None:
+    if authstate.get_otp(f"signup:{email}") is None:
         raise HTTPException(status_code=400, detail="No pending registration for this email")
     try:
         code = _issue_otp(f"signup:{email}")
@@ -567,7 +553,7 @@ async def resend_register_otp(body: ResendOtpRequest, response: Response) -> Pen
             status_code=429,
             detail="A verification code was recently sent to this email. Try again shortly.",
         )
-    entry = _otps.get(f"signup:{email}", {})
+    entry = authstate.get_otp(f"signup:{email}") or {}
     payload = entry.get("payload") or {}
     sent = mailer.send_otp_email(
         email, code, "signup", _otp_ttl() // 60, name=str(payload.get("name") or "")
@@ -588,7 +574,7 @@ async def resend_register_otp(body: ResendOtpRequest, response: Response) -> Pen
 
 
 @router.post("/forgot-password")
-async def forgot_password(body: ForgotPasswordRequest) -> dict:
+def forgot_password(body: ForgotPasswordRequest) -> dict:
     """Email a reset code when the identifier belongs to an account.
 
     Always answers 200 ``{"ok": true}`` — for unknown accounts, phone
@@ -618,7 +604,7 @@ async def forgot_password(body: ForgotPasswordRequest) -> dict:
 
 
 @router.post("/reset-password")
-async def reset_password(body: ResetPasswordRequest) -> dict:
+def reset_password(body: ResetPasswordRequest) -> dict:
     """Validate the emailed reset code and set a new password.
 
     All existing sessions are revoked. Unknown emails and invalid/expired
@@ -642,7 +628,7 @@ async def reset_password(body: ResetPasswordRequest) -> dict:
 
 
 @router.post("/login", response_model=AuthResponse)
-async def login(body: LoginRequest) -> AuthResponse:
+def login(body: LoginRequest) -> AuthResponse:
     try:
         kind, identifier = normalize_identifier(body.identifier)
     except ValueError:
@@ -654,9 +640,10 @@ async def login(body: LoginRequest) -> AuthResponse:
     now = time.time()
     window = _throttle_window()
     max_failures = _throttle_max()
-    _prune_attempts(now, window)
+    authstate.sweep(now)
 
-    fails = [t for t in _login_attempts.get(identifier, []) if now - t < window]
+    bucket = f"throttle:login:{identifier}"
+    fails = [t for t in authstate.throttle_get(bucket) if now - t < window]
     if len(fails) >= max_failures:
         retry_in = max(1, int(window - (now - min(fails))))
         raise HTTPException(
@@ -666,11 +653,12 @@ async def login(body: LoginRequest) -> AuthResponse:
 
     user = store.get_user_by_email(identifier) if kind == "email" else store.get_user_by_phone(identifier)
     if user is None or not _verify_password(body.password, user.get("password", "")):
-        _login_attempts.setdefault(identifier, []).append(now)
-        _prune_attempts(now, window)
+        stamps = [t for t in authstate.throttle_get(bucket) if now - t < window]
+        stamps.append(now)
+        authstate.throttle_set(bucket, stamps, window)
         raise HTTPException(status_code=401, detail="Invalid email/phone or password")
 
-    _login_attempts.pop(identifier, None)
+    authstate.throttle_clear(bucket)
     token = _issue_session(user["id"])
     return AuthResponse(token=token, user=_user_public(user), wallet=_wallet_for_user(user))
 
@@ -681,7 +669,7 @@ async def login(body: LoginRequest) -> AuthResponse:
 
 
 @router.post("/login/code")
-async def request_login_code(body: LoginCodeRequest, request: Request) -> dict:
+def request_login_code(body: LoginCodeRequest, request: Request) -> dict:
     """Email a one-time sign-in code so a user can log in without a password.
 
     Always answers ``200 {"ok": true}`` — for unknown accounts, phone
@@ -695,14 +683,16 @@ async def request_login_code(body: LoginCodeRequest, request: Request) -> dict:
     ip = request.client.host if request.client else "unknown"
     now = time.time()
     window = _code_request_window()
-    _prune_code_requests(now, window)
-    hits = _code_requests.setdefault(ip, [])
+    authstate.sweep(now)
+    bucket = f"throttle:code:{ip}"
+    hits = [t for t in authstate.throttle_get(bucket) if now - t < window]
     if len(hits) >= _code_request_max():
         raise HTTPException(
             status_code=429,
             detail="Too many sign-in code requests. Try again later.",
         )
     hits.append(now)
+    authstate.throttle_set(bucket, hits, window)
 
     try:
         kind, identifier = normalize_identifier(body.identifier)
@@ -729,7 +719,7 @@ async def request_login_code(body: LoginCodeRequest, request: Request) -> dict:
 
 
 @router.post("/login/code/verify", response_model=AuthResponse)
-async def verify_login_code(body: VerifyLoginCodeRequest) -> AuthResponse:
+def verify_login_code(body: VerifyLoginCodeRequest) -> AuthResponse:
     """Exchange a valid emailed sign-in code for a normal session.
 
     The code is bound to the user id that requested it and burns on use, so it
@@ -745,20 +735,20 @@ async def verify_login_code(body: VerifyLoginCodeRequest) -> AuthResponse:
         raise HTTPException(status_code=401, detail="Invalid or expired code")
     # A successful code is proof enough; clear any password-failure streak so a
     # user who fumbled the form isn't left throttled after signing in.
-    _login_attempts.pop(email, None)
+    authstate.throttle_clear(f"throttle:login:{email}")
     token = _issue_session(user["id"])
     return AuthResponse(token=token, user=_user_public(user), wallet=_wallet_for_user(user))
 
 
 @router.post("/logout")
-async def logout(authorization: str | None = Header(default=None)) -> dict[str, bool]:
+def logout(authorization: str | None = Header(default=None)) -> dict[str, bool]:
     if authorization and authorization.startswith("Bearer "):
         _revoke_session(authorization.removeprefix("Bearer ").strip())
     return {"ok": True}
 
 
 @router.post("/password", response_model=AuthResponse)
-async def change_password(
+def change_password(
     body: ChangePasswordRequest, user: dict = Depends(require_user)
 ) -> AuthResponse:
     """Change the authenticated account's password (all other sessions revoked)."""
@@ -774,7 +764,7 @@ async def change_password(
 
 
 @router.get("/me", response_model=AuthResponse)
-async def me(user: dict = Depends(require_user)) -> AuthResponse:
+def me(user: dict = Depends(require_user)) -> AuthResponse:
     return AuthResponse(token="", user=_user_public(user), wallet=_wallet_for_user(user))
 
 
@@ -847,7 +837,7 @@ def _realize_social_user(claims: dict) -> dict:
 
 
 @router.post("/social/login", response_model=dict)
-async def social_login_start() -> dict:
+def social_login_start() -> dict:
     """Start an Auth0 Google login; returns the /authorize URL to follow."""
     if not social.configured():
         raise HTTPException(status_code=503, detail="Google login is not configured on this server")
@@ -896,9 +886,11 @@ async def social_login_callback(
         logger.warning("auth0 id token rejected: %s", e)
         raise HTTPException(status_code=400, detail="Google sign-in could not be verified. Please try again.")
 
-    user = _realize_social_user(claims)
-    token = _issue_session(user["id"])
-    ticket = _issue_sso_ticket(token)
+    # _realize_social_user reads/writes users and _issue_sso_ticket writes the
+    # shared store: keep both off the event loop so Google's latency (already
+    # threaded above) is the only blocking this handler does.
+    user = await asyncio.to_thread(_realize_social_user, claims)
+    ticket = await asyncio.to_thread(_issue_sso_ticket, user["id"])
     return RedirectResponse(
         url=f"{social.frontend_url()}/auth/callback?ticket={ticket}",
         status_code=302,
@@ -906,14 +898,16 @@ async def social_login_callback(
 
 
 @router.post("/social/session", response_model=AuthResponse)
-async def social_session(body: SocialSessionRequest) -> AuthResponse:
-    """Exchange the single-use ticket for the Ketsa session (token + user + wallet)."""
+def social_session(body: SocialSessionRequest) -> AuthResponse:
+    """Exchange the single-use ticket for a fresh Ketsa session."""
     _prune_tickets(time.time())
-    entry = _tickets.pop(body.ticket, None)
+    entry = authstate.take_ticket(body.ticket)
     if entry is None:
         raise HTTPException(status_code=400, detail="Invalid or expired login — please try again")
-    exp, token = entry
-    if exp < time.time():
+    if entry["expires"] < time.time() or not entry.get("user_id"):
         raise HTTPException(status_code=400, detail="Login expired — please try again")
-    user = resolve_token(token)
+    user = store.get_user(str(entry["user_id"]))
+    if user is None:
+        raise HTTPException(status_code=400, detail="Login expired — please try again")
+    token = _issue_session(user["id"])
     return AuthResponse(token=token, user=_user_public(user), wallet=_wallet_for_user(user))

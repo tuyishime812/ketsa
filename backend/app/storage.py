@@ -25,6 +25,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import secrets
 from typing import Any, Protocol
 
 from . import data as seed
@@ -218,6 +219,32 @@ class StoreBackend(Protocol):
     def upsert_notification(self, notification: dict) -> None: ...
     def list_notifications(self, wallet_id: str | None = None, limit: int = 50) -> list[dict]: ...
     def mark_notifications_read(self, wallet_id: str, ids: list[str] | None = None) -> int: ...
+    # Ephemeral auth state (sessions/OTPs/tickets/throttles). See authstate.py.
+    def auth_put(
+        self,
+        auth_id: str,
+        ns: str,
+        *,
+        secret_hash: str | None = None,
+        user_id: str | None = None,
+        attempts: int = 0,
+        payload: Any = None,
+        issued: float,
+        expires: float,
+    ) -> None: ...
+    def auth_get(self, auth_id: str) -> dict | None: ...
+    def auth_delete(self, auth_id: str) -> None: ...
+    def auth_take(self, auth_id: str) -> dict | None: ...
+    def auth_update(self, auth_id: str, fields: dict) -> None: ...
+    def auth_consume_otp(
+        self, auth_id: str, *, secret_hash: str, max_attempts: int, now: float
+    ) -> dict | None: ...
+    def auth_delete_for_user(self, ns: str, user_id: str) -> int: ...
+    def auth_count(self, ns: str) -> int: ...
+    def auth_ids(self, ns: str) -> list[str]: ...
+    def auth_ids_oldest(self, ns: str, limit: int) -> list[str]: ...
+    def auth_sweep(self, now: float) -> None: ...
+    def auth_clear(self) -> None: ...
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +273,9 @@ class MemoryBackend:
         self._users: dict[str, dict] = {}
         self._payments: dict[str, dict] = {}
         self._notifications: dict[str, dict] = {}
+        # Ephemeral auth state. Deliberately NOT cleared by force_reseed():
+        # an admin content reset must not log every user out.
+        self._auth: dict[str, dict] = {}
         self._initialized = False
 
     def init(self) -> None:
@@ -478,6 +508,98 @@ class MemoryBackend:
                 marked += 1
         return marked
 
+    # --- ephemeral auth state -------------------------------------------------
+    # One dict keyed by a namespaced id ("session:<digest>", "otp:<scope>",
+    # "ticket:<t>", "throttle:<bucket>"). Mirrors the Supabase `ketsa_auth` table
+    # row-for-row so authstate.py never has to know which backend is active.
+    # Values are deep-copied in and out so a caller cannot mutate a stored row
+    # through a stale reference (the old module-level dicts leaked live refs).
+    def auth_put(
+        self,
+        auth_id: str,
+        ns: str,
+        *,
+        secret_hash: str | None = None,
+        user_id: str | None = None,
+        attempts: int = 0,
+        payload: Any = None,
+        issued: float,
+        expires: float,
+    ) -> None:
+        self._auth[auth_id] = {
+            "id": auth_id,
+            "ns": ns,
+            "secret_hash": secret_hash,
+            "user_id": user_id,
+            "attempts": int(attempts),
+            "payload": copy.deepcopy(payload),
+            "issued": float(issued),
+            "expires": float(expires),
+        }
+
+    def auth_get(self, auth_id: str) -> dict | None:
+        row = self._auth.get(auth_id)
+        return copy.deepcopy(row) if row else None
+
+    def auth_delete(self, auth_id: str) -> None:
+        self._auth.pop(auth_id, None)
+
+    def auth_take(self, auth_id: str) -> dict | None:
+        row = self._auth.pop(auth_id, None)
+        return copy.deepcopy(row) if row else None
+
+    def auth_update(self, auth_id: str, fields: dict) -> None:
+        row = self._auth.get(auth_id)
+        if row is not None:
+            row.update(copy.deepcopy(fields))
+
+    def auth_consume_otp(
+        self, auth_id: str, *, secret_hash: str, max_attempts: int, now: float
+    ) -> dict | None:
+        row = self._auth.get(auth_id)
+        if row is None or row["ns"] != "otp":
+            return None
+        # Strict: an entry at the attempt cap is dead even if the code is right,
+        # matching auth.py's historical one-increment-then-compare semantics.
+        if row["expires"] <= now or int(row.get("attempts") or 0) >= max_attempts:
+            return None
+        stored = row.get("secret_hash") or ""
+        # Constant-time: a timing oracle on the digest would let an attacker
+        # recover SHA-256(code) and brute-force the 6 digits offline.
+        if not secrets.compare_digest(stored, secret_hash):
+            return None
+        return copy.deepcopy(self._auth.pop(auth_id, None))
+
+    def auth_delete_for_user(self, ns: str, user_id: str) -> int:
+        ids = [
+            i
+            for i, r in self._auth.items()
+            if r["ns"] == ns and r.get("user_id") == user_id
+        ]
+        for i in ids:
+            self._auth.pop(i, None)
+        return len(ids)
+
+    def auth_count(self, ns: str) -> int:
+        return sum(1 for r in self._auth.values() if r["ns"] == ns)
+
+    def auth_ids(self, ns: str) -> list[str]:
+        return [i for i, r in self._auth.items() if r["ns"] == ns]
+
+    def auth_ids_oldest(self, ns: str, limit: int) -> list[str]:
+        rows = sorted(
+            (r for r in self._auth.values() if r["ns"] == ns),
+            key=lambda r: (r["issued"], r["id"]),
+        )
+        return [r["id"] for r in rows[: max(0, int(limit))]]
+
+    def auth_sweep(self, now: float) -> None:
+        for i in [i for i, r in self._auth.items() if r["expires"] <= now]:
+            self._auth.pop(i, None)
+
+    def auth_clear(self) -> None:
+        self._auth.clear()
+
 
 # ---------------------------------------------------------------------------
 # Supabase backend (production) — Postgres via Supabase REST (PostgREST)
@@ -488,6 +610,7 @@ WALLETS_TABLE = "ketsa_wallets"
 PAYMENTS_TABLE = "ketsa_payments"
 USERS_TABLE = "ketsa_users"
 NOTIFICATIONS_TABLE = "ketsa_notifications"
+AUTH_TABLE = "ketsa_auth"
 
 
 def _supabase_import():
@@ -871,6 +994,125 @@ class SupabaseBackend:
                 self._upsert_row(NOTIFICATIONS_TABLE, n["id"], n)
                 marked += 1
         return marked
+
+    # --- ephemeral auth state -------------------------------------------------
+    # Rows in `ketsa_auth`; see authstate.py for the namespace scheme.
+    # postgrest-py deletes default to `return=representation`, so `.data` is
+    # the rows actually removed: `auth_take` (tickets) and `auth_consume_otp`
+    # (OTPs) are therefore single atomic statements, and two workers racing to
+    # redeem the same ticket or burn the same code cannot both win — the
+    # loser's DELETE simply matches zero rows.
+
+    def auth_put(
+        self,
+        auth_id: str,
+        ns: str,
+        *,
+        secret_hash: str | None = None,
+        user_id: str | None = None,
+        attempts: int = 0,
+        payload: Any = None,
+        issued: float,
+        expires: float,
+    ) -> None:
+        self.client.table(AUTH_TABLE).upsert(
+            {
+                "id": auth_id,
+                "ns": ns,
+                "secret_hash": secret_hash,
+                "user_id": user_id,
+                "attempts": int(attempts),
+                "payload": _as_json(payload),
+                "issued": float(issued),
+                "expires": float(expires),
+            }
+        ).execute()
+
+    def auth_get(self, auth_id: str) -> dict | None:
+        data = (
+            self.client.table(AUTH_TABLE)
+            .select("*")
+            .eq("id", auth_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if not data:
+            return None
+        return _as_json(data[0])
+
+    def auth_delete(self, auth_id: str) -> None:
+        self.client.table(AUTH_TABLE).delete().eq("id", auth_id).execute()
+
+    def auth_take(self, auth_id: str) -> dict | None:
+        data = self.client.table(AUTH_TABLE).delete().eq("id", auth_id).execute().data
+        return _as_json(data[0]) if data else None
+
+    def auth_update(self, auth_id: str, fields: dict) -> None:
+        if not fields:
+            return
+        self.client.table(AUTH_TABLE).update(_as_json(fields)).eq("id", auth_id).execute()
+
+    def auth_consume_otp(
+        self, auth_id: str, *, secret_hash: str, max_attempts: int, now: float
+    ) -> dict | None:
+        data = (
+            self.client.table(AUTH_TABLE)
+            .delete()
+            .eq("id", auth_id)
+            .eq("secret_hash", secret_hash)
+            .gt("expires", float(now))
+            .lt("attempts", int(max_attempts))
+            .execute()
+            .data
+        )
+        return _as_json(data[0]) if data else None
+
+    def auth_delete_for_user(self, ns: str, user_id: str) -> int:
+        data = (
+            self.client.table(AUTH_TABLE)
+            .delete()
+            .eq("ns", ns)
+            .eq("user_id", user_id)
+            .execute()
+            .data
+        )
+        return len(data or [])
+
+    def auth_count(self, ns: str) -> int:
+        res = (
+            self.client.table(AUTH_TABLE)
+            .select("id", count="exact")
+            .eq("ns", ns)
+            .execute()
+        )
+        return int(res.count or 0)
+
+    def auth_ids(self, ns: str) -> list[str]:
+        data = (
+            self.client.table(AUTH_TABLE).select("id").eq("ns", ns).execute().data or []
+        )
+        return [r["id"] for r in data]
+
+    def auth_ids_oldest(self, ns: str, limit: int) -> list[str]:
+        data = (
+            self.client.table(AUTH_TABLE)
+            .select("id")
+            .eq("ns", ns)
+            .order("issued", desc=False)
+            .limit(int(limit))
+            .execute()
+            .data
+            or []
+        )
+        return [r["id"] for r in data]
+
+    def auth_sweep(self, now: float) -> None:
+        self.client.table(AUTH_TABLE).delete().lte("expires", float(now)).execute()
+
+    def auth_clear(self) -> None:
+        self.client.table(AUTH_TABLE).delete().gte("issued", -1).execute()
+
 
 # ---------------------------------------------------------------------------
 # Selection

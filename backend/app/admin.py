@@ -4,10 +4,10 @@ Access is gated by a single shared admin password (`KETSA_ADMIN_PASSWORD`).
 On login the client receives a server-issued token which must be supplied on
 every subsequent request via the `Authorization: Bearer <token>` header.
 
-Tokens are random and held in memory, so restarting the server invalidates
-them (a fresh login is required). This is intentional: the admin gate is a
-simple, low-overhead safeguard for a marketing site, not a multi-user RBAC
-system.
+Tokens are random and their digests live in the shared auth store
+(authstate.py), so a restart or redeploy does not log the admin out and every
+worker validates the same token. The admin gate is still a simple, low-overhead
+safeguard for a marketing site, not a multi-user RBAC system.
 
 Because one password guards the whole site (it can delete accounts, reset
 any user's password, and resolve markets — which settles real money), the
@@ -27,7 +27,7 @@ import time
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
 
-from . import mailer, store
+from . import authstate, mailer, store
 from .auth import hash_password, lookup_user_by_identifier, revoke_user_sessions
 from .engine import engine
 from .models import AdminUserView
@@ -37,18 +37,19 @@ logger = logging.getLogger("ketsa.admin")
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
-# token -> expiry (unix seconds). Tokens last 12h.
-_tokens: dict[str, float] = {}
+# Admin tokens last 12h (sliding). Digests live in the shared auth store —
+# same restart-survival and multi-worker story as user sessions (authstate.py).
 TOKEN_TTL = 12 * 3600
 
 # Password hashing (PBKDF2-HMAC-SHA256) for the optional stored admin password.
 _SALT_LEN = 16
 _PBKDF2_ITER = 100_000
 
-# Brute-force throttle for POST /login, keyed by client IP.
+# Brute-force throttle for POST /login, keyed by client IP. Stamps live in the
+# shared store so a redeploy doesn't reset the fence and all workers count the
+# same failures.
 LOGIN_MAX_FAILURES = 10
 LOGIN_LOCKOUT_SECONDS = 900
-_login_attempts: dict[str, list[float]] = {}
 
 
 def _login_window() -> int:
@@ -63,16 +64,6 @@ def _login_max_failures() -> int:
         return int(os.getenv("KETSA_ADMIN_MAX_FAILURES", str(LOGIN_MAX_FAILURES)))
     except ValueError:
         return LOGIN_MAX_FAILURES
-
-
-def _prune_login_attempts(now: float, window: int) -> None:
-    """Drop expired attempt logs so the tracker can't grow unboundedly."""
-    for ip, stamps in list(_login_attempts.items()):
-        kept = [t for t in stamps if now - t < window]
-        if kept:
-            _login_attempts[ip] = kept
-        else:
-            _login_attempts.pop(ip, None)
 
 
 def _client_ip(request: Request) -> str:
@@ -123,12 +114,12 @@ def require_admin(authorization: str | None = Header(default=None)) -> None:
     token = authorization.removeprefix("Bearer ").strip()
     digest = _hash_token(token)
     now = time.time()
-    expiry = _tokens.get(digest)
+    expiry = authstate.get_admin_session(digest)
     if expiry is None or expiry < now:
         # Purge expired digest for hygiene.
-        _tokens.pop(digest, None)
+        authstate.delete_admin_session(digest)
         raise HTTPException(status_code=401, detail="Session expired, please log in again")
-    _tokens[digest] = now + TOKEN_TTL  # sliding window
+    authstate.touch_admin_session(digest, now + TOKEN_TTL)  # sliding window
 
 
 class LoginRequest(BaseModel):
@@ -152,17 +143,18 @@ class MessageResponse(BaseModel):
 # --- Auth -------------------------------------------------------------------
 
 @router.post("/login", response_model=LoginResponse)
-async def login(body: LoginRequest, request: Request) -> LoginResponse:
+def login(body: LoginRequest, request: Request) -> LoginResponse:
     # Per-IP lockout. The admin password is the single key to the whole site
     # (user management, password resets, market resolution/settlement), so
     # unlimited guessing is not acceptable. A success clears the counter.
     now = time.time()
     window = _login_window()
     max_failures = _login_max_failures()
-    _prune_login_attempts(now, window)
+    authstate.sweep(now)
 
     ip = _client_ip(request)
-    fails = [t for t in _login_attempts.get(ip, []) if now - t < window]
+    bucket = f"throttle:admin:{ip}"
+    fails = [t for t in authstate.throttle_get(bucket) if now - t < window]
     if len(fails) >= max_failures:
         retry_in = max(1, int(window - (now - min(fails))))
         raise HTTPException(
@@ -172,20 +164,21 @@ async def login(body: LoginRequest, request: Request) -> LoginResponse:
 
     # Constant-time-ish comparison to reduce trivial timing signal.
     if not _check_password(body.password):
-        fails.append(now)
-        _login_attempts[ip] = fails
+        stamps = [t for t in authstate.throttle_get(bucket) if now - t < window]
+        stamps.append(now)
+        authstate.throttle_set(bucket, stamps, window)
         raise HTTPException(status_code=401, detail="Invalid password")
 
-    _login_attempts.pop(ip, None)
+    authstate.throttle_clear(bucket)
     token = secrets.token_urlsafe(32)
-    _tokens[_hash_token(token)] = time.time() + TOKEN_TTL
+    authstate.put_admin_session(_hash_token(token), time.time() + TOKEN_TTL)
     return LoginResponse(token=token)
 
 
 @router.post("/logout", response_model=MessageResponse, dependencies=[Depends(require_admin)])
-async def logout(authorization: str | None = Header(default=None)) -> MessageResponse:
+def logout(authorization: str | None = Header(default=None)) -> MessageResponse:
     token = authorization.removeprefix("Bearer ").strip()
-    _tokens.pop(_hash_token(token), None)
+    authstate.delete_admin_session(_hash_token(token))
     return MessageResponse()
 
 

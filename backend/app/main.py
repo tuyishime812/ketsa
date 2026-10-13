@@ -27,6 +27,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from . import authstate
 from . import mailer
 from . import payments as wande
 from . import store
@@ -271,6 +272,20 @@ def create_app() -> "FastAPI":
                 "inbox receives mail, so other users cannot complete signup. Verify "
                 "a sending domain and set KETSA_RESEND_FROM.",
                 status["from"],
+            )
+
+        # Sessions, OTPs and throttles live in the storage backend, so a
+        # Supabase deployment needs the `ketsa_auth` table from db/schema.sql.
+        # Without it every login/signup/reset raises an opaque 500 at request
+        # time; surface it once, clearly, at boot instead.
+        try:
+            store.get_backend().auth_count(authstate.NS_OTP)
+        except Exception as exc:  # startup diagnostic — never fatal
+            logger.error(
+                "Auth state store is unavailable — logins, signups and password "
+                "resets will fail with 500 until it exists. On Supabase, run "
+                "backend/db/schema.sql (creates public.ketsa_auth). Cause: %s",
+                exc,
             )
 
         task = asyncio.create_task(_tick_loop())

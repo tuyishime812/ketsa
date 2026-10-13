@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import auth as auth_mod
+from app import authstate
 from app.engine import engine
 from conftest import register_user
 
@@ -549,7 +550,7 @@ def test_otp_expired_by_ttl(client: TestClient) -> None:
         code = sent[0][1]
         # Age the entry past its TTL without sleeping.
         key = f"signup:{email}"
-        auth_mod._otps[key]["expires"] = time.time() - 1
+        authstate.expire_otp(key, time.time() - 1)
         assert _verify(client, email, code).status_code == 401
         # Resend is still possible and issues a working code.
         sent2: list[tuple[str, str, str]] = []

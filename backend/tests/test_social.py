@@ -26,6 +26,7 @@ from fastapi.testclient import TestClient
 
 from conftest import register_user
 from app import auth as auth_mod
+from app import authstate
 from app import social as social_mod
 from app.engine import engine
 from app.storage import reset_backend
@@ -108,8 +109,7 @@ _PRIV_PEM, _JWKS = make_keypair()
 def _clean_state():
     reset_backend()
     engine.reset()
-    auth_mod._tickets.clear()
-    auth_mod._sessions.clear()
+    authstate.reset()
     social_mod._states.clear()
     yield
 
@@ -437,7 +437,7 @@ def test_ticket_cannot_be_forged_or_expired(client: TestClient) -> None:
         urllib.parse.urlparse(res.headers["location"]).query
     )["ticket"][0]
     import time
-    auth_mod._tickets[ticket] = (time.time() - 1, "stale-token")
+    authstate.expire_ticket(ticket, time.time() - 1)
     assert client.post("/api/auth/social/session", json={"ticket": ticket}).status_code == 400
 
 
@@ -501,7 +501,7 @@ def test_rogue_connection_cannot_hijack_an_existing_account(client: TestClient) 
     # Fund it so a takeover would be visibly valuable.
     engine.credit_balance(victim_wallet, 5_000.0)
     # Baseline: register_user already issued the victim one session.
-    sessions_before = {d for d in auth_mod._sessions}
+    sessions_before = authstate.session_count()
 
     for attempt in range(3):  # a determined attacker retries
         _, state = _start_login(client)
@@ -517,7 +517,7 @@ def test_rogue_connection_cannot_hijack_an_existing_account(client: TestClient) 
             res = _run_callback(client, "code", state)
         assert res.status_code == 400, f"attempt {attempt} should have been rejected"
         # Not one new session was minted, by anyone.
-        assert set(auth_mod._sessions) == sessions_before
+        assert authstate.session_count() == sessions_before
 
     victim = auth_mod.store.get_user(GOOGLE_EMAIL)
     assert victim.get("auth0_sub") is None
@@ -584,38 +584,37 @@ def test_take_state_returns_a_single_use_pair() -> None:
 
 def test_abandoned_tickets_are_evicted_not_kept_forever() -> None:
     """A ticket nobody ever redeems must not live forever (CWE-401/770)."""
-    auth_mod._tickets.clear()
+    authstate.reset()
     now = time.time()
     # 10 abandoned tickets, all long expired, plus one live.
     for i in range(10):
-        auth_mod._tickets[f"dead-{i}"] = (now - 1, "tok")
-    auth_mod._tickets["live"] = (now + 60, "tok")
+        authstate.put_ticket(f"dead-{i}", "tok", issued=now - 100, expires=now - 1)
+    authstate.put_ticket("live", "tok", issued=now - 100, expires=now + 60)
     auth_mod._prune_tickets(now)
-    assert "live" in auth_mod._tickets
-    assert [t for t in auth_mod._tickets if t.startswith("dead-")] == []
-    auth_mod._tickets.clear()
+    assert authstate.ticket_count() == 1
+    authstate.reset()
 
 
 def test_ticket_store_is_hard_capped() -> None:
-    """A burst inside one TTL window cannot grow the dict without bound."""
-    auth_mod._tickets.clear()
+    """A burst inside one TTL window cannot grow the store without bound."""
+    authstate.reset()
     cap = auth_mod.MAX_PENDING_TICKETS
     now = time.time()
     for i in range(cap + 500):
-        auth_mod._tickets[f"t{i}"] = (now + 60, "tok")
+        authstate.put_ticket(f"t{i}", "tok", issued=now, expires=now + 60)
     auth_mod._prune_tickets(now)
-    assert len(auth_mod._tickets) == cap
-    auth_mod._tickets.clear()
+    assert authstate.ticket_count() == cap
+    authstate.reset()
 
 
 def test_issuing_a_ticket_sweeps_expired_ones(client: TestClient) -> None:
     """The sweep runs on the issue path, so it happens on real traffic."""
-    auth_mod._tickets.clear()
+    authstate.reset()
     for i in range(50):
-        auth_mod._tickets[f"stale-{i}"] = (time.time() - 1, "tok")
+        authstate.put_ticket(f"stale-{i}", "tok", issued=time.time() - 200, expires=time.time() - 1)
     auth_mod._issue_sso_ticket("tok")
-    assert [t for t in auth_mod._tickets if t.startswith("stale-")] == []
-    assert len(auth_mod._tickets) == 1
+    # Only the fresh ticket remains (issued above issues exactly one).
+    assert authstate.ticket_count() == 1
 
 
 def test_pending_states_are_hard_capped() -> None:

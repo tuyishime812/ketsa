@@ -6,12 +6,13 @@ real money. Before this, `/api/admin/login` was reachable at the global
 request rate limit (~120/min/IP), which is a guessing budget, not a control.
 """
 
+import time
 from unittest import mock
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app import admin
+from app import authstate
 from app.main import create_app
 from app.storage import reset_backend
 
@@ -20,7 +21,7 @@ from app.storage import reset_backend
 def locked_client():
     """A client whose admin login tolerates 3 failures before locking out."""
     reset_backend()
-    admin._login_attempts.clear()
+    authstate.reset()
     with mock.patch.dict(
         "os.environ",
         {"KETSA_ADMIN_MAX_FAILURES": "3", "KETSA_ADMIN_LOCKOUT_SECONDS": "900"},
@@ -28,7 +29,7 @@ def locked_client():
     ):
         client = TestClient(create_app())
         yield client
-    admin._login_attempts.clear()
+    authstate.reset()
 
 
 def test_admin_login_locks_out_after_max_failures(locked_client: TestClient) -> None:
@@ -56,31 +57,37 @@ def test_successful_login_clears_the_failure_counter(locked_client: TestClient) 
     assert locked_client.post(
         "/api/admin/login", json={"password": "ketsa-admin"}
     ).status_code == 200
-    # Counter is empty, so a fresh burst is allowed again.
-    assert admin._login_attempts == {} or all(
-        not v for v in admin._login_attempts.values()
-    )
+    # Counter is empty, so a fresh burst is allowed again. TestClient always
+    # reports the same "testclient" IP, which is the throttle key here.
+    assert authstate.throttle_get("throttle:admin:testclient") == []
 
 
 def test_lockout_expires_and_login_recovers(locked_client: TestClient) -> None:
     for _ in range(3):
         locked_client.post("/api/admin/login", json={"password": "wrong"})
     assert locked_client.post("/api/admin/login", json={"password": "ketsa-admin"}).status_code == 429
-    # Simulate the window elapsing.
-    admin._login_attempts = {k: [t - 1000 for t in v] for k, v in admin._login_attempts.items()}
+    # Simulate the window elapsing: age the recorded failure stamps.
+    bucket = "throttle:admin:testclient"
+    stamps = authstate.throttle_get(bucket)
+    assert len(stamps) == 3
+    authstate.throttle_set(bucket, [t - 1000 for t in stamps], 900)
     assert locked_client.post("/api/admin/login", json={"password": "ketsa-admin"}).status_code == 200
 
 
 def test_attempt_tracker_is_pruned_not_unbounded() -> None:
-    """Expired entries are dropped so the dict can't grow forever (CWE-400)."""
-    admin._login_attempts.clear()
-    now = 10_000.0
-    admin._login_attempts["1.1.1.1"] = [now - 10_000]  # long expired
-    admin._login_attempts["2.2.2.2"] = [now - 1]  # still live
-    admin._prune_login_attempts(now, 900)
-    assert "1.1.1.1" not in admin._login_attempts
-    assert "2.2.2.2" in admin._login_attempts
-    admin._login_attempts.clear()
+    """Expired throttle rows are swept so the store can't grow forever (CWE-400)."""
+    authstate.reset()
+    authstate.throttle_set("throttle:admin:1.1.1.1", [time.time() - 10_000], 900)  # aged stamps
+    authstate.throttle_set("throttle:admin:2.2.2.2", [time.time() - 1], 900)  # fresh stamps
+    # Nothing has expired yet — both rows survive a sweep.
+    authstate.sweep(time.time())
+    assert authstate.throttle_get("throttle:admin:1.1.1.1")
+    assert authstate.throttle_get("throttle:admin:2.2.2.2")
+    # After both windows have elapsed, the sweep drops the rows entirely.
+    authstate.sweep(time.time() + 1800)
+    assert authstate.throttle_get("throttle:admin:1.1.1.1") == []
+    assert authstate.throttle_get("throttle:admin:2.2.2.2") == []
+    authstate.reset()
 
 
 def test_admin_endpoints_still_work_after_login(locked_client: TestClient) -> None:
