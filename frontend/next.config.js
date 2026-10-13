@@ -33,9 +33,19 @@ const nextConfig = {
     //     browser. HTTP API calls go same-origin through the runtime proxy in
     //     `app/api/[...path]/route.ts`; WebSockets must connect to the backend
     //     directly, so its origin must be allowed here.
+    // Development needs 'unsafe-eval': `next dev` builds webpack bundles with
+    // devtool `eval-source-map`, so every module is executed through eval().
+    // Without it the browser blocks all client JS and React never hydrates —
+    // the HTML (and its buttons) render but no onClick ever fires. Production
+    // builds use `source-map`, not eval, so the strict policy stays there.
+    const isDev = process.env.NODE_ENV !== 'production';
+    const scriptSrc = isDev
+      ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
+      : "script-src 'self' 'unsafe-inline'";
+
     const csp = process.env.KETSA_CSP || [
       "default-src 'self'",
-      "script-src 'self' 'unsafe-inline'",
+      scriptSrc,
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data:",
       "font-src 'self'",
