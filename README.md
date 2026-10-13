@@ -354,6 +354,8 @@ and wired through `docker-compose.yml`.
 | `KETSA_FRONTEND_URL`         | backend   | Where the browser lands after Google login (`/auth/callback`) | `http://localhost:3000` |
 | `KETSA_RESEND_API_KEY`       | backend   | Resend API key — emails signup-verification, sign-in and password-reset OTPs, plus admin broadcasts (absent ⇒ no mail sent; codes logged for dev) | — (email OTP off) |
 | `KETSA_RESEND_FROM`          | backend   | "From" address for OTP + broadcast emails; must be on a domain verified in Resend (the default sandbox sender only accepts `delivered@resend.dev`) | `Ketsa <onboarding@resend.dev>` |
+| `KETSA_EMAIL_DELIVERY`       | backend   | Transport for OTP/broadcast email: `auto` (Resend when a key is set, else log), `resend` (always send; missing key is a hard 502), or `log` (never send; write the code to the server log — **local dev only**) | `auto` |
+| `NEXT_PUBLIC_KETSA_CONTACT_EMAIL` | frontend | Contact address shown on the Terms/Privacy pages | — (generic "via the app" wording) |
 | `KETSA_OTP_TTL_SECONDS`      | backend   | One-time code lifetime                                   | `600` |
 | `KETSA_OTP_MAX_ATTEMPTS`     | backend   | Wrong entries before a code is burned                     | `5` |
 | `KETSA_OTP_RESEND_SECONDS`   | backend   | Cooldown before a new code is emailed to the same address | `60` |

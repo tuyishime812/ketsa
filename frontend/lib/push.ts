@@ -11,18 +11,14 @@
 // notification endpoints. An account wallet subscribed without a matching
 // token is refused with a `sub_error` frame.
 
+import { WS_URL } from '@/lib/ws';
+
 export interface PushEvent {
   type: string;
   [key: string]: unknown;
 }
 
 type Listener = (event: PushEvent) => void;
-
-const WS_URL =
-  (process.env.NEXT_PUBLIC_KETSA_BACKEND_URL || 'http://127.0.0.1:8000').replace(
-    /^http/,
-    'ws',
-  ) + '/api/ws';
 
 const listeners = new Set<Listener>();
 let socket: WebSocket | null = null;

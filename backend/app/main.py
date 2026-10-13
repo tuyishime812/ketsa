@@ -16,6 +16,7 @@ Security posture:
 
 import asyncio
 import json
+import logging
 import os
 import time
 import uuid
@@ -26,6 +27,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from . import mailer
 from . import payments as wande
 from . import store
 from .admin import MessageResponse, require_admin, router as admin_router
@@ -61,6 +63,8 @@ from .models import (
 )
 
 CATEGORIES = ['politics', 'crypto', 'sports', 'culture', 'tech', 'climate']
+
+logger = logging.getLogger("ketsa.main")
 
 
 def _env_float(name: str, default: float) -> float:
@@ -243,6 +247,32 @@ def create_app() -> "FastAPI":
 
     @asynccontextmanager
     async def _lifespan(_: FastAPI):
+        # Tell the operator, once, whether transactional email can actually
+        # reach users. Signup/reset depend on it, so a silent log-only or
+        # sandbox misconfiguration is the difference between "account creation
+        # works" and a field of 502s.
+        status = mailer.email_status()
+        logger.info(
+            "email delivery=%s from=%s api_key_set=%s",
+            status["delivery"],
+            status["from"],
+            status["api_key_set"],
+        )
+        if status["delivery"] == "log":
+            logger.warning(
+                "Email is in LOG mode — verification and reset codes are written "
+                "to this log and NOT sent. Set KETSA_RESEND_API_KEY (and a verified "
+                "KETSA_RESEND_FROM domain) or KETSA_EMAIL_DELIVERY=resend for real "
+                "delivery."
+            )
+        elif status["sandbox_sender"]:
+            logger.warning(
+                "Email sender %s is Resend's sandbox — only the account owner's own "
+                "inbox receives mail, so other users cannot complete signup. Verify "
+                "a sending domain and set KETSA_RESEND_FROM.",
+                status["from"],
+            )
+
         task = asyncio.create_task(_tick_loop())
         try:
             yield

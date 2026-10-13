@@ -23,8 +23,14 @@ export interface MarketDetailInitial {
   trades: Trade[];
 }
 
+// A fill reaches the tape twice — once in the trade response and once as a WS
+// broadcast — so de-dupe on the fields that make a fill unique.
+function tradeKey(t: Trade): string {
+  return `${t.ts}|${t.market_id}|${t.outcome}|${t.side}|${t.price}|${t.qty}`;
+}
+
 export default function MarketDetail({ initial }: { initial: MarketDetailInitial }) {
-  const { markets, upsert } = useMarketFeed();
+  const { markets, upsert, subscribeTrades } = useMarketFeed();
   const { refreshWallet } = useWallet();
   const m = liveOf(initial.market, markets);
 
@@ -64,10 +70,42 @@ export default function MarketDetail({ initial }: { initial: MarketDetailInitial
     };
   }, [m.id]);
 
+  // Live fills: the engine pushes every executed trade on the shared socket,
+  // so other users' trades show up immediately instead of waiting up to 5s for
+  // the poll. The WS frame carries no depth, so refresh the book once per
+  // burst (coalesced) rather than once per fill.
+  useEffect(() => {
+    let refreshing = false;
+    const unsub = subscribeTrades((trade, marketId) => {
+      if (marketId !== m.id) return;
+      setTrades((prev) => {
+        const key = tradeKey(trade);
+        if (prev.some((t) => tradeKey(t) === key)) return prev;
+        return [trade, ...prev].slice(0, 60);
+      });
+      setLastTrade(trade);
+      if (refreshing) return;
+      refreshing = true;
+      void fetchBookSession(m.id)
+        .then((b) => setBook(b))
+        .catch(() => {
+          /* transient — the poll will catch up */
+        })
+        .finally(() => {
+          refreshing = false;
+        });
+    });
+    return unsub;
+  }, [m.id, subscribeTrades]);
+
   async function handleTraded(resp: TradeResponse) {
     upsert(resp.market);
     setBook(resp.book);
-    setTrades((prev) => [resp.trade, ...prev].slice(0, 60));
+    setTrades((prev) => {
+      const key = tradeKey(resp.trade);
+      const rest = prev.filter((t) => tradeKey(t) !== key);
+      return [resp.trade, ...rest].slice(0, 60);
+    });
     setLastTrade(resp.trade);
     try {
       await refreshWallet();

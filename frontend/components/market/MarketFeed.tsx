@@ -5,27 +5,28 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
 import { fetchMarketsSession } from '@/lib/api';
-import type { Market } from '@/lib/types';
-
-// Browser only ever connects to the backend directly for the WebSocket feed
-// (the Next /api proxy does not proxy upgrades). Prefer an explicit
-// NEXT_PUBLIC_KETSA_BACKEND_URL in production.
-const WS_URL =
-  (process.env.NEXT_PUBLIC_KETSA_BACKEND_URL || 'http://127.0.0.1:8000').replace(
-    /^http/,
-    'ws',
-  ) + '/api/ws';
+import { WS_URL } from '@/lib/ws';
+import type { Market, Trade } from '@/lib/types';
 
 export interface MarketFeedValue {
   markets: Record<string, Market>;
   /** Replace a single market in the feed (e.g. right after a trade). */
   upsert: (m: Market) => void;
   connected: boolean;
+  /**
+   * Subscribe to live fills the engine broadcasts on the shared socket.
+   * Returns an unsubscribe function. Fires for *every* market, so consumers
+   * filter by `marketId`.
+   */
+  subscribeTrades: (fn: TradeListener) => () => void;
 }
+
+export type TradeListener = (trade: Trade, marketId: string) => void;
 
 const MarketFeedContext = createContext<MarketFeedValue | null>(null);
 
@@ -77,41 +78,89 @@ export function MarketFeedProvider({
     [merge],
   );
 
-  // Live feed (WebSocket), with a polling fallback when it's unavailable.
+  const tradeListeners = useRef<Set<TradeListener>>(new Set());
+  const subscribeTrades = useCallback((fn: TradeListener) => {
+    tradeListeners.current.add(fn);
+    return () => {
+      tradeListeners.current.delete(fn);
+    };
+  }, []);
+
+  // Live feed (WebSocket), with capped-backoff reconnects and a polling
+  // fallback while the socket is down. The backend broadcasts market
+  // snapshots, live fills and resolutions on one stream; snapshots are merged
+  // here and fills are handed to trade subscribers (e.g. the tape).
   useEffect(() => {
     let ws: WebSocket | null = null;
-    try {
-      ws = new WebSocket(WS_URL);
-    } catch {
-      /* fall back to polling */
-    }
-    if (!ws) {
-      setConnected(false);
-      return;
-    }
-    ws.onopen = () => setConnected(true);
-    ws.onmessage = (ev) => {
+    let stopped = false;
+    let timer: number | null = null;
+    let attempt = 0;
+
+    const schedule = () => {
+      if (stopped || timer !== null) return;
+      // 1s, 2s, 4s … capped at 15s: a backend restart reconnects promptly
+      // without hammering it while it is down.
+      const delay = Math.min(15000, 1000 * 2 ** attempt);
+      attempt += 1;
+      timer = window.setTimeout(() => {
+        timer = null;
+        open();
+      }, delay);
+    };
+
+    const open = () => {
+      if (stopped) return;
       try {
-        const payload = JSON.parse(String(ev.data)) as {
-          type?: string;
-          market?: Market;
-        };
-        if (payload.type === 'market' && payload.market?.id) {
-          upsert(payload.market);
+        ws = new WebSocket(WS_URL);
+      } catch {
+        schedule();
+        return;
+      }
+      ws.onopen = () => {
+        attempt = 0;
+        setConnected(true);
+      };
+      ws.onmessage = (ev) => {
+        try {
+          const payload = JSON.parse(String(ev.data)) as {
+            type?: string;
+            market?: Market;
+            trade?: Trade;
+            market_id?: string;
+          };
+          if (payload.type === 'market' && payload.market?.id) {
+            upsert(payload.market);
+          } else if (
+            payload.type === 'trade' &&
+            payload.trade &&
+            payload.market_id
+          ) {
+            const trade = payload.trade;
+            const marketId = payload.market_id;
+            tradeListeners.current.forEach((fn) => fn(trade, marketId));
+          }
+        } catch {
+          /* skip malformed frame */
         }
-      } catch {
-        /* skip malformed frame */
-      }
+      };
+      ws.onclose = () => {
+        setConnected(false);
+        schedule();
+      };
+      ws.onerror = () => {
+        try {
+          ws?.close();
+        } catch {
+          /* ignore — onclose schedules the retry */
+        }
+      };
     };
-    ws.onclose = () => setConnected(false);
-    ws.onerror = () => {
-      try {
-        ws?.close();
-      } catch {
-        /* ignore */
-      }
-    };
+
+    open();
+
     return () => {
+      stopped = true;
+      if (timer !== null) window.clearTimeout(timer);
       try {
         ws?.close();
       } catch {
@@ -136,7 +185,9 @@ export function MarketFeedProvider({
   }, [connected, merge]);
 
   return (
-    <MarketFeedContext.Provider value={{ markets, upsert, connected }}>
+    <MarketFeedContext.Provider
+      value={{ markets, upsert, connected, subscribeTrades }}
+    >
       {children}
     </MarketFeedContext.Provider>
   );

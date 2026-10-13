@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import type { FooterContent } from '@/lib/types';
 
 export default function Footer({ copy }: { copy: FooterContent }) {
@@ -38,7 +39,17 @@ export default function Footer({ copy }: { copy: FooterContent }) {
 
         <div className="flex flex-wrap items-center justify-between gap-[10px] border-t border-line pt-[22px] text-xs text-ink-3">
           <span>{copy.copyright}</span>
-          <span>{copy.disclaimer}</span>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+            {/* Structural, not admin content: the legal links must always be
+                present, regardless of what the editable footer columns say. */}
+            <Link href="/terms" className="transition-colors hover:text-ink">
+              Terms
+            </Link>
+            <Link href="/privacy" className="transition-colors hover:text-ink">
+              Privacy
+            </Link>
+            <span>{copy.disclaimer}</span>
+          </div>
         </div>
       </div>
     </footer>

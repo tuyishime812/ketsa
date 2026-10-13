@@ -126,6 +126,7 @@ host's env UI. Full descriptions are in `.env.production.example`.
 | `KETSA_WANDE_BASE_URL` | if payments | `https://apiv1.wandepay.site/api/` |
 | `KETSA_RESEND_API_KEY` | **yes for email accounts** | Resend key (secret manager only) |
 | `KETSA_RESEND_FROM` | **yes for email accounts** | verified-domain sender — see Step 5 |
+| `KETSA_EMAIL_DELIVERY` | if sending email | `resend` (the default `auto` also sends when a key is set; never leave `log` in production) |
 | `KETSA_PUBLIC_BASE_URL` | if social login | `$BACKEND_ORIGIN` (**public** origin, not a container hostname) |
 | `KETSA_FRONTEND_URL` | if social login | `$FRONTEND_ORIGIN` |
 | `KETSA_AUTH0_DOMAIN` | if social login | `https://<tenant>.auth0.com` host |
@@ -211,6 +212,23 @@ never receive codes). Phone-only accounts do not need Resend.
 
 > Phone-only accounts cannot self-reset (no SMS provider) — reset them from the
 > admin panel. That is a known, documented gap, not a regression.
+
+> **Local dev vs production.** `backend/.env` sets `KETSA_EMAIL_DELIVERY=log`,
+> so locally every OTP is written to the uvicorn log instead of being sent —
+> register/verify works for any address with no sending domain. The backend
+> prints a startup banner naming the active transport; if it says `log`, or
+> warns that the sender is Resend's sandbox, email signup cannot reach real
+> users. Production must use `resend` with a verified domain.
+
+---
+
+## Step 5b — Legal pages — **review before launch**
+
+`/terms` and `/privacy` ship with good-faith baseline copy (operator "Ketsa",
+no entity/jurisdiction, contact via `NEXT_PUBLIC_KETSA_CONTACT_EMAIL`). Before
+launch, have counsel review them for your jurisdiction and set the operator
+entity and contact address. They are linked structurally from the site footer,
+so they are always reachable.
 
 ---
 

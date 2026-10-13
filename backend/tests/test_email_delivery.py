@@ -23,18 +23,15 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import auth as auth_mod
+from app import authstate
 from app import mailer
 
 
 @pytest.fixture(autouse=True)
 def _clean_state():
-    auth_mod._otps.clear()
-    auth_mod._sessions.clear()
-    auth_mod._login_attempts.clear()
-    auth_mod._code_requests.clear()
+    authstate.reset()
     yield
-    auth_mod._otps.clear()
-    auth_mod._code_requests.clear()
+    authstate.reset()
 
 
 def _register(client: TestClient, email: str = "alice@ketsa.io"):
@@ -52,9 +49,9 @@ def _rewind_cooldown(email: str = "alice@ketsa.io") -> None:
     """
     import time
 
-    entry = auth_mod._otps.get(f"signup:{email}")
+    entry = authstate.get_otp(f"signup:{email}")
     assert entry is not None, "expected a pending signup first"
-    entry["issued"] = time.time() - 9999
+    authstate.age_otp(f"signup:{email}", time.time() - 9999)
 
 
 # --- /register: honest about a failed send ---------------------------------
@@ -76,7 +73,7 @@ def test_failed_send_leaves_no_stuck_pending_state(client: TestClient) -> None:
     """
     with mock.patch("app.mailer.send_otp_email", return_value=False):
         assert _register(client).status_code == 502
-    assert auth_mod._otps.get("signup:alice@ketsa.io") is None
+    assert authstate.get_otp("signup:alice@ketsa.io") is None
 
     # No cooldown carried over: a fresh send is accepted right away.
     with mock.patch(
@@ -129,7 +126,7 @@ def test_failed_resend_keeps_the_pending_signup_alive(client: TestClient) -> Non
     # Guard against the test silently degrading into a cooldown short-circuit.
     assert resent.status_code == 502, resent.text
 
-    entry = auth_mod._otps.get("signup:alice@ketsa.io")
+    entry = authstate.get_otp("signup:alice@ketsa.io")
     assert entry is not None, "pending signup must not be discarded"
     assert (entry.get("payload") or {}).get("password_hash")
 
@@ -188,3 +185,57 @@ def test_dev_mode_without_a_key_still_delivers_to_the_log(
 
     res = _register(client, email="dev@ketsa.io")
     assert res.status_code == 202, res.text
+
+
+# --- explicit KETSA_EMAIL_DELIVERY switch ----------------------------------
+
+
+def test_log_mode_skips_the_network_even_with_a_key(
+    client: TestClient, monkeypatch
+) -> None:
+    """`log` is the local-dev transport: a configured key must NOT be used.
+
+    This is the exact fix for "Create account fails locally": a developer with a
+    real Resend key set (whose sandbox sender 403s every other recipient) still
+    gets a completed signup, because the code goes to the log instead.
+    """
+    monkeypatch.setenv("KETSA_RESEND_API_KEY", "re_fake_key")
+    monkeypatch.setenv("KETSA_EMAIL_DELIVERY", "log")
+
+    def _boom(*_a, **_k):  # pragma: no cover — must never run
+        raise AssertionError("log mode must not touch the network")
+
+    monkeypatch.setattr(mailer.urllib.request, "urlopen", _boom)
+    assert mailer.delivery_configured() is False
+    assert mailer.send_email("dev@ketsa.io", "test", "<p>hi</p>") is True
+
+    res = _register(client, email="dev@ketsa.io")
+    assert res.status_code == 202, res.text
+
+
+def test_resend_mode_without_a_key_fails_closed(monkeypatch) -> None:
+    """`resend` is explicit: a missing key is a hard failure, not a silent log."""
+    monkeypatch.delenv("KETSA_RESEND_API_KEY", raising=False)
+    monkeypatch.setenv("KETSA_EMAIL_DELIVERY", "resend")
+    assert mailer.delivery_configured() is False
+    assert mailer.send_email("dev@ketsa.io", "test", "<p>hi</p>") is False
+
+
+def test_auto_mode_follows_the_key(monkeypatch) -> None:
+    """Default `auto`: log without a key, resend with one."""
+    monkeypatch.setenv("KETSA_EMAIL_DELIVERY", "auto")
+    monkeypatch.delenv("KETSA_RESEND_API_KEY", raising=False)
+    assert mailer.email_status()["delivery"] == "log"
+
+    monkeypatch.setenv("KETSA_RESEND_API_KEY", "re_fake_key")
+    assert mailer.email_status()["delivery"] == "resend"
+
+
+def test_email_status_flags_the_sandbox_sender(monkeypatch) -> None:
+    """The startup banner relies on this to warn that only the owner inbox works."""
+    monkeypatch.setenv("KETSA_RESEND_FROM", "Ketsa <onboarding@resend.dev>")
+    monkeypatch.setenv("KETSA_RESEND_API_KEY", "re_fake_key")
+    assert mailer.email_status()["sandbox_sender"] is True
+
+    monkeypatch.setenv("KETSA_RESEND_FROM", "Ketsa <no-reply@ketsa.example>")
+    assert mailer.email_status()["sandbox_sender"] is False

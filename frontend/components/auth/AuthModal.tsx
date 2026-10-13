@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 type Mode = 'login' | 'register';
 type IdKind = 'email' | 'phone';
@@ -91,7 +91,7 @@ function Field({
         spellCheck={false}
         onChange={(e) => onChange(e.target.value)}
       />
-      {error && <span className="mt-1 block text-[12px] font-medium text-neg">{error}</span>}
+      {error && <span role="alert" className="mt-1 block text-[12px] font-medium text-neg">{error}</span>}
     </label>
   );
 }
@@ -143,7 +143,7 @@ function IdentifierField({
         onChange={(e) => onChange(e.target.value)}
       />
       {error && (
-        <span className="mt-1 block text-[12px] font-medium text-neg">{error}</span>
+        <span role="alert" className="mt-1 block text-[12px] font-medium text-neg">{error}</span>
       )}
     </div>
   );
@@ -222,6 +222,58 @@ export default function AuthModal({
       setResent(false);
     }
   }, [pendingEmail]);
+
+  // --- Dialog accessibility ---------------------------------------------
+  // The modal is exclusive: focus moves into it, Tab cycles within it, and
+  // Escape closes it (unless a request is in flight). Without the trap, Tab
+  // walks the page behind the overlay and screen readers never leave the
+  // page context. `busy`/`onClose` are read through refs so this effect runs
+  // once on open — re-running it on every `busy` flip would yank focus back
+  // to the first field mid-submit.
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    const node = dialogRef.current;
+    if (!node) return;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const focusables = () =>
+      Array.from(
+        node.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((el) => el.getAttribute('aria-hidden') !== 'true');
+
+    focusables()[0]?.focus();
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (!busyRef.current) onCloseRef.current();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      const items = focusables();
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey && active === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      previouslyFocused?.focus?.();
+    };
+  }, []);
 
   const verifyEmailTarget = pendingEmail || identifier.trim();
 
@@ -439,7 +491,14 @@ export default function AuthModal({
         if (e.target === e.currentTarget && !busy) onClose();
       }}
     >
-      <div className="grid w-full max-w-[880px] overflow-hidden rounded-l border border-line bg-white shadow-[0_24px_60px_-20px_rgba(12,21,38,.35)] md:grid-cols-[0.9fr_1fr]">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="auth-modal-heading"
+        aria-describedby="auth-modal-kicker"
+        className="grid w-full max-w-[880px] overflow-hidden rounded-l border border-line bg-white shadow-[0_24px_60px_-20px_rgba(12,21,38,.35)] md:grid-cols-[0.9fr_1fr]"
+      >
         {/* Brand panel */}
         <aside className="relative hidden flex-col justify-between bg-ink p-8 text-white md:flex">
           <div className="flex items-center gap-[9px] font-serif text-[20px] font-semibold italic">
@@ -479,10 +538,18 @@ export default function AuthModal({
         <div className="flex flex-col p-7 md:p-8">
           <div className="mb-1 flex items-start justify-between">
             <div>
-              <div className="mb-1 font-mono text-[10.5px] uppercase tracking-[.07em] text-brand">
+              <div
+                id="auth-modal-kicker"
+                className="mb-1 font-mono text-[10.5px] uppercase tracking-[.07em] text-brand"
+              >
                 {kicker}
               </div>
-              <h3 className="font-serif text-[24px] font-medium text-ink">{heading}</h3>
+              <h3
+                id="auth-modal-heading"
+                className="font-serif text-[24px] font-medium text-ink"
+              >
+                {heading}
+              </h3>
             </div>
             <button
               aria-label="Close"
@@ -608,7 +675,7 @@ export default function AuthModal({
                     </button>
                   </div>
                   {localErrors.password && (
-                    <span className="mt-1 block text-[12px] font-medium text-neg">{localErrors.password}</span>
+                    <span role="alert" className="mt-1 block text-[12px] font-medium text-neg">{localErrors.password}</span>
                   )}
                 </div>
                 {mode === 'register' && (
@@ -629,7 +696,7 @@ export default function AuthModal({
                   </div>
                 )}
                 {error && (
-                  <div className="rounded-[8px] border border-neg/25 bg-neg-tint px-[13px] py-[10px] text-[13px] font-medium text-neg">
+                  <div role="alert" className="rounded-[8px] border border-neg/25 bg-neg-tint px-[13px] py-[10px] text-[13px] font-medium text-neg">
                     {error}
                   </div>
                 )}
@@ -683,7 +750,7 @@ export default function AuthModal({
                 error={localErrors.otp}
               />
               {error && (
-                <div className="rounded-[8px] border border-neg/25 bg-neg-tint px-[13px] py-[10px] text-[13px] font-medium text-neg">
+                <div role="alert" className="rounded-[8px] border border-neg/25 bg-neg-tint px-[13px] py-[10px] text-[13px] font-medium text-neg">
                   {error}
                 </div>
               )}
@@ -729,7 +796,7 @@ export default function AuthModal({
                     error={localErrors.codeEmail}
                   />
                   {error && (
-                    <div className="rounded-[8px] border border-neg/25 bg-neg-tint px-[13px] py-[10px] text-[13px] font-medium text-neg">
+                    <div role="alert" className="rounded-[8px] border border-neg/25 bg-neg-tint px-[13px] py-[10px] text-[13px] font-medium text-neg">
                       {error}
                     </div>
                   )}
@@ -766,7 +833,7 @@ export default function AuthModal({
                     error={localErrors.otp}
                   />
                   {error && (
-                    <div className="rounded-[8px] border border-neg/25 bg-neg-tint px-[13px] py-[10px] text-[13px] font-medium text-neg">
+                    <div role="alert" className="rounded-[8px] border border-neg/25 bg-neg-tint px-[13px] py-[10px] text-[13px] font-medium text-neg">
                       {error}
                     </div>
                   )}
@@ -814,7 +881,7 @@ export default function AuthModal({
                     error={localErrors.forgotId}
                   />
                   {error && (
-                    <div className="rounded-[8px] border border-neg/25 bg-neg-tint px-[13px] py-[10px] text-[13px] font-medium text-neg">
+                    <div role="alert" className="rounded-[8px] border border-neg/25 bg-neg-tint px-[13px] py-[10px] text-[13px] font-medium text-neg">
                       {error}
                     </div>
                   )}
@@ -863,7 +930,7 @@ export default function AuthModal({
                     error={localErrors.newPw2}
                   />
                   {error && (
-                    <div className="rounded-[8px] border border-neg/25 bg-neg-tint px-[13px] py-[10px] text-[13px] font-medium text-neg">
+                    <div role="alert" className="rounded-[8px] border border-neg/25 bg-neg-tint px-[13px] py-[10px] text-[13px] font-medium text-neg">
                       {error}
                     </div>
                   )}

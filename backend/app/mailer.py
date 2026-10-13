@@ -5,11 +5,12 @@ through the Resend REST API. The transport is a thin ``urllib`` POST; the
 test-suite patches ``send_email`` directly, so no network is ever touched
 there.
 
-Dev/offline mode: without ``KETSA_RESEND_API_KEY`` the message is logged
-instead of sent, so a local checkout can exercise the full register/verify
-and forgot-password flows before a key exists. The OTP visible in the server
-log is exactly what the email would have contained — never ship this mode to
-production without the key.
+Dev/offline mode: with ``KETSA_EMAIL_DELIVERY=log`` (or no
+``KETSA_RESEND_API_KEY`` under the default ``auto`` mode) the message is logged
+instead of sent, so a local checkout can exercise the full register/verify and
+forgot-password flows before a sending domain exists. The OTP visible in the
+server log is exactly what the email would have contained — never run this in
+production, where the startup banner warns when the transport cannot deliver.
 """
 
 import html
@@ -77,28 +78,86 @@ def _from_address() -> str:
     return os.getenv("KETSA_RESEND_FROM", "Ketsa <onboarding@resend.dev>")
 
 
+def _delivery_mode() -> str:
+    """Effective transport, from ``KETSA_EMAIL_DELIVERY``.
+
+    * ``resend`` — always POST to Resend. Missing API key is a hard failure, so
+      a misconfigured deployment is loud rather than silently dropping mail.
+    * ``log`` — never touch the network; write the message to the server log.
+      This is the supported local-dev workflow: the OTP is visible in the
+      backend output, so register/verify, password reset and login codes can be
+      exercised end-to-end without a sending domain.
+    * ``auto`` (default) — ``resend`` when an API key is configured, else
+      ``log``. Keeps a bare checkout working with no setup while still sending
+      for real the moment a key appears.
+    """
+    raw = os.getenv("KETSA_EMAIL_DELIVERY", "auto").strip().lower()
+    if raw in ("log", "resend"):
+        return raw
+    return "resend" if _api_key() else "log"
+
+
+def delivery_configured() -> bool:
+    """True when a sent message is expected to actually leave the building.
+
+    ``log`` mode is a deliberate dev transport, not a misconfiguration, so it
+    reports False (nothing is really delivered) even though it lets the OTP
+    flow complete locally. ``resend`` mode without an API key is likewise not
+    deliverable, so it reports False and ``send_email`` fails closed.
+    """
+    return _delivery_mode() == "resend" and _api_key() is not None
+
+
+def email_status() -> dict[str, Any]:
+    """Non-secret description of the active transport (for startup logging)."""
+    sender = _from_address()
+    # Resend's shared sandbox domain: deliverable only to the account owner's
+    # own verified inbox, never to arbitrary recipients.
+    sandbox = sender.lower().rstrip(">").endswith("@resend.dev")
+    return {
+        "delivery": _delivery_mode(),
+        "from": sender,
+        "sandbox_sender": sandbox,
+        "api_key_set": _api_key() is not None,
+    }
+
+
 def send_email(to: str, subject: str, html: str) -> bool:
     """Send one transactional email.
 
     Returns True when the message reached its destination: handed to Resend in
-    a configured deployment, or written to the log in dev/offline mode (no API
-    key), which is exactly where that mode is documented to deliver. Returns
-    False only when delivery genuinely failed — Resend rejected the request or
-    the transport errored.
+    a configured deployment, or written to the log in dev/offline mode, which
+    is exactly where that mode is documented to deliver. Returns False only
+    when delivery genuinely failed — Resend rejected the request or the
+    transport errored.
 
     Callers that owe the user an honest answer ("check your inbox") must act on
     False; treating it as success ships a dead-end flow where the UI promises
     an email that was never sent.
     """
-    key = _api_key()
-    if key is None:
+    if _delivery_mode() == "log":
+        # WARNING, not INFO, on purpose: the app logger has no handler in every
+        # launcher, so an INFO body line is silently dropped and the code becomes
+        # invisible — defeating the whole point of this dev transport.
         log.warning(
-            "KETSA_RESEND_API_KEY not set — email to %s delivered to log only: %s",
+            "email delivery=log — NOT sent. to=%s subject=%s\n%s",
             to,
             subject,
+            html,
         )
-        log.info("Email body for %s: %s", to, html)
         return True
+
+    key = _api_key()
+    if key is None:
+        # Explicit ``resend`` mode with no key: a real misconfiguration. Fail so
+        # the caller reports the truth instead of promising an email that can
+        # never be sent.
+        log.error(
+            "KETSA_EMAIL_DELIVERY=resend but KETSA_RESEND_API_KEY is unset — "
+            "email to %s not sent",
+            to,
+        )
+        return False
 
     payload: dict[str, Any] = {
         "from": _from_address(),
@@ -153,6 +212,10 @@ def send_otp_email(
     body_html = _OTP_TEMPLATE.format(
         name=greeting, lead=lead, code=code, ttl=max(1, ttl_minutes)
     )
+    if _delivery_mode() == "log":
+        # One clean, greppable line so a developer can find the code without
+        # parsing the HTML body below.
+        log.warning("dev one-time code for %s (%s): %s", to, purpose, code)
     return send_email(to, subject, body_html)
 
 
