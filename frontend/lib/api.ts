@@ -226,27 +226,65 @@ export async function placeTrade(req: TradeRequest): Promise<TradeResponse> {
 
 const AUTH_BASE = '/api/auth';
 
-async function authRequest<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${AUTH_BASE}${path}`, {
-    ...init,
-    credentials: 'omit',
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-      ...(init?.headers ?? {}),
-    },
-  });
-  if (!res.ok) {
-    let detail = `Auth request failed (${res.status})`;
-    try {
-      const body = await res.json();
-      detail = body?.detail || detail;
-    } catch {
-      /* fall through */
-    }
-    throw new Error(detail);
+/** Shown when the browser could not reach the API at all (offline / proxy down). */
+const AUTH_UNREACHABLE =
+  'Cannot reach Ketsa right now. Check your connection and try again.';
+
+/** Shown when a 2xx response body was not the JSON we expected. */
+const AUTH_BAD_RESPONSE =
+  'Ketsa returned an unexpected response. Please try again.';
+
+/**
+ * Turn a failed auth response into a message that is safe and useful to show.
+ *
+ * 4xx responses carry an actionable `detail` from the backend ("Incorrect
+ * password", "That code has expired", …) so we surface it. Anything else — a
+ * 5xx, or a body that is not JSON because a gateway/proxy answered instead of
+ * the API — gets a calm generic line rather than a stack-trace-looking string.
+ */
+async function authErrorFrom(res: Response): Promise<string> {
+  const fallback =
+    res.status >= 500
+      ? 'Ketsa is temporarily unavailable. Please try again shortly.'
+      : `Request failed (${res.status})`;
+  try {
+    const body: unknown = await res.json();
+    const detail = (body as { detail?: unknown } | null)?.detail;
+    if (typeof detail === 'string' && detail.trim()) return detail;
+  } catch {
+    /* non-JSON body (e.g. an upstream HTML error page passed through) */
   }
-  return (await res.json()) as T;
+  return fallback;
+}
+
+/** Same-origin auth fetch that turns a transport failure into a message. */
+async function authFetch(path: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(`${AUTH_BASE}${path}`, {
+      ...init,
+      credentials: 'omit',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        ...(init?.headers ?? {}),
+      },
+    });
+  } catch {
+    // fetch only rejects on transport failure, so this is never a 4xx/5xx.
+    throw new Error(AUTH_UNREACHABLE);
+  }
+}
+
+async function authRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await authFetch(path, init);
+  if (!res.ok) {
+    throw new Error(await authErrorFrom(res));
+  }
+  try {
+    return (await res.json()) as T;
+  } catch {
+    throw new Error(AUTH_BAD_RESPONSE);
+  }
 }
 
 /**
@@ -259,23 +297,18 @@ async function authRequest<T>(path: string, init?: RequestInit): Promise<T> {
 export async function registerSession(
   body: RegisterCredentials,
 ): Promise<RegisterResult> {
-  const res = await fetch(`${AUTH_BASE}/register`, {
+  const res = await authFetch('/register', {
     method: 'POST',
-    credentials: 'omit',
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-    },
     body: JSON.stringify(body),
   });
-  const payload = (await res.json()) as AuthSession | PendingVerification;
   if (!res.ok) {
-    throw new Error(
-      (payload as { detail?: string })?.detail ||
-        `Auth request failed (${res.status})`,
-    );
+    throw new Error(await authErrorFrom(res));
   }
-  return payload as RegisterResult;
+  try {
+    return (await res.json()) as RegisterResult;
+  } catch {
+    throw new Error(AUTH_BAD_RESPONSE);
+  }
 }
 
 /** Complete an email signup with the emailed one-time passcode. */
