@@ -39,6 +39,9 @@ export default function StaffEditor({ token }: { token: string }) {
   const [staff, setStaff] = useState<StaffMember[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  // Non-fatal notices that are neither success nor failure (e.g. an invite the
+  // backend accepted but could not actually deliver in log mode).
+  const [warn, setWarn] = useState<string | null>(null);
 
   // Add-one form.
   const [name, setName] = useState('');
@@ -75,6 +78,7 @@ export default function StaffEditor({ token }: { token: string }) {
   async function addOne() {
     setError(null);
     setMsg(null);
+    setWarn(null);
     setAdding(true);
     try {
       const member = await createStaff(token, {
@@ -99,6 +103,7 @@ export default function StaffEditor({ token }: { token: string }) {
   async function runUpload(text: string) {
     setError(null);
     setMsg(null);
+    setWarn(null);
     setUploadResult(null);
     if (!text.trim()) {
       setError('Paste CSV/JSON or choose a file first.');
@@ -138,6 +143,7 @@ export default function StaffEditor({ token }: { token: string }) {
   async function toggleActive(member: StaffMember) {
     setError(null);
     setMsg(null);
+    setWarn(null);
     try {
       await updateStaff(token, member.id, { active: !member.active });
       await load();
@@ -149,6 +155,7 @@ export default function StaffEditor({ token }: { token: string }) {
   async function remove(member: StaffMember) {
     setError(null);
     setMsg(null);
+    setWarn(null);
     try {
       await deleteStaff(token, member.id);
       setMsg(`Removed ${member.name}.`);
@@ -161,9 +168,14 @@ export default function StaffEditor({ token }: { token: string }) {
   async function invite(member: StaffMember) {
     setError(null);
     setMsg(null);
+    setWarn(null);
     try {
       const res = await inviteStaff(token, member.id);
-      setMsg(res.detail);
+      // Honest feedback: only a really-delivered invite is a success. In log
+      // mode (or with Resend unconfigured) the backend reports delivered=false,
+      // so say so plainly instead of implying an email left the building.
+      if (res.delivered) setMsg(res.detail);
+      else setWarn(res.detail);
       await load();
     } catch (err) {
       setError(apiError(err));
@@ -173,6 +185,7 @@ export default function StaffEditor({ token }: { token: string }) {
   return (
     <div className="admin-stack">
       {error && <div className="admin-error">{error}</div>}
+      {warn && <div className="admin-warn">{warn}</div>}
       {msg && <div className="admin-saved-msg">{msg}</div>}
 
       <Card title="Add a staff member">

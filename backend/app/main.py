@@ -276,6 +276,19 @@ def create_app() -> "FastAPI":
 
     @asynccontextmanager
     async def _lifespan(_: FastAPI):
+        # State the active storage backend up front: flipping KETSA_DB_BACKEND
+        # silently redirects every write (accounts, staff, content) to a
+        # different place. The plain fact goes to info; an *ephemeral* backend
+        # is a warning, because `memory` loses all of it on the next restart.
+        backend_name = type(store.get_backend()).__name__
+        logger.info("storage backend=%s", backend_name)
+        if backend_name == "MemoryBackend":
+            logger.warning(
+                "Storage backend is IN-MEMORY — accounts, staff and content are "
+                "not persisted and are lost on restart. Point KETSA_DB_BACKEND at "
+                "supabase (with db/schema.sql applied) for durable storage."
+            )
+
         # Tell the operator, once, whether transactional email can actually
         # reach users. Signup/reset depend on it, so a silent log-only or
         # sandbox misconfiguration is the difference between "account creation

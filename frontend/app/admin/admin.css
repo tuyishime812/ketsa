@@ -534,6 +534,17 @@
   font-size: 13.5px;
 }
 
+/* Neither success nor failure: an action the backend accepted but that did not
+   have its full intended effect (e.g. an invite not actually delivered). */
+.admin-warn {
+  background: #fff7e6;
+  border: 1px solid #f2d9a0;
+  color: #9a6b1a;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13.5px;
+}
+
 /* ---------------------------------------------------------------------------
    Misc / segmented control (tabs inside editors)
    ------------------------------------------------------------------------- */
