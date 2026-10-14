@@ -177,6 +177,8 @@ The schema gained:
   verification and password reset returns `500`** (the backend logs an actionable
   error at boot and `postgrest` reports `PGRST205: Could not find the table
   'public.ketsa_auth'`),
+- the **`ketsa_staff`** table (the admin-managed platform-team directory), with
+  unique email/phone indexes so the bulk-upload dedupe is enforced at the DB,
 - an expression index (`ketsa_users_wallet_id_idx`), and
 - **unique** `phone` and `auth0_sub` indexes, so the uniqueness those columns
   claim is actually enforced.
@@ -185,7 +187,7 @@ Re-run it once so the table exists and the uniqueness is enforced.
 
 Supabase → SQL editor → run, **in order**, one file per query:
 
-1. `backend/db/schema.sql` — tables (incl. `ketsa_auth`) + RLS (required for `KETSA_DB_BACKEND=supabase`)
+1. `backend/db/schema.sql` — tables (incl. `ketsa_auth`, `ketsa_staff`) + RLS (required for `KETSA_DB_BACKEND=supabase`)
 2. `backend/db/realtime.sql` — optional Supabase Realtime publication (skip unless used)
 
 Or automate it (idempotent, no data touched):
@@ -208,6 +210,9 @@ select indexname from pg_indexes where tablename = 'ketsa_users';
 
 select to_regclass('public.ketsa_auth');
 -- expect: ketsa_auth  (NULL means logins/signups will 500 — re-run schema.sql)
+
+select to_regclass('public.ketsa_staff');
+-- expect: ketsa_staff  (NULL means the staff directory cannot persist — re-run schema.sql)
 ```
 
 > **Local dev vs production.** `backend/.env` defaults to
