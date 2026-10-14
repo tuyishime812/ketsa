@@ -5,13 +5,14 @@ import {
   AdminApiError,
   createStaff,
   deleteStaff,
+  getAdminConfig,
   inviteStaff,
   listStaff,
   updateStaff,
   uploadStaff,
 } from '@/lib/api';
 import { useStaffStream } from '@/lib/useStaffStream';
-import { STAFF_ROLES, type StaffMember, type StaffUploadResult } from '@/lib/types';
+import { type StaffMember, type StaffUploadResult } from '@/lib/types';
 import { Card, DangerButton, Field, SelectInput, TextInput } from './ui';
 
 function fmtDate(ts?: number | null): string {
@@ -30,10 +31,9 @@ function apiError(err: unknown): string {
   return err instanceof Error ? err.message : 'Request failed';
 }
 
-const ROLE_OPTIONS = STAFF_ROLES.map((r) => ({
-  value: r,
-  label: r.charAt(0).toUpperCase() + r.slice(1),
-}));
+function labelRole(r: string): string {
+  return r.charAt(0).toUpperCase() + r.slice(1).replace(/[_-]+/g, ' ');
+}
 
 export default function StaffEditor({ token }: { token: string }) {
   const [staff, setStaff] = useState<StaffMember[] | null>(null);
@@ -43,6 +43,8 @@ export default function StaffEditor({ token }: { token: string }) {
   // backend accepted but could not actually deliver in log mode).
   const [warn, setWarn] = useState<string | null>(null);
 
+  // Configured roles.
+  const [roleOptions, setRoleOptions] = useState<{ value: string; label: string }[]>([]);
   // Add-one form.
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -67,6 +69,29 @@ export default function StaffEditor({ token }: { token: string }) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Role options come from the admin-configurable allowlist (Settings → Staff
+  // roles). If it changes, the dropdown follows on next mount; if the fetch
+  // fails we fall back to the built-in roles rather than showing an empty list.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const cfg = await getAdminConfig(token);
+        if (cancelled) return;
+        const roles = cfg.staff_roles.roles;
+        setRoleOptions(roles.map((r) => ({ value: r, label: labelRole(r) })));
+        setRole((current) => (roles.includes(current) ? current : roles[0] ?? current));
+      } catch {
+        if (cancelled) return;
+        const fallback = ['owner', 'admin', 'support', 'finance', 'marketing', 'moderation'];
+        setRoleOptions(fallback.map((r) => ({ value: r, label: labelRole(r) })));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
 
   // Realtime: any staff change (from this panel or another admin) re-fetches
   // the authoritative list, so the table is never stale.
@@ -207,9 +232,9 @@ export default function StaffEditor({ token }: { token: string }) {
           <Field label="Phone" hint="Optional">
             <TextInput value={phone} onChange={setPhone} placeholder="0991 234 567" />
           </Field>
-          <Field label="Role">
-            <SelectInput value={role} onChange={setRole} options={ROLE_OPTIONS} />
-          </Field>
+            <Field label="Role">
+              <SelectInput value={role} onChange={setRole} options={roleOptions} />
+            </Field>
         </div>
         <div className="admin-save-row">
           <button
@@ -321,7 +346,7 @@ export default function StaffEditor({ token }: { token: string }) {
                     </div>
                   </td>
                   <td className="admin-mono">
-                    {m.role.charAt(0).toUpperCase() + m.role.slice(1)}
+                    {m.role}
                   </td>
                   <td>
                     <span

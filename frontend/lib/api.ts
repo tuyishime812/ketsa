@@ -6,6 +6,7 @@
 // client bundles). Server components read data server-side via `fetchHomeData()`.
 
 import type {
+  AdminConfig,
   AuthCredentials,
   AuthSession,
   Correspondent,
@@ -655,6 +656,24 @@ export function inviteStaff(
     token,
     `/staff/${encodeURIComponent(id)}/invite`,
     {},
+  );
+}
+
+// --- Admin config (Settings tab) ---------------------------------------------
+
+export function getAdminConfig(token: string): Promise<AdminConfig> {
+  return adminGet<AdminConfig>(token, '/config');
+}
+
+export function saveAdminConfig<K extends keyof AdminConfig>(
+  token: string,
+  section: K,
+  value: AdminConfig[K],
+): Promise<{ ok: boolean; detail?: string }> {
+  return adminPut<{ ok: boolean; detail?: string }>(
+    token,
+    `/config/${encodeURIComponent(section)}`,
+    value,
   );
 }
 

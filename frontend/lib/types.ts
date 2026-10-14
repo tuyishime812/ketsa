@@ -394,3 +394,35 @@ export interface StaffWsEvent {
   staff: (StaffPublic & { active: boolean }) | null;
 }
 
+// --- Admin config (Settings tab) --------------------------------------------
+// Operational controls read/written via GET/PUT /api/admin/config[/{section}].
+
+export interface PaymentsConfig {
+  deposits_enabled: boolean;
+  withdrawals_enabled: boolean;
+  max_deposit_mwk: number;
+  max_withdrawal_mwk: number;
+  daily_withdrawal_limit_mwk: number;
+}
+
+export interface SecurityConfig {
+  admin_max_failures: number;
+  admin_lockout_seconds: number;
+}
+
+export interface StaffRolesConfig {
+  roles: string[];
+}
+
+export interface ResolutionConfig {
+  resolution_enabled: boolean;
+  require_end_date: boolean;
+}
+
+export interface AdminConfig {
+  payments: PaymentsConfig;
+  security: SecurityConfig;
+  staff_roles: StaffRolesConfig;
+  resolution: ResolutionConfig;
+}
+

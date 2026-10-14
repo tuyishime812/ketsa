@@ -297,6 +297,39 @@
   color: #8a93a3;
 }
 
+.admin-checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid #eef1f5;
+  background: #fdfdfe;
+}
+
+.admin-checkbox input {
+  margin-top: 2px;
+  cursor: pointer;
+}
+
+.admin-checkbox-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: #0c1526;
+}
+
+.admin-check-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.admin-hr {
+  border: none;
+  border-top: 1px solid #eef1f5;
+  margin: 18px 0;
+}
+
 .admin-input {
   width: 100%;
   padding: 9px 12px;

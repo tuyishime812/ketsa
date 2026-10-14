@@ -134,11 +134,14 @@ host's env UI. Full descriptions are in `.env.production.example`.
 | `KETSA_AUTH0_CLIENT_SECRET` | if social login | client secret (secret manager only) |
 | `KETSA_AUTH0_CONNECTION` | if social login | `google-oauth2` (must match the enabled connection) |
 
-Optional tuning (defaults are fine): money caps `KETSA_MAX_DEPOSIT_MWK` /
-`KETSA_MAX_WITHDRAWAL_MWK` / `KETSA_DAILY_WITHDRAWAL_LIMIT_MWK`; throttles
+Optional tuning: money caps `KETSA_MAX_DEPOSIT_MWK` /
+`KETSA_MAX_WITHDRAWAL_MWK` / `KETSA_DAILY_WITHDRAWAL_LIMIT_MWK`, the throttles
 `KETSA_RATE_LIMIT_PER_MIN` / `KETSA_WRITE_RATE_LIMIT_PER_MIN` /
-`KETSA_ADMIN_MAX_FAILURES` / `KETSA_ADMIN_LOCKOUT_SECONDS`; WS cap
-`KETSA_WS_MAX_CONNECTIONS`; OTP tuning `KETSA_OTP_*`.
+`KETSA_ADMIN_MAX_FAILURES` / `KETSA_ADMIN_LOCKOUT_SECONDS`, the WS cap
+`KETSA_WS_MAX_CONNECTIONS`, and OTP tuning `KETSA_OTP_*`. The money caps and
+the admin lockout are only the **defaults** — the site owner can change them
+live (and turn deposits/withdrawals/resolution on or off) from the admin
+**Settings** tab, which persists in the storage backend.
 
 **GO / NO-GO:** if you are taking real money, `KETSA_DB_BACKEND=supabase` **and**
 `KETSA_WANDE_TOKEN` must both be set, and the backend must run one replica.

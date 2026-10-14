@@ -25,9 +25,9 @@ import secrets
 import time
 from typing import Any, Iterable
 
-from . import mailer, store
+from . import mailer, siteconfig, store
 from .engine import engine
-from .models import STAFF_ROLES, StaffInviteResult, StaffUploadResult
+from .models import StaffInviteResult, StaffUploadResult
 
 log = logging.getLogger("ketsa.staff")
 
@@ -89,8 +89,13 @@ def normalize_phone(raw: Any) -> str | None:
     return ("+" if plus else "") + digits
 
 
-def _coerce(raw: dict) -> dict:
-    """Validate one row into canonical staff fields, or raise ValueError."""
+def _coerce(raw: dict, roles: Iterable[str] | None = None) -> dict:
+    """Validate one row into canonical staff fields, or raise ValueError.
+
+    ``roles`` is the admin-configured allowlist. Callers validating a batch
+    fetch it once (``siteconfig.staff_roles()``) and pass it in, so a bulk
+    upload of N rows costs one settings read rather than N.
+    """
     norm: dict[str, Any] = {}
     for key, value in raw.items():
         canon = _HEADER_ALIASES.get(_clean(key).lower())
@@ -111,10 +116,13 @@ def _coerce(raw: dict) -> dict:
 
     phone = normalize_phone(norm.get("phone"))
 
-    role = _clean(norm.get("role")).lower() or "support"
-    if role not in STAFF_ROLES:
+    role_allowed = list(roles) if roles is not None else siteconfig.staff_roles()
+    # Default to the first configured role (rather than a hard-coded "support")
+    # so removing a role from the allowlist can't break rows that omit one.
+    role = _clean(norm.get("role")).lower() or (role_allowed[0] if role_allowed else "support")
+    if role not in role_allowed:
         raise ValueError(
-            f"unknown role {role!r} (one of: {', '.join(STAFF_ROLES)})"
+            f"unknown role {role!r} (one of: {', '.join(role_allowed)})"
         )
 
     return {"name": name, "email": email, "phone": phone, "role": role}
@@ -225,13 +233,20 @@ def update_staff(staff_id: str, patch: dict) -> dict | None:
     member = store.get_staff(staff_id)
     if member is None:
         return None
+    # Allow the member's current role even if it has since been removed from the
+    # allowlist, so unrelated edits (e.g. toggling `active`) don't fail on it.
+    roles = siteconfig.staff_roles()
+    current_role = _clean(member.get("role")).lower()
+    if current_role and current_role not in roles:
+        roles = roles + [current_role]
     fields = _coerce(
         {
             "name": patch.get("name", member.get("name")),
             "email": patch.get("email", member.get("email")),
             "phone": patch.get("phone", member.get("phone")),
             "role": patch.get("role", member.get("role")),
-        }
+        },
+        roles,
     )
     other = find_by_email(fields["email"])
     if other and other.get("id") != staff_id:
@@ -335,10 +350,12 @@ def upload(
     errors: list[str] = []
     seen_emails: set[str] = set()
     seen_phones: set[str] = set()
+    # One settings read for the whole batch (see _coerce).
+    roles = siteconfig.staff_roles()
 
     for index, row in enumerate(parsed, start=1):
         try:
-            fields = _coerce(row)
+            fields = _coerce(row, roles)
         except ValueError as exc:
             errors.append(f"row {index}: {exc}")
             result.skipped += 1

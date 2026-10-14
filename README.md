@@ -154,10 +154,22 @@ With both services running, log in at **`http://localhost:3000/admin`**:
   (the local dev default is a throwaway: **you must set a strong, unique value
   for production** — see `SECURITY.md`).
 - The dashboard has a sidebar with editors for **Markets, Hero, Ticker,
-  Watch, Dashboard, Content, Users**, and **Manage** (hero/CTA copy, steps,
-  footer, section headings). The **Users** tab lists every account with live
-  wallet equity and lets you reset a user's password (revokes their sessions)
-  or delete the account entirely.
+  Watch, Dashboard, Content, Users, Staff, Broadcast, Settings**, and
+  **Manage** (hero/CTA copy, steps, footer, section headings). The **Users**
+  tab lists every account with live wallet equity and lets you reset a user's
+  password (revokes their sessions) or delete the account entirely.
+- **Settings tab.** Operational controls that used to be env-only are editable
+  here, live, without a restart:
+  - **Payments** — deposit/withdrawal on-off switches and the per-transaction
+    caps plus the daily withdrawal limit.
+  - **Security** — the admin-password change form and the login brute-force
+    lockout (max failures, lockout window).
+  - **Staff roles** — the role allowlist used by the Staff directory and shown
+    on the public team page.
+  - **Market resolution** — a master switch and an optional guard that refuses
+    to settle a market before its published `end_date`.
+  These are stored separately from site content and are **never** exposed by the
+  public API (`/api/home` whitelists only the content sections).
 - **Resolving markets.** The Markets editor has a **Resolve** action per
   market (once a market's status is `resolved` the button is hidden). Picking
   YES/NO settles every holder immediately: winning shares pay $1 each into the
@@ -328,11 +340,11 @@ and wired through `docker-compose.yml`.
 | `KETSA_RATE_LIMIT_PER_MIN`   | backend   | Requests/IP/60s fixed window (`0` disables)          | `120` |
 | `KETSA_WRITE_RATE_LIMIT_PER_MIN` | backend | Stricter per-IP budget for write endpoints (wallet mints, trades, payments) | `30` |
 | `KETSA_WS_MAX_CONNECTIONS`   | backend   | Concurrent WebSocket client cap (memory guard)       | `2000` |
-| `KETSA_MAX_DEPOSIT_MWK`      | backend   | Max MWK per deposit transaction                     | `1000000` |
-| `KETSA_MAX_WITHDRAWAL_MWK`   | backend   | Max MWK per withdrawal transaction                  | `1000000` |
-| `KETSA_DAILY_WITHDRAWAL_LIMIT_MWK` | backend | Max MWK withdrawn per wallet per rolling 24h    | `3000000` |
-| `KETSA_ADMIN_MAX_FAILURES`   | backend   | Failed admin logins per IP before lockout           | `10` |
-| `KETSA_ADMIN_LOCKOUT_SECONDS` | backend  | Admin lockout window after too many failures         | `900` |
+| `KETSA_MAX_DEPOSIT_MWK`      | backend   | Default max MWK per deposit transaction (admin Settings → Payments can override) | `1000000` |
+| `KETSA_MAX_WITHDRAWAL_MWK`   | backend   | Default max MWK per withdrawal transaction (admin-overridable) | `1000000` |
+| `KETSA_DAILY_WITHDRAWAL_LIMIT_MWK` | backend | Default max MWK withdrawn per wallet per rolling 24h (admin-overridable) | `3000000` |
+| `KETSA_ADMIN_MAX_FAILURES`   | backend   | Default failed admin logins per IP before lockout (admin Settings → Security can override) | `10` |
+| `KETSA_ADMIN_LOCKOUT_SECONDS` | backend  | Default admin lockout window after too many failures (admin-overridable) | `900` |
 | `KETSA_BACKEND_URL`          | frontend  | Base URL of the FastAPI service (server-side fetch + the runtime `/api/*` proxy in `app/api/[...path]/route.ts`) | `http://127.0.0.1:8000` |
 | `NEXT_PUBLIC_KETSA_BACKEND_URL` | frontend | Public backend origin embedded in the client bundle (WebSocket feed) | `http://127.0.0.1:8000` |
 | `KETSA_API_PORT`             | dev only  | Port `npm run dev` gives the FastAPI backend; also pins the backend's `KETSA_PUBLIC_BASE_URL` | `8000` |

@@ -20,6 +20,7 @@ import ManageEditor from '@/components/admin/ManageEditor';
 import UsersEditor from '@/components/admin/UsersEditor';
 import StaffEditor from '@/components/admin/StaffEditor';
 import BroadcastEditor from '@/components/admin/BroadcastEditor';
+import SettingsEditor from '@/components/admin/SettingsEditor';
 
 type TabKey =
   | 'markets'
@@ -31,6 +32,7 @@ type TabKey =
   | 'users'
   | 'staff'
   | 'broadcast'
+  | 'settings'
   | 'manage';
 
 const TABS: { key: TabKey; label: string }[] = [
@@ -43,6 +45,7 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'users', label: 'Users' },
   { key: 'staff', label: 'Staff' },
   { key: 'broadcast', label: 'Broadcast' },
+  { key: 'settings', label: 'Settings' },
   { key: 'manage', label: 'Manage' },
 ];
 
@@ -171,7 +174,8 @@ export default function AdminDashboard() {
           )}
           {!loading && tab === 'users' && <UsersEditor token={token} />}
           {!loading && tab === 'staff' && <StaffEditor token={token} />}
-      {!loading && tab === 'broadcast' && <BroadcastEditor token={token} />}
+          {!loading && tab === 'broadcast' && <BroadcastEditor token={token} />}
+          {!loading && tab === 'settings' && <SettingsEditor token={token} />}
           {!loading && tab === 'manage' && <ManageEditor token={token} />}
         </div>
       </main>

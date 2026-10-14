@@ -110,6 +110,30 @@ export function SelectInput({
   );
 }
 
+export function CheckBox({
+  label,
+  value,
+  onChange,
+  hint,
+}: {
+  label: string;
+  value: boolean;
+  onChange: (v: boolean) => void;
+  hint?: string;
+}) {
+  return (
+    <label className="admin-checkbox">
+      <input
+        type="checkbox"
+        checked={value}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+      <span className="admin-checkbox-label">{label}</span>
+      {hint && <span className="admin-field-hint">{hint}</span>}
+    </label>
+  );
+}
+
 export function SaveButton({
   onSave,
   label = 'Save changes',

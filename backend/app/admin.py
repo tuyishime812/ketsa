@@ -27,7 +27,7 @@ import time
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
 
-from . import authstate, mailer, staff, store
+from . import authstate, mailer, siteconfig, staff, store
 from .auth import hash_password, lookup_user_by_identifier, revoke_user_sessions
 from .engine import engine
 from .models import (
@@ -56,21 +56,26 @@ _PBKDF2_ITER = 100_000
 # Brute-force throttle for POST /login, keyed by client IP. Stamps live in the
 # shared store so a redeploy doesn't reset the fence and all workers count the
 # same failures.
+#
+# These are only the *fallbacks*: the effective values come from the admin
+# Settings → Security section (siteconfig.security()), which itself defaults to
+# the KETSA_ADMIN_* env vars. Reading them per call means an admin change takes
+# effect without a restart.
 LOGIN_MAX_FAILURES = 10
 LOGIN_LOCKOUT_SECONDS = 900
 
 
 def _login_window() -> int:
     try:
-        return int(os.getenv("KETSA_ADMIN_LOCKOUT_SECONDS", str(LOGIN_LOCKOUT_SECONDS)))
-    except ValueError:
+        return int(siteconfig.security()["admin_lockout_seconds"])
+    except (KeyError, TypeError, ValueError):
         return LOGIN_LOCKOUT_SECONDS
 
 
 def _login_max_failures() -> int:
     try:
-        return int(os.getenv("KETSA_ADMIN_MAX_FAILURES", str(LOGIN_MAX_FAILURES)))
-    except ValueError:
+        return int(siteconfig.security()["admin_max_failures"])
+    except (KeyError, TypeError, ValueError):
         return LOGIN_MAX_FAILURES
 
 
@@ -294,6 +299,26 @@ async def admin_settings_put(body: dict) -> MessageResponse:
 @router.put("/settings/{section}", response_model=MessageResponse, dependencies=[Depends(require_admin)])
 async def admin_settings_section(section: str, body: dict) -> MessageResponse:
     set_setting(section, body)
+    return MessageResponse()
+
+
+# --- Config (payments, security, staff roles, market resolution) -------------
+# Operational controls, kept separate from the site *content* settings above so
+# they never flow into the public /api/home bundle (see main._public_settings).
+
+@router.get("/config", dependencies=[Depends(require_admin)])
+async def admin_config_get() -> dict:
+    return siteconfig.all_config()
+
+
+@router.put("/config/{section}", response_model=MessageResponse, dependencies=[Depends(require_admin)])
+async def admin_config_put(section: str, body: dict) -> MessageResponse:
+    try:
+        siteconfig.set_config(section, body)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Unknown settings section: {section}")
+    except siteconfig.ConfigError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     return MessageResponse()
 
 

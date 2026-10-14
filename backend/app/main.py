@@ -21,6 +21,7 @@ import os
 import time
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
@@ -30,6 +31,7 @@ from fastapi.responses import JSONResponse
 from . import authstate
 from . import mailer
 from . import payments as wande
+from . import siteconfig
 from . import staff
 from . import store
 from .admin import MessageResponse, require_admin, router as admin_router
@@ -70,12 +72,23 @@ CATEGORIES = ['politics', 'crypto', 'sports', 'culture', 'tech', 'climate']
 logger = logging.getLogger("ketsa.main")
 
 
-def _env_float(name: str, default: float) -> float:
-    raw = os.getenv(name, "").strip()
+def _market_due(market: dict | None) -> bool:
+    """True when a market has no end date, or its end date has already passed.
+
+    Used by the optional resolution guard (Settings → Market resolution): when
+    enabled, a market may only be resolved once it is actually due, so an
+    operator can't settle a question ahead of its published close time.
+    """
+    end_date = (market or {}).get("end_date")
+    if not end_date:
+        return True
     try:
-        return float(raw) if raw else default
+        due = datetime.fromisoformat(str(end_date).replace("Z", "+00:00"))
     except ValueError:
-        return default
+        return True  # unparseable date — don't block; treat as due
+    if due.tzinfo is None:
+        due = due.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) >= due
 
 
 class ConnectionManager:
@@ -172,8 +185,22 @@ def _markets_group() -> MarketsGroup:
     )
 
 
+# Only these content sections are ever exposed by the public API. Operational
+# config (payments/security/staff roles/resolution) lives in the same settings
+# store under `config:*` keys, and must never leak into /api/home.
+_PUBLIC_SETTING_KEYS = (
+    "hero",
+    "cta",
+    "steps",
+    "footer",
+    "markets_section",
+    "dashboard_section",
+)
+
+
 def _public_settings() -> dict:
-    return get_all_settings()
+    all_settings = get_all_settings()
+    return {k: all_settings[k] for k in _PUBLIC_SETTING_KEYS if k in all_settings}
 
 
 def _leaderboard(limit: int = 20) -> list[dict]:
@@ -231,10 +258,10 @@ def create_app() -> "FastAPI":
     # per-IP budget on top of the global limiter (F-07 hardening).
     write_rate_limit_per_min = int(os.getenv("KETSA_WRITE_RATE_LIMIT_PER_MIN", "30"))
     write_limiter = _RateLimiter(write_rate_limit_per_min)
-    # Money-movement caps (MWK) — env-tunable, sane-bounded by default (F-05).
-    max_deposit_mwk = _env_float("KETSA_MAX_DEPOSIT_MWK", 1_000_000.0)
-    max_withdrawal_mwk = _env_float("KETSA_MAX_WITHDRAWAL_MWK", 1_000_000.0)
-    daily_withdrawal_limit_mwk = _env_float("KETSA_DAILY_WITHDRAWAL_LIMIT_MWK", 3_000_000.0)
+    # Money-movement caps (MWK) and deposit/withdrawal enables are now
+    # admin-configurable (Settings → Payments). They are read per request via
+    # siteconfig so an admin change takes effect without a restart; the env vars
+    # (KETSA_MAX_*_MWK) remain the defaults.
     # Hard ceiling on concurrent WebSocket clients, so the live feed can't be
     # used to exhaust process memory (CWE-770).
     ws_max_connections = int(os.getenv("KETSA_WS_MAX_CONNECTIONS", "2000"))
@@ -537,6 +564,9 @@ def create_app() -> "FastAPI":
         authorization: str | None = Header(default=None),
     ) -> Payment:
         _require_payments()
+        cfg = siteconfig.payments()
+        if not cfg["deposits_enabled"]:
+            raise HTTPException(status_code=503, detail="Deposits are temporarily disabled")
         _require_write_capacity(request)
         user = require_user(authorization)
         _require_wallet(body.wallet_id)
@@ -551,10 +581,10 @@ def create_app() -> "FastAPI":
             raise HTTPException(status_code=400, detail=f"Minimum deposit is {int(wande.MIN_AMOUNT_MWK)} MWK")
         if not round(float(body.amount), 2) == float(body.amount):
             raise HTTPException(status_code=400, detail="Amount must have at most 2 decimal places")
-        if body.amount > max_deposit_mwk:
+        if body.amount > cfg["max_deposit_mwk"]:
             raise HTTPException(
                 status_code=400,
-                detail=f"Deposits are capped at {max_deposit_mwk:g} MWK per transaction",
+                detail=f"Deposits are capped at {cfg['max_deposit_mwk']:g} MWK per transaction",
             )
         try:
             payload = await asyncio.to_thread(
@@ -682,6 +712,9 @@ def create_app() -> "FastAPI":
         authorization: str | None = Header(default=None),
     ) -> Payment:
         _require_payments()
+        cfg = siteconfig.payments()
+        if not cfg["withdrawals_enabled"]:
+            raise HTTPException(status_code=503, detail="Withdrawals are temporarily disabled")
         _require_write_capacity(request)
         user = require_user(authorization)  # guests can no longer move money out (F-03)
         _require_wallet(body.wallet_id)
@@ -694,10 +727,10 @@ def create_app() -> "FastAPI":
             raise HTTPException(status_code=400, detail="Unknown correspondent")
         if body.amount < wande.MIN_AMOUNT_MWK:
             raise HTTPException(status_code=400, detail=f"Minimum withdrawal is {int(wande.MIN_AMOUNT_MWK)} MWK")
-        if body.amount > max_withdrawal_mwk:
+        if body.amount > cfg["max_withdrawal_mwk"]:
             raise HTTPException(
                 status_code=400,
-                detail=f"Withdrawals are capped at {max_withdrawal_mwk:g} MWK per transaction",
+                detail=f"Withdrawals are capped at {cfg['max_withdrawal_mwk']:g} MWK per transaction",
             )
         if not round(float(body.amount), 2) == float(body.amount):
             raise HTTPException(status_code=400, detail="Amount must have at most 2 decimal places")
@@ -706,7 +739,7 @@ def create_app() -> "FastAPI":
             for p in store.list_payments(body.wallet_id)
             if p["kind"] == "withdraw" and p["created"] >= time.time() - 86400
         )
-        if recent + body.amount > daily_withdrawal_limit_mwk:
+        if recent + body.amount > cfg["daily_withdrawal_limit_mwk"]:
             raise HTTPException(
                 status_code=400,
                 detail="Daily withdrawal limit reached for this wallet",
@@ -784,6 +817,16 @@ def create_app() -> "FastAPI":
     async def admin_markets_resolve(
         market_id: str, body: ResolveMarketRequest
     ) -> MessageResponse:
+        cfg = siteconfig.resolution()
+        if not cfg["resolution_enabled"]:
+            raise HTTPException(
+                status_code=503, detail="Market resolution is temporarily disabled"
+            )
+        if cfg["require_end_date"] and not _market_due(store.get_market(market_id)):
+            raise HTTPException(
+                status_code=400,
+                detail="This market has not reached its end date yet",
+            )
         async with _engine_lock:
             try:
                 summary = engine.resolve_market(market_id, body.outcome)
