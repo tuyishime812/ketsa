@@ -30,6 +30,7 @@ from fastapi.responses import JSONResponse
 from . import authstate
 from . import mailer
 from . import payments as wande
+from . import staff
 from . import store
 from .admin import MessageResponse, require_admin, router as admin_router
 from .auth import require_user, resolve_optional_user, router as auth_router
@@ -53,6 +54,7 @@ from .models import (
     Position,
     Proof,
     ResolveMarketRequest,
+    StaffPublic,
     TickerItem,
     Trade,
     TradeRequest,
@@ -238,6 +240,32 @@ def create_app() -> "FastAPI":
     ws_max_connections = int(os.getenv("KETSA_WS_MAX_CONNECTIONS", "2000"))
     manager = ConnectionManager()
 
+    # --- Real-time push -----------------------------------------------------
+    # The engine fires `_signal_events` after every queued event. We hop back
+    # onto the loop and wake `_event_pump`, which broadcasts within a loop
+    # iteration. Without this, an admin-side change (staff upload/remove, but
+    # also payments) would sit in the queue until the next 12s `_tick_loop`
+    # flush — visible lag, not "real time".
+    pump_signal = asyncio.Event()
+    _loop_ref: dict[str, asyncio.AbstractEventLoop | None] = {"loop": None}
+
+    def _signal_events() -> None:
+        # May run on the loop thread (normal) or a worker thread; call_soon_
+        # threadsafe is correct and cheap either way.
+        loop = _loop_ref["loop"]
+        if loop is None:
+            return
+        try:
+            loop.call_soon_threadsafe(pump_signal.set)
+        except RuntimeError:  # pragma: no cover - loop closed during shutdown
+            pass
+
+    async def _event_pump() -> None:
+        while True:
+            await pump_signal.wait()
+            pump_signal.clear()
+            await _pump_events(manager)
+
     async def _tick_loop() -> None:
         # Simulated liquidity-provider repricing keeps the feed alive between
         # user trades so the order books feel genuinely live.
@@ -289,10 +317,16 @@ def create_app() -> "FastAPI":
             )
 
         task = asyncio.create_task(_tick_loop())
+        _loop_ref["loop"] = asyncio.get_running_loop()
+        engine.set_emit_hook(_signal_events)
+        pump_task = asyncio.create_task(_event_pump())
         try:
             yield
         finally:
             task.cancel()
+            pump_task.cancel()
+            engine.set_emit_hook(None)
+            _loop_ref["loop"] = None
 
     app = FastAPI(
         title="Ketsa API",
@@ -849,6 +883,12 @@ def create_app() -> "FastAPI":
     @app.get("/api/proof", response_model=Proof)
     async def proof() -> Proof:
         return Proof(**store.get_proof())
+
+    @app.get("/api/staff", response_model=list[StaffPublic])
+    async def public_staff() -> list[StaffPublic]:
+        # Public team directory: active staff only, reduced to name + role.
+        # Email/phone are PII and never leave the admin API (CWE-200).
+        return [StaffPublic(**s) for s in staff.list_public()]
 
     @app.get("/api/home", response_model=HomeData)
     async def home() -> HomeData:

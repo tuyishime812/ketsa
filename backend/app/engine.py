@@ -24,7 +24,7 @@ import copy
 import random
 import secrets
 import time
-from typing import Any
+from typing import Any, Callable
 
 from . import store
 
@@ -60,6 +60,11 @@ class Marketplace:
         self._wallets: dict[str, dict] = {}
         self._trades: dict[str, list[dict]] = {}
         self._events: list[dict[str, Any]] = []
+        # Set by main.py at startup. Fired after every event is queued so the
+        # WS pump task wakes immediately instead of waiting for the next poll
+        # tick. This is what makes admin-side changes (e.g. staff uploads) push
+        # to connected clients in real time. None in tests / bare imports.
+        self._emit_hook: Callable[[], None] | None = None
 
     # ------------------------------------------------------------------
     # Event stream (pumped to WebSocket clients by main.py)
@@ -69,8 +74,24 @@ class Marketplace:
         events, self._events = self._events, []
         return events
 
+    def set_emit_hook(self, hook: Callable[[], None] | None) -> None:
+        """Register a callback fired after every queued event.
+
+        main.py points this at an ``asyncio.Event.set`` hop so its pump task
+        broadcasts within a loop iteration (real time) rather than on the 12s
+        poll tick. Wrapped by ``_emit`` so a misbehaving hook can never break
+        trading: emit is on the hot path of every fill.
+        """
+        self._emit_hook = hook
+
     def _emit(self, payload: dict[str, Any]) -> None:
         self._events.append(payload)
+        hook = self._emit_hook
+        if hook is not None:
+            try:
+                hook()
+            except Exception:  # pragma: no cover - defensive: never break a fill
+                pass
 
     def _emit_market(self, market_id: str) -> None:
         snap = self.snapshot_market(market_id)

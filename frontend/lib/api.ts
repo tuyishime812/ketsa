@@ -18,6 +18,10 @@ import type {
   PendingVerification,
   RegisterCredentials,
   RegisterResult,
+  StaffInviteResult,
+  StaffMember,
+  StaffPublic,
+  StaffUploadResult,
   Trade,
   TradeRequest,
   TradeResponse,
@@ -516,7 +520,17 @@ async function adminFetch<T>(
     throw new AdminApiError(401, 'Unauthorized — please log in again');
   }
   if (!res.ok) {
-    throw new AdminApiError(res.status, `Request failed (${res.status}): ${path}`);
+    // Surface the backend's reason (e.g. "a staff member with that email
+    // already exists") rather than a bare status, so the admin UI can explain
+    // what went wrong.
+    let detail = `Request failed (${res.status}): ${path}`;
+    try {
+      const body = await res.json();
+      if (typeof body?.detail === 'string' && body.detail) detail = body.detail;
+    } catch {
+      /* keep the generic message */
+    }
+    throw new AdminApiError(res.status, detail);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -575,6 +589,72 @@ export function getBroadcastStatus(
   return adminGet<BroadcastStatus>(
     token,
     `/broadcast/${encodeURIComponent(jobId)}`,
+  );
+}
+
+// --- Staff directory ---------------------------------------------------------
+
+/** Public team directory (server-side helper; PII-free). */
+export async function fetchStaffPublic(): Promise<StaffPublic[]> {
+  return fetchJson<StaffPublic[]>(`${API_BASE}/api/staff`);
+}
+
+/** Public team directory (client-side, via the same-origin proxy). */
+export function fetchStaffSession(): Promise<StaffPublic[]> {
+  return clientJson<StaffPublic[]>('/staff');
+}
+
+export interface StaffCreateInput {
+  name: string;
+  email: string;
+  phone?: string | null;
+  role: string;
+}
+
+export function listStaff(token: string): Promise<StaffMember[]> {
+  return adminGet<StaffMember[]>(token, '/staff');
+}
+
+export function createStaff(
+  token: string,
+  input: StaffCreateInput,
+): Promise<StaffMember> {
+  return adminPost<StaffMember>(token, '/staff', input);
+}
+
+export function uploadStaff(
+  token: string,
+  payload: { text?: string; rows?: Record<string, unknown>[] },
+): Promise<StaffUploadResult> {
+  return adminPost<StaffUploadResult>(token, '/staff/upload', payload);
+}
+
+export function updateStaff(
+  token: string,
+  id: string,
+  patch: Partial<Pick<StaffMember, 'name' | 'email' | 'phone' | 'role' | 'active'>>,
+): Promise<StaffMember> {
+  return adminPut<StaffMember>(token, `/staff/${encodeURIComponent(id)}`, patch);
+}
+
+export function deleteStaff(
+  token: string,
+  id: string,
+): Promise<{ ok: boolean; detail?: string }> {
+  return adminDelete<{ ok: boolean; detail?: string }>(
+    token,
+    `/staff/${encodeURIComponent(id)}`,
+  );
+}
+
+export function inviteStaff(
+  token: string,
+  id: string,
+): Promise<StaffInviteResult> {
+  return adminPost<StaffInviteResult>(
+    token,
+    `/staff/${encodeURIComponent(id)}/invite`,
+    {},
   );
 }
 

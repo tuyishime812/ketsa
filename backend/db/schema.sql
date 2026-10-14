@@ -4,7 +4,7 @@
 -- before pointing the backend at the project. All Ketsa content is stored as
 -- JSONB rows so the app never needs migrations for content changes.
 --
--- Six tables:
+-- Seven tables:
 --   ketsa_kv           — markets + editable content (watch, ticker, dashboard,
 --                        stats, proof, settings). The "kind" column lets the
 --                        API scope queries; a content-reset only ever touches
@@ -16,6 +16,8 @@
 --                        wiped by resets.
 --   ketsa_users        — accounts (password + Auth0/Google sign-ins).
 --   ketsa_notifications — per-wallet in-app notification feed.
+--   ketsa_staff        — the platform team directory (admin-managed). Not
+--                        wiped by "reset content".
 --   ketsa_auth         — ephemeral auth state: bearer sessions, pending OTPs,
 --                        Auth0 SSO tickets and the login/code-request throttles.
 --                        Kept OUT of ketsa_kv so a content reset never logs
@@ -88,6 +90,23 @@ create index if not exists ketsa_notifications_wallet_idx
 create index if not exists ketsa_payments_wallet_idx
   on public.ketsa_payments ((value ->> 'wallet_id'), (value ->> 'created') desc);
 
+-- Staff directory (platform team). `email` and `phone` are the dedupe keys the
+-- bulk-upload path upserts against, so they are UNIQUE where present — the same
+-- reasoning as ketsa_users: two rows sharing an email would make "invite this
+-- person" ambiguous. `null` (no phone) stays exempt. Safe to re-run.
+create table if not exists public.ketsa_staff (
+  id    text primary key,
+  value jsonb not null default '{}'::jsonb
+);
+
+create unique index if not exists ketsa_staff_email_idx
+  on public.ketsa_staff ((lower(value ->> 'email')))
+  where value ->> 'email' is not null;
+
+create unique index if not exists ketsa_staff_phone_idx
+  on public.ketsa_staff ((value ->> 'phone'))
+  where value ->> 'phone' is not null;
+
 -- Auth state store (sessions, OTPs, SSO tickets, throttles).
 --
 -- One table serves every ephemeral auth purpose. `id` is namespaced by kind
@@ -131,5 +150,7 @@ alter table public.ketsa_wallets       enable row level security;
 alter table public.ketsa_payments      enable row level security;
 alter table public.ketsa_users         enable row level security;
 alter table public.ketsa_notifications enable row level security;
+-- Staff carries contact details (email/phone): same treatment as above.
+alter table public.ketsa_staff         enable row level security;
 -- Auth state carries live session digests and pending signups: same treatment.
 alter table public.ketsa_auth          enable row level security;

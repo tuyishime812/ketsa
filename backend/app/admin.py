@@ -27,10 +27,18 @@ import time
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
 
-from . import authstate, mailer, store
+from . import authstate, mailer, staff, store
 from .auth import hash_password, lookup_user_by_identifier, revoke_user_sessions
 from .engine import engine
-from .models import AdminUserView
+from .models import (
+    AdminUserView,
+    StaffCreate,
+    StaffInviteResult,
+    StaffMember,
+    StaffUpdate,
+    StaffUpload,
+    StaffUploadResult,
+)
 from .storage import get_all_settings, get_setting, reset_db, set_setting
 
 logger = logging.getLogger("ketsa.admin")
@@ -346,6 +354,73 @@ async def admin_user_delete(user_id: str) -> MessageResponse:
     deleted = store.delete_user(user_id)
     revoke_user_sessions(user_id)
     return MessageResponse(ok=deleted, detail=("deleted" if deleted else "not found"))
+
+
+# --- Staff directory --------------------------------------------------------
+#
+# Operators of the platform (separate from trader accounts). Every mutation
+# emits a `staff` event (see app/staff.py) which main.py broadcasts, so the
+# change appears on every open admin panel and the public team page live.
+
+def _staff_conflict(exc: ValueError) -> HTTPException:
+    # Duplicate identifiers are a conflict (409); everything else is bad input.
+    if "already exists" in str(exc):
+        return HTTPException(status_code=409, detail=str(exc))
+    return HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/staff", response_model=list[StaffMember], dependencies=[Depends(require_admin)])
+async def admin_staff_list() -> list[StaffMember]:
+    return [StaffMember(**s) for s in staff.list_staff()]
+
+
+@router.post("/staff", response_model=StaffMember, dependencies=[Depends(require_admin)])
+async def admin_staff_create(body: StaffCreate) -> StaffMember:
+    try:
+        member = staff.create_staff(body.name, body.email, body.phone, body.role)
+    except ValueError as exc:
+        raise _staff_conflict(exc)
+    return StaffMember(**member)
+
+
+@router.post(
+    "/staff/upload",
+    response_model=StaffUploadResult,
+    dependencies=[Depends(require_admin)],
+)
+async def admin_staff_upload(body: StaffUpload) -> StaffUploadResult:
+    if not body.text and not body.rows:
+        raise HTTPException(status_code=400, detail="Provide CSV/JSON text or rows")
+    return staff.upload(text=body.text, rows=body.rows)
+
+
+@router.put("/staff/{staff_id}", response_model=StaffMember, dependencies=[Depends(require_admin)])
+async def admin_staff_update(staff_id: str, body: StaffUpdate) -> StaffMember:
+    try:
+        member = staff.update_staff(staff_id, body.model_dump(exclude_unset=True))
+    except ValueError as exc:
+        raise _staff_conflict(exc)
+    if member is None:
+        raise HTTPException(status_code=404, detail="Staff member not found")
+    return StaffMember(**member)
+
+
+@router.delete("/staff/{staff_id}", response_model=MessageResponse, dependencies=[Depends(require_admin)])
+async def admin_staff_delete(staff_id: str) -> MessageResponse:
+    deleted = staff.delete_staff(staff_id)
+    return MessageResponse(ok=deleted, detail=("deleted" if deleted else "not found"))
+
+
+@router.post(
+    "/staff/{staff_id}/invite",
+    response_model=StaffInviteResult,
+    dependencies=[Depends(require_admin)],
+)
+async def admin_staff_invite(staff_id: str) -> StaffInviteResult:
+    try:
+        return staff.invite_staff(staff_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Staff member not found")
 
 
 # --- Broadcast: one announcement to every user with an email --------------------

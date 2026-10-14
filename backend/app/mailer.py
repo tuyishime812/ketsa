@@ -232,3 +232,45 @@ def send_broadcast_email(to: str, subject: str, body: str) -> bool:
         body=html.escape(str(body or ""), quote=True),
     )
     return send_email(to, clean_subject or "A message from Ketsa", body_html)
+
+
+# Staff invite. The recipient's name and role are interpolated as escaped TEXT:
+# a role is already constrained to an allowlist in staff.py, but escaping here
+# means even a hand-edited row can never inject markup into the invite.
+_STAFF_INVITE_TEMPLATE = """\
+<!doctype html>
+<html>
+  <body style="margin:0;padding:24px;background:#f4f2ec;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
+    <div style="max-width:480px;margin:0 auto;background:#ffffff;border:1px solid #e6e2d8;border-radius:12px;padding:28px">
+      <div style="font-size:20px;font-weight:700;color:#101926">Ketsa</div>
+      <p style="font-size:14px;color:#46536b;line-height:1.6;margin-top:18px">Hi{name},</p>
+      <p style="font-size:14px;color:#46536b;line-height:1.6">
+        You have been added to the Ketsa team as <strong>{role}</strong>.
+        This is a notification that your staff profile was created — no action
+        is needed on your part. If you were not expecting this, please let the
+        Ketsa team know.</p>
+      <p style="font-size:12px;color:#7a8294;line-height:1.5;margin-top:24px;border-top:1px solid #e6e2d8;padding-top:14px">
+        Ketsa — prediction markets. Trading involves risk.</p>
+    </div>
+  </body>
+</html>
+"""
+
+
+def send_staff_invite(to: str, name: str = "", role: str = "support") -> bool:
+    """Email a newly-added staff member that their profile was created.
+
+    Returns True only when the message actually reached its destination (or was
+    written to the log in dev mode) — same contract as ``send_email``, so the
+    admin UI can report an honest "invite sent" instead of a silent no-op.
+    """
+    clean_name = " ".join(str(name or "").split())[:80]
+    clean_role = (str(role or "").strip().lower() or "support")[:40]
+    greeting = f", {clean_name}" if clean_name else ""
+    body_html = _STAFF_INVITE_TEMPLATE.format(
+        name=html.escape(greeting, quote=True),
+        role=html.escape(clean_role, quote=True),
+    )
+    if _delivery_mode() == "log":
+        log.warning("dev staff invite for %s (role=%s)", to, clean_role)
+    return send_email(to, "You've been added to the Ketsa team", body_html)

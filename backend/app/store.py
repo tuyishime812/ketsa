@@ -150,3 +150,21 @@ def get_payment(payment_id: str) -> dict | None:
 
 def list_payments(wallet_id: str | None = None) -> list[dict]:
     return get_backend().list_payments(wallet_id)
+
+
+# --- Staff ------------------------------------------------------------------
+
+def list_staff() -> list[dict]:
+    return get_backend().list_staff()
+
+
+def get_staff(staff_id: str) -> dict | None:
+    return get_backend().get_staff(staff_id)
+
+
+def upsert_staff(member: dict) -> None:
+    get_backend().upsert_staff(member)
+
+
+def delete_staff(staff_id: str) -> bool:
+    return get_backend().delete_staff(staff_id)

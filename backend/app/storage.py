@@ -109,7 +109,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
                 "title": "Company",
                 "links": [
                     {"label": "About", "href": "#top"},
-                    {"label": "Careers", "href": "#top"},
+                    {"label": "Team", "href": "/team"},
                     {"label": "Blog", "href": "#top"},
                     {"label": "Contact", "href": "#top"},
                 ],
@@ -219,6 +219,10 @@ class StoreBackend(Protocol):
     def upsert_notification(self, notification: dict) -> None: ...
     def list_notifications(self, wallet_id: str | None = None, limit: int = 50) -> list[dict]: ...
     def mark_notifications_read(self, wallet_id: str, ids: list[str] | None = None) -> int: ...
+    def list_staff(self) -> list[dict]: ...
+    def get_staff(self, staff_id: str) -> dict | None: ...
+    def upsert_staff(self, member: dict) -> None: ...
+    def delete_staff(self, staff_id: str) -> bool: ...
     # Ephemeral auth state (sessions/OTPs/tickets/throttles). See authstate.py.
     def auth_put(
         self,
@@ -273,6 +277,10 @@ class MemoryBackend:
         self._users: dict[str, dict] = {}
         self._payments: dict[str, dict] = {}
         self._notifications: dict[str, dict] = {}
+        # Staff directory. Operational data, so — like wallets/users — it is
+        # NOT cleared by force_reseed() (an admin "reset content" must not wipe
+        # the team list).
+        self._staff: dict[str, dict] = {}
         # Ephemeral auth state. Deliberately NOT cleared by force_reseed():
         # an admin content reset must not log every user out.
         self._auth: dict[str, dict] = {}
@@ -508,6 +516,24 @@ class MemoryBackend:
                 marked += 1
         return marked
 
+    # --- staff directory ------------------------------------------------------
+    def list_staff(self) -> list[dict]:
+        self.init()
+        return [copy.deepcopy(s) for s in self._staff.values()]
+
+    def get_staff(self, staff_id: str) -> dict | None:
+        self.init()
+        s = self._staff.get(staff_id)
+        return copy.deepcopy(s) if s else None
+
+    def upsert_staff(self, member: dict) -> None:
+        self.init()
+        self._staff[member["id"]] = copy.deepcopy(member)
+
+    def delete_staff(self, staff_id: str) -> bool:
+        self.init()
+        return self._staff.pop(staff_id, None) is not None
+
     # --- ephemeral auth state -------------------------------------------------
     # One dict keyed by a namespaced id ("session:<digest>", "otp:<scope>",
     # "ticket:<t>", "throttle:<bucket>"). Mirrors the Supabase `ketsa_auth` table
@@ -610,6 +636,7 @@ WALLETS_TABLE = "ketsa_wallets"
 PAYMENTS_TABLE = "ketsa_payments"
 USERS_TABLE = "ketsa_users"
 NOTIFICATIONS_TABLE = "ketsa_notifications"
+STAFF_TABLE = "ketsa_staff"
 AUTH_TABLE = "ketsa_auth"
 
 
@@ -951,6 +978,26 @@ class SupabaseBackend:
         if self._get_row(USERS_TABLE, user_id) is None:
             return False
         self._delete_row(USERS_TABLE, user_id)
+        return True
+
+    # --- staff directory -----------------------------------------------------
+    def list_staff(self) -> list[dict]:
+        self.init()
+        return self._list_rows(STAFF_TABLE)
+
+    def get_staff(self, staff_id: str) -> dict | None:
+        self.init()
+        return self._get_row(STAFF_TABLE, staff_id)
+
+    def upsert_staff(self, member: dict) -> None:
+        self.init()
+        self._upsert_row(STAFF_TABLE, member["id"], member)
+
+    def delete_staff(self, staff_id: str) -> bool:
+        self.init()
+        if self._get_row(STAFF_TABLE, staff_id) is None:
+            return False
+        self._delete_row(STAFF_TABLE, staff_id)
         return True
 
     # --- payments ------------------------------------------------------------

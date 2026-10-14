@@ -330,3 +330,67 @@ export interface SiteSettings {
   dashboard_section: SectionCopy;
 }
 
+// --- Staff directory --------------------------------------------------------
+
+export type StaffRole =
+  | 'owner'
+  | 'admin'
+  | 'support'
+  | 'finance'
+  | 'marketing'
+  | 'moderation';
+
+export const STAFF_ROLES: StaffRole[] = [
+  'owner',
+  'admin',
+  'support',
+  'finance',
+  'marketing',
+  'moderation',
+];
+
+/** Public team directory entry — no contact details (PII). */
+export interface StaffPublic {
+  id: string;
+  name: string;
+  role: string;
+}
+
+/** Full staff record (admin view) — includes contact details. */
+export interface StaffMember {
+  id: string;
+  name: string;
+  email: string;
+  phone?: string | null;
+  role: string;
+  active: boolean;
+  created: number;
+  updated: number;
+  invited_ts?: number | null;
+}
+
+export interface StaffUploadResult {
+  added: number;
+  updated: number;
+  skipped: number;
+  errors: string[];
+}
+
+export interface StaffInviteResult {
+  ok: boolean;
+  delivered: boolean;
+  detail: string;
+}
+
+/**
+ * A realtime `staff` event broadcast on the shared WebSocket. `staff` is the
+ * public (PII-free) projection; `upload`/`invite` carry `staff: null` and ask
+ * clients to re-fetch the authoritative list.
+ */
+export interface StaffWsEvent {
+  type: 'staff';
+  action: 'add' | 'update' | 'remove' | 'upload' | 'invite';
+  id?: string;
+  staff: (StaffPublic & { active: boolean }) | null;
+}
+

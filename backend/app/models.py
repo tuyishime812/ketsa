@@ -147,6 +147,72 @@ class AdminUserView(BaseModel):
     last_seen: Optional[float] = None
 
 
+# --- Staff directory --------------------------------------------------------
+#
+# A staff member is an operator of the platform (support, finance, …), distinct
+# from a trader account. Roles are an allowlist, not free text: the value is
+# rendered in the admin UI and interpolated into the invite email, so an
+# unbounded string would be a stored-injection vector.
+
+STAFF_ROLES = ("owner", "admin", "support", "finance", "marketing", "moderation")
+
+
+class StaffCreate(BaseModel):
+    """Admin input for adding one staff member."""
+    name: str
+    email: str
+    phone: Optional[str] = None
+    role: str = "support"
+
+
+class StaffUpdate(BaseModel):
+    """Partial update (e.g. toggle `active`). Unset fields are left alone."""
+    name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    role: Optional[str] = None
+    active: Optional[bool] = None
+
+
+class StaffUpload(BaseModel):
+    """Bulk add. Send a raw CSV/JSON *text* payload and/or pre-parsed rows."""
+    text: Optional[str] = None
+    rows: Optional[List[dict]] = None
+
+
+class StaffMember(BaseModel):
+    """Full staff record — the admin view, including contact details."""
+    id: str
+    name: str
+    email: str
+    phone: Optional[str] = None
+    role: str
+    active: bool = True
+    created: float
+    updated: float
+    invited_ts: Optional[float] = None
+
+
+class StaffPublic(BaseModel):
+    """Public view — deliberately WITHOUT email/phone (PII)."""
+    id: str
+    name: str
+    role: str
+
+
+class StaffUploadResult(BaseModel):
+    added: int = 0
+    updated: int = 0
+    skipped: int = 0
+    errors: List[str] = []
+
+
+class StaffInviteResult(BaseModel):
+    ok: bool
+    delivered: bool
+    detail: str
+
+
 class LeaderboardEntry(BaseModel):
     rank: int
     wallet_id: str
