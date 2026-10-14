@@ -170,13 +170,22 @@ unset when it built. Set it **before** the redeploy.
 
 ## Step 4 — Supabase schema (re-run, idempotent)
 
-The schema gained an expression index (`ketsa_users_wallet_id_idx`) and made the
-`phone` and `auth0_sub` indexes **unique**. Re-run it once so the uniqueness
-those columns claim is actually enforced.
+The schema gained:
+
+- the **`ketsa_auth`** table (bearer sessions, pending OTPs and login/failure
+  throttles). This one is load-bearing: **without it every login, signup, email
+  verification and password reset returns `500`** (the backend logs an actionable
+  error at boot and `postgrest` reports `PGRST205: Could not find the table
+  'public.ketsa_auth'`),
+- an expression index (`ketsa_users_wallet_id_idx`), and
+- **unique** `phone` and `auth0_sub` indexes, so the uniqueness those columns
+  claim is actually enforced.
+
+Re-run it once so the table exists and the uniqueness is enforced.
 
 Supabase → SQL editor → run, **in order**, one file per query:
 
-1. `backend/db/schema.sql` — tables + RLS (required for `KETSA_DB_BACKEND=supabase`)
+1. `backend/db/schema.sql` — tables (incl. `ketsa_auth`) + RLS (required for `KETSA_DB_BACKEND=supabase`)
 2. `backend/db/realtime.sql` — optional Supabase Realtime publication (skip unless used)
 
 Both are idempotent and touch no data. Verify:
@@ -184,7 +193,17 @@ Both are idempotent and touch no data. Verify:
 ```sql
 select indexname from pg_indexes where tablename = 'ketsa_users';
 -- expect: ketsa_users_wallet_id_idx, and unique indexes on phone + auth0_sub
+
+select to_regclass('public.ketsa_auth');
+-- expect: ketsa_auth  (NULL means logins/signups will 500 — re-run schema.sql)
 ```
+
+> **Local dev vs production.** `backend/.env` defaults to
+> `KETSA_DB_BACKEND=memory`, so local dev runs entirely in-process and **never
+> writes accounts to the hosted Supabase project**. If you point local dev at a
+> shared/live project (`KETSA_DB_BACKEND=supabase`), do it only after running
+> `schema.sql` above — otherwise every auth request 500s, and any test signup
+> creates a real account in that project.
 
 ---
 
