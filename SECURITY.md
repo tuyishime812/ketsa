@@ -54,6 +54,17 @@ in git **history** and remote clones. Untracking alone does not un-leak it.
    - Resend: delete the exposed key in the dashboard, create a new one.
    - Auth0: rotate the application Client Secret.
    - Set a **new, strong `KETSA_ADMIN_PASSWORD`** (do not reuse the old value).
+     Watch the shadowing gotcha: once the password has ever been changed in
+     **Settings → Security**, a PBKDF2 hash is stored in the settings row and
+     `KETSA_ADMIN_PASSWORD` is **ignored** for login (`_check_password` in
+     `backend/app/admin.py`). Editing `.env` then is a silent no-op — rotate via
+     the UI, or clear the stored hash, instead. To see which value is live:
+     ```bash
+     cd backend && python -c "import app.config as c; c.load_env_file(); \
+       import app.storage as s; print(bool(s.get_setting('admin_password')))"
+     # True  -> the stored (UI) password is authoritative: rotate there.
+     # False -> KETSA_ADMIN_PASSWORD is authoritative: rotate the env value.
+     ```
 2. **Purge the values from history** and force-push (coordinate with anyone who
    has cloned the repo — their remotes will need to re-clone).
 
