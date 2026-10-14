@@ -54,14 +54,34 @@ in git **history** and remote clones. Untracking alone does not un-leak it.
    - Resend: delete the exposed key in the dashboard, create a new one.
    - Auth0: rotate the application Client Secret.
    - Set a **new, strong `KETSA_ADMIN_PASSWORD`** (do not reuse the old value).
-2. **Purge the file from history** and force-push (coordinate with anyone who
-   has cloned the repo — their remotes will need to re-clone):
-   ```bash
-   # git-filter-repo is the supported path (pip install git-filter-repo)
-   git filter-repo --path backend/.env --invert-paths
+2. **Purge the values from history** and force-push (coordinate with anyone who
+   has cloned the repo — their remotes will need to re-clone).
+
+   > Removing `backend/.env` alone is **not** enough: the real admin password
+   > also sat in `README.md` and `.env.production.example` in older blobs. The
+   > purge must delete the file *and* blank the leaked values everywhere.
+
+   The supported path is `scripts/purge-secrets-from-history.ps1` (wraps
+   git-filter-repo — `pip install git-filter-repo`). It backs up a tag + bundle,
+   derives the value list from the leaked blob, defaults to a safe dry run, and
+   rewrites only with `-Execute`:
+
+   ```powershell
+   ./scripts/purge-secrets-from-history.ps1            # dry run + report
+   ./scripts/purge-secrets-from-history.ps1 -Execute   # rewrite (does NOT push)
+   git remote add origin https://github.com/tuyishime812/ketsa.git
    git push origin --force --all
    git push origin --force --tags
    ```
+
+   Or by hand:
+
+   ```bash
+   git filter-repo --force --invert-paths --path backend/.env \
+       --replace-text .git-secrets-to-scrub.txt
+   git push origin --force --all && git push origin --force --tags
+   ```
+
    (Alternatively use BFG Repo-Cleaner. Rotating is mandatory either way — the
    values were already fetchable.)
 3. **Audit for abuse since the leak** (commit dated 2026-10-11): review Supabase
