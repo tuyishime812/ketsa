@@ -391,11 +391,16 @@ export default function Portfolio({
                   </ul>
                 )}
               </div>
-
-              <PaymentsPanel />
             </div>
           </div>
         )}
+
+        {/* Always present, even with zero positions — a brand-new user's first
+            task is funding the wallet, and it used to be hidden behind the
+            "has open positions" branch. Account-gated inside the panel. */}
+        <div className="mt-6">
+          <PaymentsPanel />
+        </div>
       </div>
     </section>
   );

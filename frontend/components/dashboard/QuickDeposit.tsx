@@ -8,6 +8,7 @@ import {
   refreshPaymentSession,
 } from '@/lib/api';
 import type { Correspondent } from '@/lib/types';
+import AccountGate from '@/components/payments/AccountGate';
 
 const sleep = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
 
@@ -17,7 +18,7 @@ function validNumber(raw: string): boolean {
 }
 
 export default function QuickDeposit() {
-  const { wallet, refreshWallet } = useWallet();
+  const { wallet, user, refreshWallet } = useWallet();
   const [mode, setMode] = useState<'deposit' | 'withdraw'>('deposit');
   const [correspondent, setCorrespondent] = useState<Correspondent>('AIRTEL_MWI');
   const [amount, setAmount] = useState('');
@@ -25,6 +26,18 @@ export default function QuickDeposit() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Real money requires an account (server-side `require_user`). Guests hold
+  // only a play-money wallet, so show the account CTA rather than a form that
+  // can only ever fail with a 401.
+  if (!user) {
+    return (
+      <AccountGate
+        title={mode === 'deposit' ? 'Fund wallet' : 'Withdraw'}
+        description="Top up and cash out with real MWK over Airtel Money or TNM Mpamba — that needs a Ketsa account. Your play-money wallet is unaffected."
+      />
+    );
+  }
 
   async function submit() {
     if (!wallet) return;

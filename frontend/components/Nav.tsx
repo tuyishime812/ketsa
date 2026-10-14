@@ -9,6 +9,7 @@ import { fmtBalance } from '@/lib/utils';
 
 const NAV_LINKS = [
   { href: '/dashboard', label: 'Dashboard', requiresWallet: true },
+  { href: '/wallet', label: 'Wallet', requiresWallet: true },
   { href: '/markets', label: 'Markets' },
   { href: '/leaderboard', label: 'Leaderboard' },
   { href: '/portfolio', label: 'Portfolio', requiresWallet: true },

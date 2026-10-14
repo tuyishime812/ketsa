@@ -10,6 +10,7 @@ import {
 import { useWallet } from '@/components/wallet/WalletProvider';
 import type { Correspondent, Payment } from '@/lib/types';
 import { fmtBalance, timeAgo } from '@/lib/utils';
+import AccountGate from '@/components/payments/AccountGate';
 
 const sleep = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
 
@@ -20,7 +21,7 @@ function statusTone(status: Payment['status']) {
 }
 
 export default function PaymentsPanel() {
-  const { wallet, refreshWallet } = useWallet();
+  const { wallet, user, refreshWallet } = useWallet();
   const [mode, setMode] = useState<'deposit' | 'withdraw'>('deposit');
   const [correspondent, setCorrespondent] = useState<Correspondent>('AIRTEL_MWI');
   const [amount, setAmount] = useState('');
@@ -45,6 +46,18 @@ export default function PaymentsPanel() {
     void loadHistory();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [widgetId]);
+
+  // Account-gated by the server (`require_user` on every /api/payments route).
+  // A guest would only ever get a 401, so show the account CTA instead. This
+  // sits after the hooks above so the hook order stays unconditional.
+  if (!user) {
+    return (
+      <AccountGate
+        title="Payments"
+        description="Deposit and cash out with real MWK over Airtel Money or TNM Mpamba. Real-money movements need a Ketsa account — play money stays on your guest wallet."
+      />
+    );
+  }
 
   function validNumber(raw: string): boolean {
     const digits = raw.replace(/\s/g, '');
