@@ -8,6 +8,7 @@
     "dev:alt-ports": "node scripts/dev.js --api-port 8001 --web-port 3001",
     "build": "npm --prefix frontend run build",
     "start": "npm --prefix frontend run start",
-    "test:api": "python -m pytest"
+    "test:api": "python -m pytest",
+    "db:apply": "python backend/scripts/apply_schema.py"
   }
 }

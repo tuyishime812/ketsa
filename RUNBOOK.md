@@ -188,6 +188,18 @@ Supabase → SQL editor → run, **in order**, one file per query:
 1. `backend/db/schema.sql` — tables (incl. `ketsa_auth`) + RLS (required for `KETSA_DB_BACKEND=supabase`)
 2. `backend/db/realtime.sql` — optional Supabase Realtime publication (skip unless used)
 
+Or automate it (idempotent, no data touched):
+
+```bash
+# Management API (no local Postgres client needed):
+export SUPABASE_ACCESS_TOKEN=sbp_...   # Supabase -> Account -> Access Tokens
+npm run db:apply                        # or: python backend/scripts/apply_schema.py
+
+# …or via psql + the DB password:
+export KETSA_DATABASE_URL=postgresql://postgres:<pw>@db.<ref>.supabase.co:5432/postgres
+npm run db:apply
+```
+
 Both are idempotent and touch no data. Verify:
 
 ```sql
