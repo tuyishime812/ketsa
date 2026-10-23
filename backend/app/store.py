@@ -168,3 +168,17 @@ def upsert_staff(member: dict) -> None:
 
 def delete_staff(staff_id: str) -> bool:
     return get_backend().delete_staff(staff_id)
+
+
+# --- append-only audit log (audit.py) ---------------------------------------
+
+def append_audit(row: dict) -> None:
+    get_backend().append_audit(row)
+
+
+def list_audit(*, limit: int = 100, action: str | None = None) -> list[dict]:
+    return get_backend().list_audit(limit=limit, action=action)
+
+
+def count_audit() -> int:
+    return get_backend().count_audit()

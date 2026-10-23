@@ -35,7 +35,7 @@ function labelRole(r: string): string {
   return r.charAt(0).toUpperCase() + r.slice(1).replace(/[_-]+/g, ' ');
 }
 
-export default function StaffEditor({ token }: { token: string }) {
+export default function StaffEditor() {
   const [staff, setStaff] = useState<StaffMember[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
@@ -60,11 +60,11 @@ export default function StaffEditor({ token }: { token: string }) {
 
   const load = useCallback(async () => {
     try {
-      setStaff(await listStaff(token));
+      setStaff(await listStaff());
     } catch (err) {
       setError(apiError(err));
     }
-  }, [token]);
+  }, []);
 
   useEffect(() => {
     void load();
@@ -77,7 +77,7 @@ export default function StaffEditor({ token }: { token: string }) {
     let cancelled = false;
     (async () => {
       try {
-        const cfg = await getAdminConfig(token);
+        const cfg = await getAdminConfig();
         if (cancelled) return;
         const roles = cfg.staff_roles.roles;
         setRoleOptions(roles.map((r) => ({ value: r, label: labelRole(r) })));
@@ -91,7 +91,7 @@ export default function StaffEditor({ token }: { token: string }) {
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, []);
 
   // Realtime: any staff change (from this panel or another admin) re-fetches
   // the authoritative list, so the table is never stale.
@@ -106,7 +106,7 @@ export default function StaffEditor({ token }: { token: string }) {
     setWarn(null);
     setAdding(true);
     try {
-      const member = await createStaff(token, {
+      const member = await createStaff({
         name: name.trim(),
         email: email.trim(),
         phone: phone.trim() || null,
@@ -136,7 +136,7 @@ export default function StaffEditor({ token }: { token: string }) {
     }
     setUploading(true);
     try {
-      const result = await uploadStaff(token, { text });
+      const result = await uploadStaff({ text });
       setUploadResult(result);
       if (result.added || result.updated) {
         setMsg(`Upload applied: ${result.added} added, ${result.updated} updated.`);
@@ -170,7 +170,7 @@ export default function StaffEditor({ token }: { token: string }) {
     setMsg(null);
     setWarn(null);
     try {
-      await updateStaff(token, member.id, { active: !member.active });
+      await updateStaff(member.id, { active: !member.active });
       await load();
     } catch (err) {
       setError(apiError(err));
@@ -182,7 +182,7 @@ export default function StaffEditor({ token }: { token: string }) {
     setMsg(null);
     setWarn(null);
     try {
-      await deleteStaff(token, member.id);
+      await deleteStaff(member.id);
       setMsg(`Removed ${member.name}.`);
       await load();
     } catch (err) {
@@ -195,7 +195,7 @@ export default function StaffEditor({ token }: { token: string }) {
     setMsg(null);
     setWarn(null);
     try {
-      const res = await inviteStaff(token, member.id);
+      const res = await inviteStaff(member.id);
       // Honest feedback: only a really-delivered invite is a success. In log
       // mode (or with Resend unconfigured) the backend reports delivered=false,
       // so say so plainly instead of implying an email left the building.

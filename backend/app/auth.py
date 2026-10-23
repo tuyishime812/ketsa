@@ -24,7 +24,8 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
-from . import authstate, mailer, social, store
+from . import authstate, mailer, netutil, social, store
+from . import audit
 from .engine import engine
 from .models import User, Wallet
 
@@ -604,7 +605,7 @@ def forgot_password(body: ForgotPasswordRequest) -> dict:
 
 
 @router.post("/reset-password")
-def reset_password(body: ResetPasswordRequest) -> dict:
+def reset_password(body: ResetPasswordRequest, request: Request) -> dict:
     """Validate the emailed reset code and set a new password.
 
     All existing sessions are revoked. Unknown emails and invalid/expired
@@ -624,6 +625,17 @@ def reset_password(body: ResetPasswordRequest) -> dict:
     user["password"] = hash_password(body.new_password)
     store.upsert_user(user)
     revoke_user_sessions(user["id"])
+    # A recovery-code reset is a security-relevant event (account takeover
+    # signal if unexpected); record it against the account, never the password.
+    audit.record(
+        audit.Actions.USER_PASSWORD_CHANGED,
+        actor_type="user",
+        actor_id=str(user["id"]),
+        ip=netutil.client_ip(request),
+        target_type="user",
+        target_id=str(user["id"]),
+        metadata={"via": "reset_code"},
+    )
     return {"ok": True}
 
 
@@ -680,7 +692,7 @@ def request_login_code(body: LoginCodeRequest, request: Request) -> dict:
     The 429 below is keyed on the *client IP*, not the account, so it leaks
     nothing about the address being mailed.
     """
-    ip = request.client.host if request.client else "unknown"
+    ip = netutil.client_ip(request)
     now = time.time()
     window = _code_request_window()
     authstate.sweep(now)
@@ -749,7 +761,9 @@ def logout(authorization: str | None = Header(default=None)) -> dict[str, bool]:
 
 @router.post("/password", response_model=AuthResponse)
 def change_password(
-    body: ChangePasswordRequest, user: dict = Depends(require_user)
+    body: ChangePasswordRequest,
+    request: Request,
+    user: dict = Depends(require_user),
 ) -> AuthResponse:
     """Change the authenticated account's password (all other sessions revoked)."""
     if not _verify_password(body.current, user.get("password", "")):
@@ -759,6 +773,15 @@ def change_password(
     user["password"] = hash_password(body.new)
     store.upsert_user(user)
     revoke_user_sessions(user["id"])
+    audit.record(
+        audit.Actions.USER_PASSWORD_CHANGED,
+        actor_type="user",
+        actor_id=str(user["id"]),
+        ip=netutil.client_ip(request),
+        target_type="user",
+        target_id=str(user["id"]),
+        metadata={"via": "authenticated_change"},
+    )
     token = _issue_session(user["id"])  # keep the current session on a fresh token
     return AuthResponse(token=token, user=_user_public(user), wallet=_wallet_for_user(user))
 

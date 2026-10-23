@@ -64,13 +64,14 @@ The backend's data layer (`app/storage.py`) is pluggable and selected with
   setup, ideal for local dev and previews; edits are lost on restart.
 - **`supabase` (production)** — persists every market, watch/ticker row,
   dashboard series, stats, proof, the editable site settings, **wallet
-  balances + payment ledger**, **user accounts**, and the **per-wallet
-  notification feed** in Supabase Postgres (via the `supabase` Python
-  SDK / PostgREST), so admin edits survive restarts and redeploys. Requires a
-  Supabase project: set `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` and run
-  `backend/db/schema.sql` once in the SQL editor.
+  balances + payment ledger**, **user accounts**, the **per-wallet
+  notification feed**, and the **append-only audit log** in Supabase Postgres
+  (via the `supabase` Python SDK / PostgREST), so admin edits survive restarts
+  and redeploys. Requires a Supabase project: set `SUPABASE_URL` +
+  `SUPABASE_SERVICE_ROLE_KEY` and run `backend/db/schema.sql` once in the SQL
+  editor.
 
-The schema enables **Row Level Security** on all five tables, so the public
+The schema enables **Row Level Security** on every table, so the public
 anon/publishable key can read and write nothing while the backend's
 service-role key (which bypasses RLS) keeps full access.
 
@@ -293,7 +294,7 @@ The `/api/*` HTTP calls go through the frontend's runtime proxy regardless.
 # Backend
 cd backend
 .venv\Scripts\python.exe -m pytest
-# 232 tests: endpoints, models/seed consistency, 404/405, CORS,
+# 307 tests: endpoints, models/seed consistency, 404/405, CORS,
 # security headers, OpenAPI gating, rate limiting, admin auth + CRUD + user
 # management, admin login brute-force throttling, the matching engine
 # (wallets, books, execution, WS feed), account auth (register/login,
@@ -307,9 +308,13 @@ cd backend
 # signup vs. no-enumeration on account-discovery endpoints), passwordless
 # email-code sign-in (single-use, account-bound, expiry, per-IP relay
 # throttle), admin broadcast (admin-only, one job at a time, dedupe + cap,
-# HTML-escaped copy, CRLF-safe subject, progress), and market resolution
+# HTML-escaped copy, CRLF-safe subject, progress), market resolution
 # (settlement/payout, trading locks, admin endpoint, wallet-scoped WS
-# notification routing).
+# notification routing), trusted-proxy client-IP resolution (signed
+# proxy header, CIDR chain, spoof/malformed fallbacks), and the append-only
+# audit log (action vocabulary, actor/IP/target capture, no secrets, the
+# admin-gated read endpoint, survival across a content reset, and the
+# bounded in-memory backend).
 
 # Frontend
 cd frontend
@@ -338,6 +343,8 @@ and wired through `docker-compose.yml`.
 | `KETSA_ALLOWED_ORIGINS`      | backend   | Comma-separated CORS origin allowlist                | `http://localhost:3000,http://127.0.0.1:3000` |
 | `KETSA_EXPOSE_DOCS`          | backend   | `1` to enable `/docs` `/redoc` `/openapi.json`       | `0` (off) |
 | `KETSA_RATE_LIMIT_PER_MIN`   | backend   | Requests/IP/60s fixed window (`0` disables)          | `120` |
+| `KETSA_PROXY_SECRET`         | both      | Shared secret used by the frontend proxy to HMAC-sign the real client IP (`X-Ketsa-Client-*`), so rate limits and the admin lockout stay per-visitor behind the proxy. Set the **same** value on both services | — (fallback: trusted proxy CIDRs / direct peer) |
+| `KETSA_TRUSTED_PROXIES`      | backend   | Comma-separated IPs/CIDRs whose `X-Forwarded-For` is trusted. Only used when `KETSA_PROXY_SECRET` is absent. Never `0.0.0.0/0` | — (direct peer) |
 | `KETSA_WRITE_RATE_LIMIT_PER_MIN` | backend | Stricter per-IP budget for write endpoints (wallet mints, trades, payments) | `30` |
 | `KETSA_WS_MAX_CONNECTIONS`   | backend   | Concurrent WebSocket client cap (memory guard)       | `2000` |
 | `KETSA_MAX_DEPOSIT_MWK`      | backend   | Default max MWK per deposit transaction (admin Settings → Payments can override) | `1000000` |
@@ -349,7 +356,7 @@ and wired through `docker-compose.yml`.
 | `NEXT_PUBLIC_KETSA_BACKEND_URL` | frontend | Public backend origin embedded in the client bundle (WebSocket feed) | `http://127.0.0.1:8000` |
 | `KETSA_API_PORT`             | dev only  | Port `npm run dev` gives the FastAPI backend; also pins the backend's `KETSA_PUBLIC_BASE_URL` | `8000` |
 | `KETSA_WEB_PORT`             | dev only  | Port `npm run dev` gives Next.js; also pins the backend's `KETSA_FRONTEND_URL` | `3000` |
-| `KETSA_CSP`                  | frontend  | Optional override for the emitted CSP header         | built-in policy |
+| `KETSA_CSP`                  | frontend  | Optional override for the nonce-based CSP emitted by `middleware.ts`. Use `{nonce}` to keep the per-request script nonce | built-in (nonce + `strict-dynamic`) |
 | `KETSA_ADMIN_PASSWORD`       | backend   | Password for the `/admin` panel (the only auth key)  | `ketsa-admin` |
 | `KETSA_DB_BACKEND`           | backend   | Storage backend: `memory` (default) or `supabase`   | `memory` |
 | `SUPABASE_URL`               | backend   | Supabase project URL (Supabase only)                | — |
@@ -404,8 +411,18 @@ It is read from the environment (does **not** fall back to a committed secret),
 defaults to `ketsa-admin` for local dev, and **must** be set to a strong,
 unique value in production. If set from the `/api/admin/password` endpoint the
 new password is hashed (PBKDF2-HMAC-SHA256) and stored in the backend, taking
-precedence over the environment value. Tokens are held in memory (no
-persistence), so a backend restart revokes all sessions.
+precedence over the environment value. Token **digests** live in the shared
+auth store (memory in dev, Supabase in production), so a restart does not log
+the admin out; every session can be revoked from the UI.
+
+The browser never receives that bearer token in JavaScript. The runtime `/api`
+proxy (`frontend/app/api/[...path]/route.ts`) exchanges it for an
+`HttpOnly; SameSite=Strict` cookie scoped to `/api/admin`, strips it from the
+login response body, and re-attaches it as `Authorization` on subsequent admin
+calls. Cookie-authenticated writes are also Origin / `Sec-Fetch-Site` checked,
+and the cookie is cleared on logout, 401 or 403. An XSS bug can still act
+inside the live session, but it can no longer read or exfiltrate the admin
+credential.
 
 `POST /api/admin/login` is **brute-force throttled per client IP**
 (`KETSA_ADMIN_MAX_FAILURES`, default 10 failures →
@@ -415,6 +432,16 @@ accounts, reset any user's password, and resolve markets — which settles real
 money — so unlimited guessing is not an acceptable posture. PBKDF2 at 100k
 iterations makes each guess expensive but does not bound how many are
 attempted.
+
+**Audit log.** Every privileged and money-moving action is written to an
+**append-only** log (see `SECURITY.md` → "Privileged-action audit log"). Admin
+login (ok/failed/locked-out), logout, password change, content reset, config
+changes, market create/update/**resolve** (with payout totals), user
+password-reset/delete, staff operations, broadcast starts and user-facing
+password changes each record an actor id, client IP, target and a small
+metadata blob — never a password, OTP code or token. The log is never cleared
+by a content reset, and `GET /api/admin/audit` (admin-gated) reads it
+newest-first. In Supabase the `ketsa_audit` table is insert/read only under RLS.
 
 **Single-replica requirement.** Run **exactly one** backend process while real
 money is in play. The engine's order books and trade tape live in memory, and
@@ -429,15 +456,31 @@ behind a single writer, or move the engine's authoritative state (and the
 lock) into Postgres with row-level locking first.
 
 **HTTP security headers (both services).**
-- `Content-Security-Policy`: `default-src 'self'` plus the allowances Next.js
-  needs (`script-src 'unsafe-inline'` for RSC bootstrap, `style-src
-  'unsafe-inline'` for React inline styles). `frame-ancestors 'none'`,
-  `object-src 'none'`.
+- `Content-Security-Policy`: emitted per request by `frontend/middleware.ts`
+  with a fresh 128-bit nonce. `script-src 'self' 'nonce-…' 'strict-dynamic'`
+  (plus `'unsafe-eval'` in dev only) — **no `'unsafe-inline'` for scripts**.
+  `style-src 'unsafe-inline'` remains because React uses inline `style`
+  attributes. `frame-ancestors 'none'`, `object-src 'none'`. `KETSA_CSP` can
+  override the policy; include `{nonce}` to keep the nonce.
 - `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
   `Cross-Origin-Opener-Policy: same-origin`,
   `Cross-Origin-Resource-Policy: same-origin`,
   `X-Permitted-Cross-Domain-Policies: none`, `Referrer-Policy`,
   `Permissions-Policy`.
+
+**Client-IP trust (rate limits + admin lockout).** The security controls key on
+the caller's IP, but browser traffic reaches the backend through the Next.js
+runtime proxy. Reading the transport peer there would collapse every visitor
+into one bucket: one caller could exhaust the shared write budget, and anyone
+could trip the admin lockout and deny the site owner access to `/admin`. Set
+the **same** `KETSA_PROXY_SECRET` on the frontend and backend; the proxy then
+HMAC-signs the real client IP into `X-Ketsa-Client-*` (with a 5-minute
+timestamp window) and the backend verifies it before using it. Alternative:
+`KETSA_TRUSTED_PROXIES` lists IPs/CIDRs whose `X-Forwarded-For` is trusted
+(rightmost untrusted hop wins, so a caller-prepended spoof is discarded). With
+neither configured, the direct peer is used — the safe default for a locally
+exposed backend. `backend/app/netutil.py` holds the resolver and
+`backend/tests/test_netutil.py` pins the contract.
 
 **OpenAPI docs are off by default** (`KETSA_EXPOSE_DOCS=0`) to avoid leaking
 the API schema publicly. Turn them on only for debugging.

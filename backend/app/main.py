@@ -29,7 +29,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from . import authstate
+from . import audit
 from . import mailer
+from . import netutil
 from . import payments as wande
 from . import siteconfig
 from . import staff
@@ -389,7 +391,7 @@ def create_app() -> "FastAPI":
 
     @app.middleware("http")
     async def security_headers_and_ratelimit(request: Request, call_next):
-        client = request.client.host if request.client else "unknown"
+        client = netutil.client_ip(request)
         if not limiter.allow(client):
             response = JSONResponse(
                 status_code=429,
@@ -501,7 +503,7 @@ def create_app() -> "FastAPI":
             raise HTTPException(status_code=404, detail="Wallet not found")
 
     def _require_write_capacity(request: Request) -> None:
-        client = request.client.host if request.client else "unknown"
+        client = netutil.client_ip(request)
         if not write_limiter.allow(client):
             raise HTTPException(status_code=429, detail="Too many requests. Please slow down.")
 
@@ -812,10 +814,12 @@ def create_app() -> "FastAPI":
     @app.post(
         "/api/admin/markets/{market_id}/resolve",
         response_model=MessageResponse,
-        dependencies=[Depends(require_admin)],
     )
     async def admin_markets_resolve(
-        market_id: str, body: ResolveMarketRequest
+        market_id: str,
+        body: ResolveMarketRequest,
+        request: Request,
+        actor: str = Depends(require_admin),
     ) -> MessageResponse:
         cfg = siteconfig.resolution()
         if not cfg["resolution_enabled"]:
@@ -833,6 +837,22 @@ def create_app() -> "FastAPI":
             except ValueError as e:
                 raise HTTPException(status_code=400, detail=str(e))
         await _pump_events(manager)
+        # Settlement pays out real money: record exactly who resolved which
+        # market, to what outcome, and how much was paid.
+        audit.record(
+            audit.Actions.MARKET_RESOLVED,
+            actor_type="admin",
+            actor_id=actor,
+            ip=netutil.client_ip(request),
+            target_type="market",
+            target_id=market_id,
+            metadata={
+                "outcome": body.outcome,
+                "resolved_price": summary["resolved_price"],
+                "wallets_settled": summary["wallets_settled"],
+                "total_payout": summary["total_payout"],
+            },
+        )
         detail = (
             f"Resolved {market_id} → {body.outcome.upper()} at "
             f"{summary['resolved_price']}¢ · {summary['wallets_settled']} wallets"

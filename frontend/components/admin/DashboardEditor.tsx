@@ -20,12 +20,10 @@ function parsePoints(text: string): number[] {
 }
 
 export default function DashboardEditor({
-  token,
   data,
   stats,
   proof,
 }: {
-  token: string;
   data: DashboardData | null;
   stats: PortfolioStats | null;
   proof: Proof | null;
@@ -40,7 +38,7 @@ export default function DashboardEditor({
     if (!dashboard) return;
     setError(null);
     try {
-      await adminPut(token, '/dashboard', dashboard);
+      await adminPut('/dashboard', dashboard);
       setChartDirty(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed');
@@ -51,7 +49,7 @@ export default function DashboardEditor({
     if (!statsDraft) return;
     setError(null);
     try {
-      await adminPut(token, '/stats', statsDraft);
+      await adminPut('/stats', statsDraft);
       setStatsDirty(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed');

@@ -2,28 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { adminLogin } from '@/lib/api';
-
-const TOKEN_KEY = 'ketsa_admin_token';
-
-function readStoredToken(): string | null {
-  if (typeof window === 'undefined') return null;
-  return window.localStorage.getItem(TOKEN_KEY);
-}
-
-export function setStoredToken(token: string) {
-  if (typeof window === 'undefined') return;
-  window.localStorage.setItem(TOKEN_KEY, token);
-}
-
-export function clearStoredToken() {
-  if (typeof window === 'undefined') return;
-  window.localStorage.removeItem(TOKEN_KEY);
-}
-
-export function getStoredToken(): string | null {
-  return readStoredToken();
-}
+import { adminLogin, adminMe } from '@/lib/api';
 
 export default function AdminLogin() {
   const router = useRouter();
@@ -31,11 +10,21 @@ export default function AdminLogin() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // If already logged in, go straight to the dashboard.
+  // If an HttpOnly admin session already exists, go straight to the dashboard.
+  // The cookie is invisible to JavaScript by design, so ask the API instead of
+  // reading a token from localStorage (there no longer is one).
   useEffect(() => {
-    if (readStoredToken()) {
-      router.replace('/admin/dashboard');
-    }
+    let cancelled = false;
+    adminMe()
+      .then(() => {
+        if (!cancelled) router.replace('/admin/dashboard');
+      })
+      .catch(() => {
+        /* no session - stay on the login form */
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [router]);
 
   async function onSubmit(e: React.FormEvent) {
@@ -43,8 +32,7 @@ export default function AdminLogin() {
     setError(null);
     setLoading(true);
     try {
-      const token = await adminLogin(password);
-      setStoredToken(token);
+      await adminLogin(password);
       router.replace('/admin/dashboard');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');

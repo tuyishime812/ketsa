@@ -28,6 +28,55 @@ include live credentials or PII in the report. We aim to acknowledge within
 
 ---
 
+## Session, proxy and XSS controls
+
+- **Admin session is not readable by JavaScript.** The runtime `/api` proxy
+  exchanges the admin bearer token for an `HttpOnly; SameSite=Strict` cookie
+  scoped to `/api/admin`, strips the token from the login response, and
+  re-attaches it server-side. Cookie-authenticated writes also require a
+  same-origin `Origin` / `Sec-Fetch-Site`; logout, 401 and 403 clear the cookie.
+  There is no admin token in `localStorage`.
+- **CSP uses a per-request nonce.** `frontend/middleware.ts` emits
+  `script-src 'self' 'nonce-…' 'strict-dynamic'` (no `'unsafe-inline'` for
+  scripts; `'unsafe-eval'` only in dev). `KETSA_CSP` can override, and
+  `{nonce}` is substituted when present.
+- **Per-IP controls survive the proxy.** `backend/app/netutil.py` resolves the
+  caller from either the HMAC-signed `X-Ketsa-Client-*` headers (set by the
+  frontend proxy using the shared `KETSA_PROXY_SECRET`) or trusted-proxy CIDRs
+  (`KETSA_TRUSTED_PROXIES`); otherwise it uses the direct peer. Never trust a
+  raw `X-Forwarded-For` from an unconfigured peer.
+- Keep `KETSA_PROXY_SECRET` out of git and set the same value on both services.
+  Rotating it only rejects in-flight proxy requests; no data changes.
+
+---
+
+## Privileged-action audit log
+
+`backend/app/audit.py` records every privileged or money-moving action to an
+**append-only** log; the table is `ketsa_audit` (Supabase) with a bounded
+in-memory equivalent for dev.
+
+- **What is recorded.** Admin login ok / failed / locked-out, logout, password
+  change, content reset, config changes, market create/update/**resolve**
+  (with outcome and payout totals), user password reset/delete, staff
+  create/update/delete/upload/invite, broadcast start, and user-facing password
+  changes. The action vocabulary lives in `audit.Actions` (stable strings).
+- **Actor identity.** Recorded as a stable id — a prefix of the admin session
+  digest, or the acting user id — never the token or password. The client IP
+  comes from `netutil.client_ip` (proxy-aware, see above).
+- **No secrets.** Passwords, OTP codes and bearer tokens are never written.
+  Metadata holds only identifiers, field *names*, outcomes and totals.
+- **Best-effort.** A failed write is logged and swallowed: auditing never
+  breaks, or rolls back, the action it describes. Rows are written *after* the
+  action succeeds.
+- **Insert/read only.** No application path updates or deletes a row; a content
+  reset never clears it. In Supabase, RLS with no policies denies the public
+  anon key all access — only the backend's service role may read or write.
+- **Read endpoint.** `GET /api/admin/audit?limit=&action=` (admin-gated) returns
+  newest-first rows plus a total count. The page size is capped at 500.
+
+---
+
 ## ACTIVE INCIDENT — live credentials committed in `backend/.env`
 
 Commit **`de191c6`** added `backend/.env` to version control and it was pushed

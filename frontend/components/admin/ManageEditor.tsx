@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { adminPost } from '@/lib/api';
 import { Card, DangerButton } from './ui';
 
-export default function ManageEditor({ token }: { token: string }) {
+export default function ManageEditor() {
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -12,7 +12,7 @@ export default function ManageEditor({ token }: { token: string }) {
     setError(null);
     setMsg(null);
     try {
-      await adminPost(token, '/reset', {});
+      await adminPost('/reset', {});
       setMsg('Content reset to the backend defaults.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Reset failed');

@@ -119,6 +119,8 @@ host's env UI. Full descriptions are in `.env.production.example`.
 | `KETSA_ALLOWED_ORIGINS` | yes | `$FRONTEND_ORIGIN` (comma-separate extras; no trailing slash) |
 | `KETSA_ADMIN_PASSWORD` | **yes** | strong, unique — the only key to `/admin` |
 | `KETSA_EXPOSE_DOCS` | yes | `0` |
+| `KETSA_PROXY_SECRET` | **yes (with frontend)** | same random value as the frontend's `KETSA_PROXY_SECRET`; lets the proxy sign the real client IP so per-IP limits/lockout work behind it |
+| `KETSA_TRUSTED_PROXIES` | optional | only if a known reverse proxy hits the API directly (alternative to the secret); never `0.0.0.0/0` |
 | `KETSA_DB_BACKEND` | **yes for persistence** | `supabase` |
 | `SUPABASE_URL` | if supabase | `https://<ref>.supabase.co` |
 | `SUPABASE_SERVICE_ROLE_KEY` | if supabase | service-role secret (secret manager only) |
@@ -158,6 +160,7 @@ redeploy to take effect.
 |-----|-------|
 | `KETSA_BACKEND_URL` | `$BACKEND_ORIGIN` (runtime; server components + the `/api` proxy) |
 | `NEXT_PUBLIC_KETSA_BACKEND_URL` | `$BACKEND_ORIGIN` (build-time; embedded for the WebSocket feed) |
+| `KETSA_PROXY_SECRET` | same random value as the backend's `KETSA_PROXY_SECRET`; signs the real client IP for the backend's per-IP limits and admin lockout |
 | `KETSA_SITE_URL` | `$FRONTEND_ORIGIN` (build-time; `robots.txt` / `sitemap.xml` / Open Graph) |
 | `KETSA_CSP` | optional override |
 
@@ -300,8 +303,11 @@ so they are always reachable.
 | 7 | Social login | "Continue with Google" (if Auth0 set) | returns to `$FRONTEND_ORIGIN/auth/callback`, logged in |
 | 8 | Payments | `/portfolio` → deposit (if wandePay set) | no error; `KETSA_WANDE_TOKEN` set in host, **not** in repo |
 | 9 | WS live feed | open a market page, watch the order book | ticks update without refresh |
-| 10 | Security headers | devtools → Network → document response | `Content-Security-Policy`, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff` |
+| 10 | Security headers | devtools → Network → document response | `Content-Security-Policy` contains `'nonce-` and **not** `script-src 'unsafe-inline'`; `X-Frame-Options: DENY`; `X-Content-Type-Options: nosniff` |
 | 11 | Proxy path for auth | `curl -si -X POST "$FRONTEND_ORIGIN/api/auth/social/login" \| head -1` | not `404` (route exists; `503` if Auth0 unset) |
+| 12 | Admin session is HttpOnly | log in at `/admin`, inspect devtools → Application → Cookies | `ketsa_admin` is `HttpOnly`, `SameSite=Strict`, `Secure`; `localStorage` contains **no** admin token |
+| 13 | Admin CSRF guard | `curl -si -X POST "$FRONTEND_ORIGIN/api/admin/logout" -H "Origin: https://evil.example" \| head -1` | `403` (cross-origin rejected) |
+| 14 | Audit log records actions | log in at `/admin`, then `curl -s "$BACKEND_ORIGIN/api/admin/audit?action=admin.login.ok" -H "Authorization: Bearer $TOKEN"` | JSON with a row whose `actor_id` is set and no secret values |
 
 ---
 

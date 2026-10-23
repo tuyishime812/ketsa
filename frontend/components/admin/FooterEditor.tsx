@@ -24,10 +24,8 @@ const SECTIONS: { key: SectionKey; label: string }[] = [
 const EMPTY_SECTION: SectionCopy = { kicker: '', title: '', description: '' };
 
 export default function FooterEditor({
-  token,
   settings,
 }: {
-  token: string;
   settings: SiteSettings;
 }) {
   const [section, setSection] = useState<SectionKey>('markets_section');
@@ -48,7 +46,7 @@ export default function FooterEditor({
   async function save(key: SectionKey, payload: unknown) {
     setError(null);
     try {
-      await adminPut(token, '/settings', { [key]: payload });
+      await adminPut('/settings', { [key]: payload });
       setDirty((m) => ({ ...m, [key]: false }));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed');

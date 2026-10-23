@@ -223,6 +223,10 @@ class StoreBackend(Protocol):
     def get_staff(self, staff_id: str) -> dict | None: ...
     def upsert_staff(self, member: dict) -> None: ...
     def delete_staff(self, staff_id: str) -> bool: ...
+    # Append-only audit log (audit.py). Insert + read only, newest first.
+    def append_audit(self, row: dict) -> None: ...
+    def list_audit(self, *, limit: int = 100, action: str | None = None) -> list[dict]: ...
+    def count_audit(self) -> int: ...
     # Ephemeral auth state (sessions/OTPs/tickets/throttles). See authstate.py.
     def auth_put(
         self,
@@ -284,6 +288,9 @@ class MemoryBackend:
         # Ephemeral auth state. Deliberately NOT cleared by force_reseed():
         # an admin content reset must not log every user out.
         self._auth: dict[str, dict] = {}
+        # Append-only audit log. Deliberately NOT cleared by force_reseed():
+        # an admin "reset content" must never erase the record of who did what.
+        self._audit: list[dict] = []
         self._initialized = False
 
     def init(self) -> None:
@@ -626,9 +633,24 @@ class MemoryBackend:
     def auth_clear(self) -> None:
         self._auth.clear()
 
+    # --- audit log (append-only) ---------------------------------------------
+    def append_audit(self, row: dict) -> None:
+        self._audit.append(copy.deepcopy(row))
+        # Bounded: the in-memory store is a dev/preview convenience, not a
+        # durable archive. Keep the newest N so a long-lived process cannot
+        # grow without limit.
+        if len(self._audit) > MEMORY_MAX_AUDIT_ROWS:
+            del self._audit[:-MEMORY_MAX_AUDIT_ROWS]
 
-# ---------------------------------------------------------------------------
-# Supabase backend (production) — Postgres via Supabase REST (PostgREST)
+    def list_audit(self, *, limit: int = 100, action: str | None = None) -> list[dict]:
+        rows = self._audit
+        if action:
+            rows = [r for r in rows if r.get("action") == action]
+        ordered = sorted(rows, key=lambda r: (r.get("ts", 0), r.get("id", "")), reverse=True)
+        return [copy.deepcopy(r) for r in ordered[: max(0, int(limit))]]
+
+    def count_audit(self) -> int:
+        return len(self._audit)
 # ---------------------------------------------------------------------------
 
 KV_TABLE = "ketsa_kv"
@@ -638,6 +660,12 @@ USERS_TABLE = "ketsa_users"
 NOTIFICATIONS_TABLE = "ketsa_notifications"
 STAFF_TABLE = "ketsa_staff"
 AUTH_TABLE = "ketsa_auth"
+AUDIT_TABLE = "ketsa_audit"
+
+# How many audit rows the in-process (dev/preview) backend retains. The memory
+# backend is a convenience store, not a durable archive; Supabase keeps every
+# row. See audit.py.
+MEMORY_MAX_AUDIT_ROWS = 1000
 
 
 def _supabase_import():
@@ -1159,6 +1187,36 @@ class SupabaseBackend:
 
     def auth_clear(self) -> None:
         self.client.table(AUTH_TABLE).delete().gte("issued", -1).execute()
+
+    # --- audit log (append-only) ---------------------------------------------
+    # Only insert + read live here. There is intentionally no update or delete
+    # path: the table is the system of record for privileged actions.
+    def append_audit(self, row: dict) -> None:
+        # The table's only writable column is `value` (JSONB), matching the
+        # other JSONB-backed tables, plus a `ts` column for ordering/retention.
+        self.client.table(AUDIT_TABLE).insert(
+            {
+                "id": row["id"],
+                "ts": float(row.get("ts") or 0.0),
+                "value": _as_json(row),
+            }
+        ).execute()
+
+    def list_audit(self, *, limit: int = 100, action: str | None = None) -> list[dict]:
+        query = self.client.table(AUDIT_TABLE).select("*").order("ts", desc=True)
+        if action:
+            query = query.eq("value->>action", action)
+        data = query.limit(max(0, int(limit))).execute().data or []
+        return [_as_json(r.get("value")) for r in data if r.get("value")]
+
+    def count_audit(self) -> int:
+        res = (
+            self.client.table(AUDIT_TABLE)
+            .select("id", count="exact")
+            .limit(1)
+            .execute()
+        )
+        return int(res.count or 0)
 
 
 # ---------------------------------------------------------------------------

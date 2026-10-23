@@ -13,11 +13,9 @@ import {
 } from './ui';
 
 export default function HeroEditor({
-  token,
   proof,
   settings,
 }: {
-  token: string;
   proof: Proof | null;
   settings: SiteSettings;
 }) {
@@ -43,7 +41,7 @@ export default function HeroEditor({
   async function saveHero() {
     setError(null);
     try {
-      await adminPut(token, '/settings/hero', hero);
+      await adminPut('/settings/hero', hero);
       setChanged(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed');
@@ -54,7 +52,7 @@ export default function HeroEditor({
     if (!proofDraft) return;
     setError(null);
     try {
-      await adminPut(token, '/proof', proofDraft);
+      await adminPut('/proof', proofDraft);
       setChanged(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed');

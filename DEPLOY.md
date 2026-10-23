@@ -40,6 +40,8 @@ Pick one host (Railway, Render, or Fly). All run the same FastAPI app.
    | `KETSA_ALLOWED_ORIGINS` | your real frontend origin → set in Step 2, e.g. `https://ketsa.vercel.app` (comma-separated for extras) |
    | `KETSA_EXPOSE_DOCS` | `0` (keep the public API schema hidden) |
    | `KETSA_RATE_LIMIT_PER_MIN` | `120` (or `0` if the provider's proxy handles throttling) |
+| `KETSA_PROXY_SECRET` | **recommended** — same random value as the frontend; the runtime proxy HMAC-signs the real client IP so these per-IP limits and the admin lockout see the visitor, not the proxy. Generate: `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
+| `KETSA_TRUSTED_PROXIES` | optional, only for a known reverse proxy directly in front of the API (alternative to the secret); never `0.0.0.0/0` |
    | `KETSA_ADMIN_PASSWORD` | **required** — a strong, unique password for the `/admin` panel (see Step 2b) |
    | `KETSA_DB_BACKEND` | `supabase` if you want admin edits to persist across redeploys (and — required for payments — wallet balances + ledger). Defaults to `memory`, which resets on every restart. |
    | `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` | (**Supabase only** — see Step 2b) the project URL and secret service-role key |
@@ -67,7 +69,11 @@ Pick one host (Railway, Render, or Fly). All run the same FastAPI app.
    - `KETSA_SITE_URL` → `https://<your-app>.vercel.app` or your custom domain
      (**build-time**; used by `robots.txt`, `sitemap.xml`, Open Graph — set it
      before the final build so the metadata uses the real domain).
-   - Optional: `KETSA_CSP` to override the Content-Security-Policy.
+   - `KETSA_PROXY_SECRET` → the **same** random value you set on the backend
+     (runtime; the `/api` proxy uses it to sign the real client IP for the
+     backend's rate limits and admin lockout).
+   - Optional: `KETSA_CSP` to override the nonce-based Content-Security-Policy
+     emitted by `frontend/middleware.ts` (include `{nonce}` to keep the nonce).
 5. Deploy → open `https://<your-app>.vercel.app`.
 
 **Verify the data is live:**
@@ -101,7 +107,8 @@ protected `/api/admin/*` through the same-origin `/api` path.
    - Create a free Supabase project (supabase.com), then in the **SQL editor**
      run the checked-in schema **once**: `backend/db/schema.sql`. It creates the
      tables (`ketsa_kv`, `ketsa_wallets`, `ketsa_payments`, `ketsa_users`,
-     `ketsa_notifications`, `ketsa_auth`, `ketsa_staff`) and enables Row Level
+     `ketsa_notifications`, `ketsa_auth`, `ketsa_staff`, `ketsa_audit`) and
+     enables Row Level
      Security on all of them, so
      the public anon/publishable key can read and write nothing while the
      service role keeps full access. It is idempotent and never touches existing

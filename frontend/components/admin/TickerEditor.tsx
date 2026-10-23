@@ -14,10 +14,8 @@ import {
 type Row = TickerItem & { key: number };
 
 export default function TickerEditor({
-  token,
   items,
 }: {
-  token: string;
   items: TickerItem[];
 }) {
   const [rows, setRows] = useState<Row[]>(items.map((it, i) => ({ ...it, key: i })));
@@ -58,7 +56,7 @@ export default function TickerEditor({
     setError(null);
     const payload = rows.map(({ t, v, d }) => ({ t, v, d }));
     try {
-      await adminPut(token, '/ticker', payload);
+      await adminPut('/ticker', payload);
       setChanged(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed');

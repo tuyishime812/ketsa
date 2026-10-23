@@ -25,6 +25,14 @@ services:
       - KETSA_EXPOSE_DOCS=0
       - KETSA_RATE_LIMIT_PER_MIN=120
       - KETSA_ADMIN_PASSWORD=ketsa-admin
+      # Shared with `web` below. Lets the frontend proxy tell the API the real
+      # caller IP (HMAC-signed) instead of the proxy's own address, so the
+      # rate limiter and admin lockout stay per-visitor. Leave empty to disable
+      # signing (backend then uses its direct peer / trusted-proxy CIDRs).
+      - KETSA_PROXY_SECRET=${KETSA_PROXY_SECRET:-}
+      # Optional comma-separated IPs/CIDRs of proxies whose X-Forwarded-For is
+      # trusted. Not needed when KETSA_PROXY_SECRET is set.
+      - KETSA_TRUSTED_PROXIES=${KETSA_TRUSTED_PROXIES:-}
     ports:
       - "8000:8000"
     restart: unless-stopped
@@ -36,6 +44,10 @@ services:
     environment:
       # Next.js server fetches data from the api service over the compose network.
       - KETSA_BACKEND_URL=http://api:8000
+      # Must match the api service's value. Signs the real client IP so the
+      # backend's per-IP limits and admin lockout see the visitor, not this
+      # container.
+      - KETSA_PROXY_SECRET=${KETSA_PROXY_SECRET:-}
     depends_on:
       - api
     ports:

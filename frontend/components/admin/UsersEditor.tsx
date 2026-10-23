@@ -16,7 +16,7 @@ function fmtDate(ts?: number | null): string {
   });
 }
 
-export default function UsersEditor({ token }: { token: string }) {
+export default function UsersEditor() {
   const [users, setUsers] = useState<AdminUserView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
@@ -28,12 +28,12 @@ export default function UsersEditor({ token }: { token: string }) {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const rows = await adminGet<AdminUserView[]>(token, '/users');
+      const rows = await adminGet<AdminUserView[]>('/users');
       setUsers(rows);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load users');
     }
-  }, [token]);
+  }, []);
 
   useEffect(() => {
     void load();
@@ -49,7 +49,7 @@ export default function UsersEditor({ token }: { token: string }) {
       return;
     }
     try {
-      await adminPost(token, '/users/reset-password', {
+      await adminPost('/users/reset-password', {
         identifier,
         new_password: newPassword,
       });
@@ -63,7 +63,7 @@ export default function UsersEditor({ token }: { token: string }) {
     setError(null);
     setMsg(null);
     try {
-      await adminDelete(token, `/users/${encodeURIComponent(id)}`);
+      await adminDelete(`/users/${encodeURIComponent(id)}`);
       setUsers((prev) => (prev ?? []).filter((u) => u.id !== id));
       setMsg(`Deleted account ${id}.`);
     } catch (err) {

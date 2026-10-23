@@ -68,10 +68,8 @@ function emptyDraft(): Draft {
 }
 
 export default function MarketsEditor({
-  token,
   markets,
 }: {
-  token: string;
   markets: Market[];
 }) {
   const [list, setList] = useState<Market[]>(markets);
@@ -122,7 +120,7 @@ export default function MarketsEditor({
     };
 
     try {
-      await adminPut(token, '/markets', payload);
+      await adminPut('/markets', payload);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed');
       return;
@@ -139,7 +137,7 @@ export default function MarketsEditor({
 
   async function removeMarket(id: string) {
     try {
-      await adminDelete(token, `/markets/${encodeURIComponent(id)}`);
+      await adminDelete(`/markets/${encodeURIComponent(id)}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Delete failed');
       return;
@@ -151,7 +149,6 @@ export default function MarketsEditor({
     setError(null);
     try {
       await adminPost(
-        token,
         `/markets/${encodeURIComponent(m.id)}/resolve`,
         { outcome },
       );

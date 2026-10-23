@@ -2,8 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { adminGet, adminPost } from '@/lib/api';
-import { getStoredToken, clearStoredToken } from '../login-client';
+import { adminGet, adminLogout, AdminApiError } from '@/lib/api';
 import type {
   HomeData,
   PortfolioStats,
@@ -51,7 +50,7 @@ const TABS: { key: TabKey; label: string }[] = [
 
 export default function AdminDashboard() {
   const router = useRouter();
-  const [token, setToken] = useState<string | null>(null);
+  const [ready, setReady] = useState(false);
   const [tab, setTab] = useState<TabKey>('markets');
 
   // Public data (read via same-origin /api proxy, no auth needed).
@@ -66,27 +65,27 @@ export default function AdminDashboard() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const stored = getStoredToken();
-    if (!stored) {
-      router.replace('/admin');
-      return;
-    }
-    setToken(stored);
-
     (async () => {
       try {
         // Public data is read from the same-origin /api proxy (no auth).
+        // `/settings` is protected: it both proves the HttpOnly admin session
+        // is still valid and supplies the settings the editors need.
         const [homeData, statsRes, proofRes, settingsData] = await Promise.all([
           fetch('/api/home').then((r) => r.json() as Promise<HomeData>),
           fetch('/api/stats').then((r) => r.json() as Promise<PortfolioStats>),
           fetch('/api/proof').then((r) => r.json() as Promise<Proof>),
-          adminGet<SiteSettings>(stored, '/settings'),
+          adminGet<SiteSettings>('/settings'),
         ]);
         setHome(homeData);
         setStats(statsRes);
         setProof(proofRes);
         setSettings(settingsData);
+        setReady(true);
       } catch (err) {
+        if (err instanceof AdminApiError && err.status === 401) {
+          router.replace('/admin');
+          return;
+        }
         setError(err instanceof Error ? err.message : 'Failed to load data');
       } finally {
         setLoading(false);
@@ -95,18 +94,15 @@ export default function AdminDashboard() {
   }, [router]);
 
   async function handleLogout() {
-    if (token) {
-      try {
-        await adminPost(token, '/logout', {});
-      } catch {
-        // Token already invalid locally is fine — clear it regardless.
-      }
+    try {
+      await adminLogout();
+    } catch {
+      // Session already invalid is fine — the proxy clears the cookie anyway.
     }
-    clearStoredToken();
     router.replace('/admin');
   }
 
-  if (!token) return null;
+  if (!ready) return null;
 
   return (
     <div className="admin-shell">
@@ -150,33 +146,32 @@ export default function AdminDashboard() {
             <div className="admin-state admin-state--error">{error}</div>
           )}
           {!loading && home && settings && tab === 'markets' && (
-            <MarketsEditor token={token} markets={home.markets.all} />
+            <MarketsEditor markets={home.markets.all} />
           )}
           {!loading && settings && tab === 'hero' && (
-            <HeroEditor token={token} proof={proof ?? null} settings={settings} />
+            <HeroEditor proof={proof ?? null} settings={settings} />
           )}
           {!loading && home && tab === 'ticker' && (
-            <TickerEditor token={token} items={home.ticker} />
+            <TickerEditor items={home.ticker} />
           )}
           {!loading && home && tab === 'watch' && (
-            <WatchEditor token={token} items={home.watch} />
+            <WatchEditor items={home.watch} />
           )}
           {!loading && tab === 'dashboard' && (
             <DashboardEditor
-              token={token}
               data={home?.dashboard ?? null}
               stats={stats}
               proof={proof}
             />
           )}
           {!loading && settings && tab === 'content' && (
-            <FooterEditor token={token} settings={settings} />
+            <FooterEditor settings={settings} />
           )}
-          {!loading && tab === 'users' && <UsersEditor token={token} />}
-          {!loading && tab === 'staff' && <StaffEditor token={token} />}
-          {!loading && tab === 'broadcast' && <BroadcastEditor token={token} />}
-          {!loading && tab === 'settings' && <SettingsEditor token={token} />}
-          {!loading && tab === 'manage' && <ManageEditor token={token} />}
+          {!loading && tab === 'users' && <UsersEditor />}
+          {!loading && tab === 'staff' && <StaffEditor />}
+          {!loading && tab === 'broadcast' && <BroadcastEditor />}
+          {!loading && tab === 'settings' && <SettingsEditor />}
+          {!loading && tab === 'manage' && <ManageEditor />}
         </div>
       </main>
     </div>

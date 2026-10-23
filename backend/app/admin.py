@@ -27,7 +27,8 @@ import time
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
 
-from . import authstate, mailer, siteconfig, staff, store
+from . import audit, authstate, mailer, netutil, siteconfig, staff, store
+from .audit import Actions as Audit
 from .auth import hash_password, lookup_user_by_identifier, revoke_user_sessions
 from .engine import engine
 from .models import (
@@ -80,7 +81,10 @@ def _login_max_failures() -> int:
 
 
 def _client_ip(request: Request) -> str:
-    return request.client.host if request.client else "unknown"
+    # Trusted-proxy aware: see netutil.py. Using ``request.client.host`` here
+    # would let one shared proxy IP turn the admin lockout into a DoS against
+    # the site owner (any caller could trip it for everyone).
+    return netutil.client_ip(request)
 
 
 def _env_password() -> str:
@@ -121,7 +125,15 @@ def _hash_token(token: str) -> str:
     return hashlib.sha256(("ketsa:" + token).encode()).hexdigest()
 
 
-def require_admin(authorization: str | None = Header(default=None)) -> None:
+def require_admin(authorization: str | None = Header(default=None)) -> str:
+    """Validate the admin bearer token and return a stable actor id.
+
+    The returned value is a short prefix of the session digest: enough to
+    correlate every action from one login (and to distinguish concurrent
+    admin sessions) without ever storing the token itself. Callers that only
+    need the gate keep using ``dependencies=[Depends(require_admin)]``; callers
+    that audit their action take ``actor: str = Depends(require_admin)``.
+    """
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Not authenticated")
     token = authorization.removeprefix("Bearer ").strip()
@@ -133,6 +145,28 @@ def require_admin(authorization: str | None = Header(default=None)) -> None:
         authstate.delete_admin_session(digest)
         raise HTTPException(status_code=401, detail="Session expired, please log in again")
     authstate.touch_admin_session(digest, now + TOKEN_TTL)  # sliding window
+    return digest[:16]
+
+
+def _record_admin(
+    action: str,
+    actor: str,
+    request: Request | None = None,
+    *,
+    target_type: str | None = None,
+    target_id: str | None = None,
+    metadata: dict | None = None,
+) -> None:
+    """Convenience wrapper for auditing an admin action (see audit.py)."""
+    audit.record(
+        action,
+        actor_type="admin",
+        actor_id=actor,
+        ip=_client_ip(request) if request is not None else None,
+        target_type=target_type,
+        target_id=target_id,
+        metadata=metadata,
+    )
 
 
 class LoginRequest(BaseModel):
@@ -170,6 +204,12 @@ def login(body: LoginRequest, request: Request) -> LoginResponse:
     fails = [t for t in authstate.throttle_get(bucket) if now - t < window]
     if len(fails) >= max_failures:
         retry_in = max(1, int(window - (now - min(fails))))
+        audit.record(
+            Audit.ADMIN_LOGIN_LOCKED,
+            actor_type="anonymous",
+            ip=ip,
+            metadata={"retry_in": retry_in, "failures": len(fails)},
+        )
         raise HTTPException(
             status_code=429,
             detail=f"Too many failed attempts. Try again in {retry_in}s.",
@@ -180,18 +220,36 @@ def login(body: LoginRequest, request: Request) -> LoginResponse:
         stamps = [t for t in authstate.throttle_get(bucket) if now - t < window]
         stamps.append(now)
         authstate.throttle_set(bucket, stamps, window)
+        audit.record(
+            Audit.ADMIN_LOGIN_FAILED,
+            actor_type="anonymous",
+            ip=ip,
+            metadata={"failures": len(stamps)},
+        )
         raise HTTPException(status_code=401, detail="Invalid password")
 
     authstate.throttle_clear(bucket)
     token = secrets.token_urlsafe(32)
-    authstate.put_admin_session(_hash_token(token), time.time() + TOKEN_TTL)
+    digest = _hash_token(token)
+    authstate.put_admin_session(digest, time.time() + TOKEN_TTL)
+    audit.record(
+        Audit.ADMIN_LOGIN_OK,
+        actor_type="admin",
+        actor_id=digest[:16],
+        ip=ip,
+    )
     return LoginResponse(token=token)
 
 
-@router.post("/logout", response_model=MessageResponse, dependencies=[Depends(require_admin)])
-def logout(authorization: str | None = Header(default=None)) -> MessageResponse:
+@router.post("/logout", response_model=MessageResponse)
+def logout(
+    request: Request,
+    actor: str = Depends(require_admin),
+    authorization: str | None = Header(default=None),
+) -> MessageResponse:
     token = authorization.removeprefix("Bearer ").strip()
     authstate.delete_admin_session(_hash_token(token))
+    _record_admin(Audit.ADMIN_LOGOUT, actor, request)
     return MessageResponse()
 
 
@@ -200,49 +258,78 @@ async def me() -> dict:
     return {"authenticated": True}
 
 
-@router.post("/password", response_model=MessageResponse, dependencies=[Depends(require_admin)])
-async def change_password(body: ChangePasswordRequest) -> MessageResponse:
+@router.post("/password", response_model=MessageResponse)
+async def change_password(
+    body: ChangePasswordRequest,
+    request: Request,
+    actor: str = Depends(require_admin),
+) -> MessageResponse:
     if not _check_password(body.current):
         raise HTTPException(status_code=401, detail="Current password is incorrect")
     if len(body.new) < 8:
         raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
     _set_stored_password(body.new)
+    # Recorded without the password (only that it changed).
+    _record_admin(Audit.ADMIN_PASSWORD_CHANGED, actor, request)
     return MessageResponse()
 
 
-@router.post("/reset", response_model=MessageResponse, dependencies=[Depends(require_admin)])
-async def reset_content() -> MessageResponse:
+@router.post("/reset", response_model=MessageResponse)
+async def reset_content(
+    request: Request,
+    actor: str = Depends(require_admin),
+) -> MessageResponse:
     reset_db()
     engine.reset()
+    _record_admin(Audit.ADMIN_CONTENT_RESET, actor, request)
     return MessageResponse(detail="Content reset to defaults")
 
 
 # --- Markets ----------------------------------------------------------------
 
-@router.post("/markets", response_model=MessageResponse, dependencies=[Depends(require_admin)])
-async def admin_markets_create(m: dict) -> MessageResponse:
+@router.post("/markets", response_model=MessageResponse)
+async def admin_markets_create(
+    m: dict, request: Request, actor: str = Depends(require_admin)
+) -> MessageResponse:
     try:
         store.upsert_market(m)
     except Exception:
         raise HTTPException(status_code=400, detail="Could not save market")
     engine.reseed_market(m["id"])
+    _record_admin(
+        Audit.MARKET_CREATED, actor, request,
+        target_type="market", target_id=str(m.get("id") or ""),
+    )
     return MessageResponse()
 
 
-@router.put("/markets", response_model=MessageResponse, dependencies=[Depends(require_admin)])
-async def admin_markets_update(m: dict) -> MessageResponse:
+@router.put("/markets", response_model=MessageResponse)
+async def admin_markets_update(
+    m: dict, request: Request, actor: str = Depends(require_admin)
+) -> MessageResponse:
     try:
         store.upsert_market(m)
     except Exception:
         raise HTTPException(status_code=400, detail="Could not save market")
     engine.reseed_market(m["id"])
+    _record_admin(
+        Audit.MARKET_UPDATED, actor, request,
+        target_type="market", target_id=str(m.get("id") or ""),
+    )
     return MessageResponse()
 
 
-@router.delete("/markets/{market_id}", response_model=MessageResponse, dependencies=[Depends(require_admin)])
-async def admin_markets_delete(market_id: str) -> MessageResponse:
+@router.delete("/markets/{market_id}", response_model=MessageResponse)
+async def admin_markets_delete(
+    market_id: str, request: Request, actor: str = Depends(require_admin)
+) -> MessageResponse:
     deleted = store.delete_market(market_id)
     engine.remove_market(market_id)
+    _record_admin(
+        Audit.MARKET_DELETED, actor, request,
+        target_type="market", target_id=market_id,
+        metadata={"deleted": deleted},
+    )
     return MessageResponse(ok=True, detail=("deleted" if deleted else "not found"))
 
 
@@ -311,15 +398,38 @@ async def admin_config_get() -> dict:
     return siteconfig.all_config()
 
 
-@router.put("/config/{section}", response_model=MessageResponse, dependencies=[Depends(require_admin)])
-async def admin_config_put(section: str, body: dict) -> MessageResponse:
+@router.put("/config/{section}", response_model=MessageResponse)
+async def admin_config_put(
+    section: str, body: dict, request: Request, actor: str = Depends(require_admin)
+) -> MessageResponse:
     try:
         siteconfig.set_config(section, body)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Unknown settings section: {section}")
     except siteconfig.ConfigError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    # Security limits, payment caps and resolution rules are live operational
+    # controls, so record which section changed (not the values: they can be
+    # large and may contain operator-chosen figures).
+    _record_admin(
+        Audit.ADMIN_CONFIG_CHANGED, actor, request,
+        target_type="config", target_id=section,
+        metadata={"keys": sorted(str(k) for k in body.keys())},
+    )
     return MessageResponse()
+
+
+# --- Audit log (read only) ---------------------------------------------------
+# The audit log is append-only: there is deliberately no create/update/delete
+# endpoint. This is the read side an operator uses during a dispute or an abuse
+# investigation. Only the admin gate may read it.
+
+@router.get("/audit", dependencies=[Depends(require_admin)])
+async def admin_audit_list(limit: int = 100, action: str | None = None) -> dict:
+    # Cap the page so one request can't pull the whole log into memory.
+    limit = max(1, min(limit, 500))
+    rows = audit.list_recent(limit=limit, action=action)
+    return {"count": audit.count(), "rows": rows}
 
 
 # --- Users ------------------------------------------------------------------
@@ -357,9 +467,12 @@ async def admin_users_list() -> list[AdminUserView]:
 @router.post(
     "/users/reset-password",
     response_model=MessageResponse,
-    dependencies=[Depends(require_admin)],
 )
-async def admin_user_reset_password(body: AdminUserResetPassword) -> MessageResponse:
+async def admin_user_reset_password(
+    body: AdminUserResetPassword,
+    request: Request,
+    actor: str = Depends(require_admin),
+) -> MessageResponse:
     try:
         user = lookup_user_by_identifier(body.identifier)
     except ValueError:
@@ -371,13 +484,27 @@ async def admin_user_reset_password(body: AdminUserResetPassword) -> MessageResp
     user["password"] = hash_password(body.new_password)
     store.upsert_user(user)
     revoke_user_sessions(user["id"])
+    # Identifier is recorded so an operator can see *which account* was
+    # targeted; the new password never is.
+    _record_admin(
+        Audit.USER_PASSWORD_RESET, actor, request,
+        target_type="user", target_id=user["id"],
+        metadata={"identifier": body.identifier},
+    )
     return MessageResponse(detail="Password reset — the user must log in again")
 
 
-@router.delete("/users/{user_id}", response_model=MessageResponse, dependencies=[Depends(require_admin)])
-async def admin_user_delete(user_id: str) -> MessageResponse:
+@router.delete("/users/{user_id}", response_model=MessageResponse)
+async def admin_user_delete(
+    user_id: str, request: Request, actor: str = Depends(require_admin)
+) -> MessageResponse:
     deleted = store.delete_user(user_id)
     revoke_user_sessions(user_id)
+    _record_admin(
+        Audit.USER_DELETED, actor, request,
+        target_type="user", target_id=user_id,
+        metadata={"deleted": deleted},
+    )
     return MessageResponse(ok=deleted, detail=("deleted" if deleted else "not found"))
 
 
@@ -399,53 +526,89 @@ async def admin_staff_list() -> list[StaffMember]:
     return [StaffMember(**s) for s in staff.list_staff()]
 
 
-@router.post("/staff", response_model=StaffMember, dependencies=[Depends(require_admin)])
-async def admin_staff_create(body: StaffCreate) -> StaffMember:
+@router.post("/staff", response_model=StaffMember)
+async def admin_staff_create(
+    body: StaffCreate, request: Request, actor: str = Depends(require_admin)
+) -> StaffMember:
     try:
         member = staff.create_staff(body.name, body.email, body.phone, body.role)
     except ValueError as exc:
         raise _staff_conflict(exc)
+    _record_admin(
+        Audit.STAFF_CREATED, actor, request,
+        target_type="staff", target_id=str(member.get("id") or ""),
+        metadata={"role": member.get("role")},
+    )
     return StaffMember(**member)
 
 
 @router.post(
     "/staff/upload",
     response_model=StaffUploadResult,
-    dependencies=[Depends(require_admin)],
 )
-async def admin_staff_upload(body: StaffUpload) -> StaffUploadResult:
+async def admin_staff_upload(
+    body: StaffUpload, request: Request, actor: str = Depends(require_admin)
+) -> StaffUploadResult:
     if not body.text and not body.rows:
         raise HTTPException(status_code=400, detail="Provide CSV/JSON text or rows")
-    return staff.upload(text=body.text, rows=body.rows)
+    result = staff.upload(text=body.text, rows=body.rows)
+    _record_admin(
+        Audit.STAFF_BULK_UPLOADED, actor, request,
+        target_type="staff",
+        metadata={"summary": getattr(result, "detail", None)},
+    )
+    return result
 
 
-@router.put("/staff/{staff_id}", response_model=StaffMember, dependencies=[Depends(require_admin)])
-async def admin_staff_update(staff_id: str, body: StaffUpdate) -> StaffMember:
+@router.put("/staff/{staff_id}", response_model=StaffMember)
+async def admin_staff_update(
+    staff_id: str, body: StaffUpdate, request: Request,
+    actor: str = Depends(require_admin),
+) -> StaffMember:
+    patch = body.model_dump(exclude_unset=True)
     try:
-        member = staff.update_staff(staff_id, body.model_dump(exclude_unset=True))
+        member = staff.update_staff(staff_id, patch)
     except ValueError as exc:
         raise _staff_conflict(exc)
     if member is None:
         raise HTTPException(status_code=404, detail="Staff member not found")
+    _record_admin(
+        Audit.STAFF_UPDATED, actor, request,
+        target_type="staff", target_id=staff_id,
+        metadata={"fields": sorted(str(k) for k in patch.keys())},
+    )
     return StaffMember(**member)
 
 
-@router.delete("/staff/{staff_id}", response_model=MessageResponse, dependencies=[Depends(require_admin)])
-async def admin_staff_delete(staff_id: str) -> MessageResponse:
+@router.delete("/staff/{staff_id}", response_model=MessageResponse)
+async def admin_staff_delete(
+    staff_id: str, request: Request, actor: str = Depends(require_admin)
+) -> MessageResponse:
     deleted = staff.delete_staff(staff_id)
+    _record_admin(
+        Audit.STAFF_DELETED, actor, request,
+        target_type="staff", target_id=staff_id,
+        metadata={"deleted": deleted},
+    )
     return MessageResponse(ok=deleted, detail=("deleted" if deleted else "not found"))
 
 
 @router.post(
     "/staff/{staff_id}/invite",
     response_model=StaffInviteResult,
-    dependencies=[Depends(require_admin)],
 )
-async def admin_staff_invite(staff_id: str) -> StaffInviteResult:
+async def admin_staff_invite(
+    staff_id: str, request: Request, actor: str = Depends(require_admin)
+) -> StaffInviteResult:
     try:
-        return staff.invite_staff(staff_id)
+        result = staff.invite_staff(staff_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="Staff member not found")
+    _record_admin(
+        Audit.STAFF_INVITED, actor, request,
+        target_type="staff", target_id=staff_id,
+    )
+    return result
 
 
 # --- Broadcast: one announcement to every user with an email --------------------
@@ -534,8 +697,10 @@ async def _run_broadcast(
         job["error"] = "Broadcast failed"
 
 
-@router.post("/broadcast", response_model=BroadcastAccepted, dependencies=[Depends(require_admin)])
-async def admin_broadcast_start(body: BroadcastRequest) -> BroadcastAccepted:
+@router.post("/broadcast", response_model=BroadcastAccepted)
+async def admin_broadcast_start(
+    body: BroadcastRequest, request: Request, actor: str = Depends(require_admin)
+) -> BroadcastAccepted:
     """Queue one announcement to every user with an email address."""
     subject = " ".join(str(body.subject or "").split())
     text = str(body.body or "").strip()
@@ -592,6 +757,11 @@ async def admin_broadcast_start(body: BroadcastRequest) -> BroadcastAccepted:
     _prune_broadcast_jobs()
     task = asyncio.create_task(_run_broadcast(job_id, recipients, subject, text))
     _broadcast_jobs[job_id]["task"] = task
+    _record_admin(
+        Audit.BROADCAST_STARTED, actor, request,
+        target_type="broadcast", target_id=job_id,
+        metadata={"recipients": len(recipients)},
+    )
     return BroadcastAccepted(job_id=job_id, total=len(recipients))
 
 

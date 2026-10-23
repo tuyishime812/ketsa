@@ -31,7 +31,7 @@ function parseRoles(text: string): string[] {
   return out;
 }
 
-export default function SettingsEditor({ token }: { token: string }) {
+export default function SettingsEditor() {
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -49,7 +49,7 @@ export default function SettingsEditor({ token }: { token: string }) {
   useEffect(() => {
     (async () => {
       try {
-        const cfg = await getAdminConfig(token);
+        const cfg = await getAdminConfig();
         setPayments(cfg.payments);
         setSecurity(cfg.security);
         setRolesText(cfg.staff_roles.roles.join('\n'));
@@ -58,7 +58,7 @@ export default function SettingsEditor({ token }: { token: string }) {
         setError(errMsg(err));
       }
     })();
-  }, [token]);
+  }, []);
 
   function begin() {
     setError(null);
@@ -69,7 +69,7 @@ export default function SettingsEditor({ token }: { token: string }) {
     if (!payments) return;
     begin();
     try {
-      await saveAdminConfig(token, 'payments', payments);
+      await saveAdminConfig('payments', payments);
       setMsg('Payment settings saved.');
     } catch (err) {
       setError(errMsg(err));
@@ -80,7 +80,7 @@ export default function SettingsEditor({ token }: { token: string }) {
     if (!security) return;
     begin();
     try {
-      await saveAdminConfig(token, 'security', security);
+      await saveAdminConfig('security', security);
       setMsg('Security settings saved.');
     } catch (err) {
       setError(errMsg(err));
@@ -90,7 +90,7 @@ export default function SettingsEditor({ token }: { token: string }) {
   async function saveRoles() {
     begin();
     try {
-      await saveAdminConfig(token, 'staff_roles', { roles: parseRoles(rolesText) });
+      await saveAdminConfig('staff_roles', { roles: parseRoles(rolesText) });
       setMsg('Staff roles saved.');
     } catch (err) {
       setError(errMsg(err));
@@ -101,7 +101,7 @@ export default function SettingsEditor({ token }: { token: string }) {
     if (!resolution) return;
     begin();
     try {
-      await saveAdminConfig(token, 'resolution', resolution);
+      await saveAdminConfig('resolution', resolution);
       setMsg('Market resolution settings saved.');
     } catch (err) {
       setError(errMsg(err));
@@ -119,7 +119,7 @@ export default function SettingsEditor({ token }: { token: string }) {
       return;
     }
     try {
-      await adminPost(token, '/password', { current, new: next });
+      await adminPost('/password', { current, new: next });
       setCurrent('');
       setNext('');
       setConfirm('');

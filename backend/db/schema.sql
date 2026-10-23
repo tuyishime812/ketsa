@@ -139,6 +139,30 @@ create table if not exists public.ketsa_auth (
 create index if not exists ketsa_auth_expires_idx on public.ketsa_auth (expires);
 create index if not exists ketsa_auth_ns_user_idx on public.ketsa_auth (ns, user_id);
 
+-- Append-only audit log. Every privileged or money-moving action (admin login,
+-- password change, market resolution, user password reset/deletion, payment-cap
+-- and deposit/withdrawal setting changes, staff and broadcast operations, ...)
+-- appends one row here with the actor, client IP, target and a short JSON
+-- metadata blob. See backend/app/audit.py.
+--
+-- Stored as JSONB in `value` (like the other content tables) plus a `ts`
+-- column so the table can be ordered and (optionally) pruned by time. Rows are
+-- only ever INSERTed: no application code path updates or deletes them, so the
+-- log is the system of record during a dispute or abuse investigation.
+--
+-- Never wiped by the admin "reset content" action, and RLS with no policies
+-- denies the public anon role all access (only the backend's service role,
+-- which bypasses RLS, may read or write).
+create table if not exists public.ketsa_audit (
+  id    text primary key,
+  ts    double precision not null default 0,
+  value jsonb not null default '{}'::jsonb
+);
+
+-- Newest-first reads and optional action filters.
+create index if not exists ketsa_audit_ts_idx on public.ketsa_audit (ts desc);
+create index if not exists ketsa_audit_action_idx on public.ketsa_audit ((value->>'action'));
+
 -- Row Level Security. The anon/publishable key is PUBLIC (it ships in the
 -- browser bundle), so without RLS anyone holding it could read every wallet
 -- balance, payment record, user account and password hash. Enabling RLS with NO
@@ -154,3 +178,5 @@ alter table public.ketsa_notifications enable row level security;
 alter table public.ketsa_staff         enable row level security;
 -- Auth state carries live session digests and pending signups: same treatment.
 alter table public.ketsa_auth          enable row level security;
+-- Audit log records privileged actions: keep it away from the public anon key.
+alter table public.ketsa_audit         enable row level security;

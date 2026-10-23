@@ -21,7 +21,7 @@ import { Card, Field, TextArea, TextInput } from './ui';
  *     mail template, so anything typed here renders as visible text in the
  *     recipient's mail client rather than as markup.
  */
-export default function BroadcastEditor({ token }: { token: string }) {
+export default function BroadcastEditor() {
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
   const [confirming, setConfirming] = useState(false);
@@ -42,7 +42,7 @@ export default function BroadcastEditor({ token }: { token: string }) {
   const poll = useCallback(
     async (jobId: string) => {
       try {
-        const status = await getBroadcastStatus(token, jobId);
+        const status = await getBroadcastStatus(jobId);
         setJob(status);
         if (status.status === 'running') {
           timer.current = setTimeout(() => void poll(jobId), 1000);
@@ -53,7 +53,7 @@ export default function BroadcastEditor({ token }: { token: string }) {
         );
       }
     },
-    [token],
+    [],
   );
 
   const trimmedSubject = subject.trim();
@@ -66,7 +66,7 @@ export default function BroadcastEditor({ token }: { token: string }) {
     setStarting(true);
     setError(null);
     try {
-      const accepted = await startBroadcast(token, trimmedSubject, trimmedBody);
+      const accepted = await startBroadcast(trimmedSubject, trimmedBody);
       setConfirming(false);
       setSubject('');
       setBody('');

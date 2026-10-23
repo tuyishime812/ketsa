@@ -461,22 +461,23 @@ export function markNotificationsReadSession(
 /**
  * Admin API helpers.
  *
- * These talk to the same-origin `/api/*` proxy at runtime (see next.config.js),
- * which forwards to the Ketsa API. All authenticated calls send the bearer token
- * returned by `adminLogin`. Tokens are stored in localStorage by the UI.
+ * These talk to the same-origin `/api/*` proxy at runtime, which forwards to
+ * the Ketsa API. The runtime proxy (app/api/[...path]/route.ts) exchanges the
+ * admin bearer token for an `HttpOnly; SameSite=Strict` cookie, so **no admin
+ * token is ever stored in JavaScript**. Calls are authenticated by that cookie.
  */
-
-export interface AdminLoginResult {
-  token: string;
-}
 
 /** Path used client-side. Public read helper below uses API_BASE directly. */
 const ADMIN_BASE = '/api/admin';
 
-export async function adminLogin(password: string): Promise<string> {
+/**
+ * Log in. On success the proxy sets the HttpOnly admin cookie; the response
+ * body contains no token by design.
+ */
+export async function adminLogin(password: string): Promise<void> {
   const res = await fetch(`${ADMIN_BASE}/login`, {
     method: 'POST',
-    credentials: 'omit',
+    credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ password }),
   });
@@ -491,8 +492,21 @@ export async function adminLogin(password: string): Promise<string> {
     }
     throw new Error(detail);
   }
-  const data = (await res.json()) as AdminLoginResult;
-  return data.token;
+}
+
+/** Revoke the server-side admin session and clear the cookie. */
+export async function adminLogout(): Promise<void> {
+  await fetch(`${ADMIN_BASE}/logout`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+}
+
+/** True when the browser currently holds a valid admin session. */
+export async function adminMe(): Promise<void> {
+  await adminGet<unknown>('/me');
 }
 
 export class AdminApiError extends Error {
@@ -503,22 +517,17 @@ export class AdminApiError extends Error {
   }
 }
 
-async function adminFetch<T>(
-  token: string,
-  path: string,
-  init?: RequestInit,
-): Promise<T> {
+async function adminFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${ADMIN_BASE}${path}`, {
     ...init,
-    credentials: 'omit',
+    credentials: 'same-origin',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
       ...(init?.headers ?? {}),
     },
   });
   if (res.status === 401) {
-    throw new AdminApiError(401, 'Unauthorized — please log in again');
+    throw new AdminApiError(401, 'Unauthorized - please log in again');
   }
   if (!res.ok) {
     // Surface the backend's reason (e.g. "a staff member with that email
@@ -537,20 +546,20 @@ async function adminFetch<T>(
   return (await res.json()) as T;
 }
 
-export function adminGet<T>(token: string, path: string): Promise<T> {
-  return adminFetch<T>(token, path);
+export function adminGet<T>(path: string): Promise<T> {
+  return adminFetch<T>(path);
 }
 
-export function adminPost<T>(token: string, path: string, body: unknown): Promise<T> {
-  return adminFetch<T>(token, path, { method: 'POST', body: JSON.stringify(body) });
+export function adminPost<T>(path: string, body: unknown): Promise<T> {
+  return adminFetch<T>(path, { method: 'POST', body: JSON.stringify(body) });
 }
 
-export function adminPut<T>(token: string, path: string, body: unknown): Promise<T> {
-  return adminFetch<T>(token, path, { method: 'PUT', body: JSON.stringify(body) });
+export function adminPut<T>(path: string, body: unknown): Promise<T> {
+  return adminFetch<T>(path, { method: 'PUT', body: JSON.stringify(body) });
 }
 
-export function adminDelete<T>(token: string, path: string): Promise<T> {
-  return adminFetch<T>(token, path, { method: 'DELETE' });
+export function adminDelete<T>(path: string): Promise<T> {
+  return adminFetch<T>(path, { method: 'DELETE' });
 }
 
 // --- Broadcast (one admin announcement to every user with an email) ----------
@@ -576,21 +585,14 @@ export interface BroadcastStatus {
  * takes far longer than an HTTP request may wait.
  */
 export function startBroadcast(
-  token: string,
   subject: string,
   body: string,
 ): Promise<BroadcastAccepted> {
-  return adminPost<BroadcastAccepted>(token, '/broadcast', { subject, body });
+  return adminPost<BroadcastAccepted>('/broadcast', { subject, body });
 }
 
-export function getBroadcastStatus(
-  token: string,
-  jobId: string,
-): Promise<BroadcastStatus> {
-  return adminGet<BroadcastStatus>(
-    token,
-    `/broadcast/${encodeURIComponent(jobId)}`,
-  );
+export function getBroadcastStatus(jobId: string): Promise<BroadcastStatus> {
+  return adminGet<BroadcastStatus>(`/broadcast/${encodeURIComponent(jobId)}`);
 }
 
 // --- Staff directory ---------------------------------------------------------
@@ -612,48 +614,38 @@ export interface StaffCreateInput {
   role: string;
 }
 
-export function listStaff(token: string): Promise<StaffMember[]> {
-  return adminGet<StaffMember[]>(token, '/staff');
+export function listStaff(): Promise<StaffMember[]> {
+  return adminGet<StaffMember[]>('/staff');
 }
 
-export function createStaff(
-  token: string,
-  input: StaffCreateInput,
-): Promise<StaffMember> {
-  return adminPost<StaffMember>(token, '/staff', input);
+export function createStaff(input: StaffCreateInput): Promise<StaffMember> {
+  return adminPost<StaffMember>('/staff', input);
 }
 
-export function uploadStaff(
-  token: string,
-  payload: { text?: string; rows?: Record<string, unknown>[] },
-): Promise<StaffUploadResult> {
-  return adminPost<StaffUploadResult>(token, '/staff/upload', payload);
+export function uploadStaff(payload: {
+  text?: string;
+  rows?: Record<string, unknown>[];
+}): Promise<StaffUploadResult> {
+  return adminPost<StaffUploadResult>('/staff/upload', payload);
 }
 
 export function updateStaff(
-  token: string,
   id: string,
   patch: Partial<Pick<StaffMember, 'name' | 'email' | 'phone' | 'role' | 'active'>>,
 ): Promise<StaffMember> {
-  return adminPut<StaffMember>(token, `/staff/${encodeURIComponent(id)}`, patch);
+  return adminPut<StaffMember>(`/staff/${encodeURIComponent(id)}`, patch);
 }
 
 export function deleteStaff(
-  token: string,
   id: string,
 ): Promise<{ ok: boolean; detail?: string }> {
   return adminDelete<{ ok: boolean; detail?: string }>(
-    token,
     `/staff/${encodeURIComponent(id)}`,
   );
 }
 
-export function inviteStaff(
-  token: string,
-  id: string,
-): Promise<StaffInviteResult> {
+export function inviteStaff(id: string): Promise<StaffInviteResult> {
   return adminPost<StaffInviteResult>(
-    token,
     `/staff/${encodeURIComponent(id)}/invite`,
     {},
   );
@@ -661,17 +653,15 @@ export function inviteStaff(
 
 // --- Admin config (Settings tab) ---------------------------------------------
 
-export function getAdminConfig(token: string): Promise<AdminConfig> {
-  return adminGet<AdminConfig>(token, '/config');
+export function getAdminConfig(): Promise<AdminConfig> {
+  return adminGet<AdminConfig>('/config');
 }
 
 export function saveAdminConfig<K extends keyof AdminConfig>(
-  token: string,
   section: K,
   value: AdminConfig[K],
 ): Promise<{ ok: boolean; detail?: string }> {
   return adminPut<{ ok: boolean; detail?: string }>(
-    token,
     `/config/${encodeURIComponent(section)}`,
     value,
   );

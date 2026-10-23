@@ -24,10 +24,8 @@ const CATEGORIES: { value: string; label: string }[] = [
 type Row = WatchItem & { key: number };
 
 export default function WatchEditor({
-  token,
   items,
 }: {
-  token: string;
   items: WatchItem[];
 }) {
   const [rows, setRows] = useState<Row[]>(items.map((it, i) => ({ ...it, key: i })));
@@ -71,7 +69,7 @@ export default function WatchEditor({
     setError(null);
     const payload = rows.map(({ name, cat, price, pts }) => ({ name, cat, price, pts }));
     try {
-      await adminPut(token, '/watch', payload);
+      await adminPut('/watch', payload);
       setChanged(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed');
