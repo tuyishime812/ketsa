@@ -441,23 +441,49 @@ class AdminUserResetPassword(BaseModel):
 
 @router.get("/users", response_model=list[AdminUserView], dependencies=[Depends(require_admin)])
 async def admin_users_list() -> list[AdminUserView]:
+    # Read the whole payment ledger once, then group it by wallet. Calling
+    # `list_payments(wallet_id)` per user would be N+1 queries against the
+    # database and make the admin list crawl as the user base grows.
+    payments_by_wallet: dict[str, list[dict]] = {}
+    for payment in store.list_payments():
+        payments_by_wallet.setdefault(payment.get("wallet_id"), []).append(payment)
+
     views: list[AdminUserView] = []
     for u in store.list_users():
-        w = engine.wallet_view(u["wallet_id"])
+        wallet_id = u["wallet_id"]
+        w = engine.wallet_view(wallet_id)
         if w is None:
-            w = store.get_wallet(u["wallet_id"])
+            # Wallet not loaded into the engine yet. The raw record calls the
+            # cashable pool `deposited` (wallet_view renames it `withdrawable`).
+            w = store.get_wallet(wallet_id)
+        payments = payments_by_wallet.get(wallet_id, [])
+        deposits_total = sum(
+            float(p.get("amount") or 0.0)
+            for p in payments
+            if p.get("kind") == "deposit" and p.get("status") == "completed"
+        )
+        withdrawals_total = sum(
+            float(p.get("amount") or 0.0)
+            for p in payments
+            if p.get("kind") == "withdraw" and p.get("status") == "completed"
+        )
         views.append(
             AdminUserView(
                 id=u["id"],
                 email=u["email"],
                 phone=u.get("phone") or None,
                 name=u.get("name") or u["id"],
-                wallet_id=u["wallet_id"],
+                wallet_id=wallet_id,
                 created=float(u.get("created") or 0.0),
                 wallet_equity=(w or {}).get("equity"),
                 wallet_balance=(w or {}).get("balance"),
+                wallet_withdrawable=(w or {}).get("withdrawable", (w or {}).get("deposited")),
+                wallet_currency=(w or {}).get("currency") or "MWK",
                 positions=len((w or {}).get("positions") or []),
                 trades=len((w or {}).get("history") or []),
+                deposits_total=round(deposits_total, 2),
+                withdrawals_total=round(withdrawals_total, 2),
+                pending_payments=sum(1 for p in payments if p.get("status") == "pending"),
             )
         )
     views.sort(key=lambda v: -(v.wallet_equity or 0.0))

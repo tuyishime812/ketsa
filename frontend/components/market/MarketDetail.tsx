@@ -99,14 +99,14 @@ export default function MarketDetail({ initial }: { initial: MarketDetailInitial
   }, [m.id, subscribeTrades]);
 
   async function handleTraded(resp: TradeResponse) {
-    upsert(resp.market);
-    setBook(resp.book);
-    setTrades((prev) => {
-      const key = tradeKey(resp.trade);
+    if (resp.market) upsert(resp.market);
+    if (resp.book) setBook(resp.book);
+    if (resp.trade) setTrades((prev) => {
+      const key = tradeKey(resp.trade!);
       const rest = prev.filter((t) => tradeKey(t) !== key);
-      return [resp.trade, ...rest].slice(0, 60);
+      return [resp.trade!, ...rest].slice(0, 60);
     });
-    setLastTrade(resp.trade);
+    if (resp.trade) setLastTrade(resp.trade);
     try {
       await refreshWallet();
     } catch {

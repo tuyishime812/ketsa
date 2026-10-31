@@ -26,6 +26,7 @@
 
 const { spawn } = require('child_process');
 const fs = require('fs');
+const net = require('net');
 const path = require('path');
 
 const root = path.resolve(__dirname, '..');
@@ -42,10 +43,39 @@ function cliPort(flag) {
   return Number.isInteger(value) && value > 0 && value < 65536 ? value : undefined;
 }
 
-const apiPort = cliPort('api-port') ?? Number(process.env.KETSA_API_PORT || 8000);
-const apiUrl = `http://127.0.0.1:${apiPort}`;
-const webPort = cliPort('web-port') ?? Number(process.env.KETSA_WEB_PORT || 3000);
-const webUrl = `http://localhost:${webPort}`;
+// Explicit choices (CLI flag or env var) are honoured as-is. Only the defaults
+// fall forward, so `npm run dev` still works on a machine where another project
+// already owns 3000/8000 — previously Next failed with EADDRINUSE, the
+// launcher tore the API back down, and the site (and its markets) never came up.
+const explicitApiPort =
+  cliPort('api-port') ?? (process.env.KETSA_API_PORT ? Number(process.env.KETSA_API_PORT) : undefined);
+const explicitWebPort =
+  cliPort('web-port') ?? (process.env.KETSA_WEB_PORT ? Number(process.env.KETSA_WEB_PORT) : undefined);
+let apiPort = explicitApiPort ?? 8000;
+let webPort = explicitWebPort ?? 3000;
+let apiUrl = `http://127.0.0.1:${apiPort}`;
+let webUrl = `http://localhost:${webPort}`;
+
+/** True when nothing is listening on `port` (binds then immediately releases). */
+function isPortFree(port) {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.unref();
+    server.once('error', () => resolve(false));
+    server.listen({ port, exclusive: true }, () => {
+      server.close(() => resolve(true));
+    });
+  });
+}
+
+/** First free port at or after `preferred`; explicit ports are never moved. */
+async function freePort(preferred, explicit) {
+  if (explicit) return preferred;
+  for (let port = preferred; port < preferred + 50 && port < 65536; port += 1) {
+    if (await isPortFree(port)) return port;
+  }
+  throw new Error(`no free port found in ${preferred}-${preferred + 49}`);
+}
 
 const CYAN = '\u001b[36m';
 const MAGENTA = '\u001b[35m';

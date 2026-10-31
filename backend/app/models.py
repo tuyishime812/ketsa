@@ -142,8 +142,16 @@ class AdminUserView(BaseModel):
     created: float
     wallet_equity: Optional[float] = None
     wallet_balance: Optional[float] = None
+    # Real money paid in through mobile money — the only cashable-out pool.
+    wallet_withdrawable: Optional[float] = None
+    wallet_currency: str = "MWK"
     positions: int = 0
     trades: int = 0
+    # Wallet cash flow, from the (completed) wandePay ledger, plus a count of
+    # payments still in flight so an operator can spot a stuck withdrawal.
+    deposits_total: float = 0.0
+    withdrawals_total: float = 0.0
+    pending_payments: int = 0
     last_seen: Optional[float] = None
 
 
@@ -237,13 +245,31 @@ class MarkReadRequest(BaseModel):
     ids: list[str] = []
 
 
-class TradeRequest(BaseModel):
-    wallet_id: str
+class TradeLeg(BaseModel):
     market_id: str
     outcome: Outcome
-    side: Side
+    side: Side = 'buy'
+    amount: Optional[float] = None
+    shares: Optional[float] = None
+
+    @field_validator("amount", "shares")
+    @classmethod
+    def _finite_positive(cls, v: Optional[float], info) -> Optional[float]:
+        if v is not None and (not math.isfinite(v) or v <= 0):
+            raise ValueError(f"{info.field_name} must be a finite, positive number")
+        return v
+
+
+class TradeRequest(BaseModel):
+    wallet_id: str
+    market_id: Optional[str] = None
+    outcome: Optional[Outcome] = None
+    side: Side = 'buy'
     amount: Optional[float] = None  # dollars — required for buys
     shares: Optional[float] = None  # shares — required for sells
+    legs: Optional[List[TradeLeg]] = None
+    slip: Optional[List[TradeLeg]] = None
+    bets: Optional[List[TradeLeg]] = None
 
     @field_validator("amount", "shares")
     @classmethod
@@ -257,9 +283,11 @@ class TradeRequest(BaseModel):
 
 class TradeResponse(BaseModel):
     wallet: Wallet
-    market: Market
-    book: OrderBook
-    trade: Trade
+    market: Optional[Market] = None
+    book: Optional[OrderBook] = None
+    trade: Optional[Trade] = None
+    trades: Optional[List[Trade]] = None
+    results: Optional[List[dict]] = None
 
 
 class WatchItem(BaseModel):

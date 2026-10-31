@@ -187,6 +187,21 @@ def _otp_resend_cooldown() -> int:
         return _OTP_RESEND_SECONDS
 
 
+def _dev_otp_visible() -> bool:
+    """True only for a local dev box that explicitly opted in.
+
+    With ``KETSA_EMAIL_DELIVERY=log`` no email is sent at all (the code is
+    printed to the backend log), so a developer has no way to complete an email
+    signup from the UI. Including the code in the 202 response fixes that — but
+    it would be an account-takeover hole anywhere real mail is configured, so
+    it is gated twice: log delivery (never used in production) *and* an explicit
+    ``KETSA_DEV_OTP_IN_RESPONSE=1`` opt-in. Either one missing keeps it off.
+    """
+    delivery = os.getenv("KETSA_EMAIL_DELIVERY", "").strip().lower()
+    opt_in = os.getenv("KETSA_DEV_OTP_IN_RESPONSE", "").strip().lower()
+    return delivery in {"log", "console"} and opt_in in {"1", "true", "yes", "on"}
+
+
 def _issue_otp(key: str, payload: dict | None = None) -> str:
     """Issue a fresh 6-digit code for ``key``, carrying ``payload``.
 
@@ -316,6 +331,10 @@ class PendingVerifyResponse(BaseModel):
     ok: bool = True
     pending: bool = True
     email: str
+    # Local-dev only: the code to type, present only when BOTH
+    # KETSA_EMAIL_DELIVERY=log and KETSA_DEV_OTP_IN_RESPONSE=1 are set.
+    # Production (Resend delivery) never returns it.
+    dev_otp: str | None = None
 
 
 def _create_account(*, identifier: str, email: str, phone: str, name: str, password_hash: str) -> dict:
@@ -498,7 +517,9 @@ def register(
                 detail="We couldn't send the verification email. Please try again in a moment.",
             )
         response.status_code = 202  # pending — account appears only after OTP
-        return PendingVerifyResponse(email=email)
+        return PendingVerifyResponse(
+            email=email, dev_otp=code if _dev_otp_visible() else None
+        )
     else:
         email, phone = "", identifier
         if store.get_user_by_phone(phone):
@@ -571,7 +592,9 @@ def resend_register_otp(body: ResendOtpRequest, response: Response) -> PendingVe
             detail="We couldn't send the verification email. Please try again in a moment.",
         )
     response.status_code = 202
-    return PendingVerifyResponse(email=email)
+    return PendingVerifyResponse(
+        email=email, dev_otp=code if _dev_otp_visible() else None
+    )
 
 
 @router.post("/forgot-password")

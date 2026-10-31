@@ -70,6 +70,8 @@ interface WalletContextValue {
   ) => Promise<'pending' | null>;
   /** The email awaiting OTP verification, if a signup is in flight. */
   pendingEmail: string | null;
+  /** Local-dev only: the signup code echoed by the API (never in production). */
+  pendingDevOtp: string | null;
   /** Complete an email signup with the emailed code. */
   verifyEmail: (email: string, otp: string) => Promise<void>;
   /** Re-send the signup OTP; true when a fresh code was emailed. */
@@ -102,6 +104,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [pendingEmail, setPendingEmail] = useState<string | null>(null);
+  const [pendingDevOtp, setPendingDevOtp] = useState<string | null>(null);
   const restoring = useRef(false);
 
   const refresh = useCallback(async (): Promise<Wallet | null> => {
@@ -286,9 +289,12 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         const result = await registerSession({ name, identifier, password });
         if ('pending' in result) {
           setPendingEmail(result.email);
+          setPendingDevOtp(result.dev_otp ?? null);
           return 'pending'; // modal switches to the OTP verify step
         }
         finishAuth(result);
+        setPendingEmail(null);
+        setPendingDevOtp(null);
         setAuthOpen(false);
         return null;
       } catch (err) {
@@ -309,6 +315,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         const session = await verifyEmailRequest(email, otp);
         finishAuth(session);
         setPendingEmail(null);
+        setPendingDevOtp(null);
         setAuthOpen(false);
       } catch (err) {
         setAuthError(
@@ -325,7 +332,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setAuthBusy(true);
     setAuthError(null);
     try {
-      await resendRegisterOtpRequest(email);
+      const result = await resendRegisterOtpRequest(email);
+      setPendingEmail(result.email);
+      setPendingDevOtp(result.dev_otp ?? null);
       return true;
     } catch (err) {
       setAuthError(err instanceof Error ? err.message : 'Could not resend code');
@@ -413,6 +422,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         loginWithCode,
         register,
         pendingEmail,
+        pendingDevOtp,
         verifyEmail,
         resendRegisterOtp,
         forgotPassword,
@@ -438,6 +448,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           busy={authBusy}
           error={authError}
           pendingEmail={pendingEmail}
+          devOtp={pendingDevOtp}
           onLogin={(identifier, password) => {
             void login(identifier, password);
           }}

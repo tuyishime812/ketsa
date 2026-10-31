@@ -451,9 +451,16 @@ serializes *within one process only*. Running `uvicorn --workers N`, or two
 replicas behind a load balancer, gives each process its own divergent books
 and its own view of the same persisted balance, so the same funds can be spent
 twice and the per-transaction/daily MWK caps multiply by the replica count.
-The in-memory rate limiters have the same per-instance caveat. Scale out only
-behind a single writer, or move the engine's authoritative state (and the
-lock) into Postgres with row-level locking first.
+The startup guard (`backend/app/replica.py`) detects common worker hints
+(`WEB_CONCURRENCY`, `UVICORN_WORKERS`, `GUNICORN_WORKERS`, `KETSA_WORKERS`,
+`KETSA_REPLICAS`) and **refuses to start** in a multi-process configuration
+unless `KETSA_ALLOW_MULTI_WORKER=1` is set or Postgres row locking is active.
+For cross-process safety set `KETSA_DB_URL` to a Postgres connection string and
+install `psycopg[binary]`; deposit/withdrawal and refund balance mutations then
+use `SELECT ... FOR UPDATE` inside a transaction (`backend/app/dblock.py`).
+The trade path still requires a single process until fully migrated.
+**Never** set `KETSA_ALLOW_MULTI_WORKER=1` with real money unless every wallet
+mutation is serialized in the database.
 
 **HTTP security headers (both services).**
 - `Content-Security-Policy`: emitted per request by `frontend/middleware.ts`

@@ -123,6 +123,8 @@ export interface PendingVerification {
   ok: boolean;
   pending: true;
   email: string;
+  /** Local-dev only (log email delivery + explicit opt-in); never in prod. */
+  dev_otp?: string | null;
 }
 
 export type RegisterResult = AuthSession | PendingVerification;
@@ -170,8 +172,16 @@ export interface AdminUserView {
   created: number;
   wallet_equity?: number | null;
   wallet_balance?: number | null;
+  /** Real money paid in via mobile money — the only cashable-out pool. */
+  wallet_withdrawable?: number | null;
+  wallet_currency?: string;
   positions: number;
   trades: number;
+  /** Completed PayChangu cash flow, in the wallet's currency. */
+  deposits_total: number;
+  withdrawals_total: number;
+  /** Payments still pending (e.g. a withdrawal waiting on payout). */
+  pending_payments: number;
   last_seen?: number | null;
 }
 
@@ -196,20 +206,33 @@ export interface Payment {
 
 export type Correspondent = 'AIRTEL_MWI' | 'TNM_MWI';
 
-export interface TradeRequest {
-  wallet_id: string;
+export interface TradeLeg {
   market_id: string;
   outcome: Outcome;
-  side: Side;
+  side?: Side;
   amount?: number; // dollars — for buys
   shares?: number; // shares — for sells
 }
 
+export interface TradeRequest {
+  wallet_id: string;
+  market_id?: string;
+  outcome?: Outcome;
+  side?: Side;
+  amount?: number; // dollars — for buys
+  shares?: number; // shares — for sells
+  legs?: TradeLeg[];
+  slip?: TradeLeg[];
+  bets?: TradeLeg[];
+}
+
 export interface TradeResponse {
   wallet: Wallet;
-  market: Market;
-  book: OrderBook;
-  trade: Trade;
+  market?: Market;
+  book?: OrderBook;
+  trade?: Trade;
+  trades?: Trade[];
+  results?: unknown[];
 }
 
 export interface WatchItem {

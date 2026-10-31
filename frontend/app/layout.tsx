@@ -1,6 +1,8 @@
 import type { Metadata } from 'next';
 import { Newsreader, Inter, IBM_Plex_Mono } from 'next/font/google';
 import { WalletProvider } from '@/components/wallet/WalletProvider';
+import { BetSlipProvider } from '@/components/betslip/BetSlipProvider';
+import BetSlip from '@/components/betslip/BetSlip';
 import './globals.css';
 
 const newsreader = Newsreader({
@@ -56,7 +58,12 @@ export default function RootLayout({
       className={`${newsreader.variable} ${inter.variable} ${ibmPlexMono.variable}`}
     >
       <body>
-        <WalletProvider>{children}</WalletProvider>
+        <WalletProvider>
+          <BetSlipProvider>
+            {children}
+            <BetSlip />
+          </BetSlipProvider>
+        </WalletProvider>
       </body>
     </html>
   );

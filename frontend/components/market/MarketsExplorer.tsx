@@ -11,6 +11,7 @@ import {
   trendColor,
 } from '@/lib/utils';
 import { liveOf, useMarketFeed } from './MarketFeed';
+import { useBetSlip } from '@/components/betslip/BetSlipProvider';
 
 const CATS: ('all' | Category)[] = [
   'all',
@@ -177,12 +178,14 @@ export default function MarketsExplorer({ initial }: { initial: Market[] }) {
 function MarketListCard({ market }: { market: Market }) {
   const m = market;
   const ends = daysUntil(m.end_date);
+  const { addLeg, setIsOpen } = useBetSlip();
 
   return (
-    <Link
-      href={`/markets/${m.id}`}
-      className="group flex flex-col gap-[13px] rounded-m border border-line bg-white p-[18px] transition-all duration-200 ease-ketsa hover:-translate-y-[1px] hover:border-ink"
-    >
+    <div className="group relative flex flex-col gap-[13px] rounded-m border border-line bg-white p-[18px] transition-all duration-200 ease-ketsa hover:-translate-y-[1px] hover:border-ink">
+      <Link
+        href={`/markets/${m.id}`}
+        className="flex flex-col gap-[13px]"
+      >
       <div className="flex items-center justify-between">
         <span className="font-mono text-[10px] uppercase tracking-[.05em] text-brand">
           {m.tag}
@@ -254,6 +257,33 @@ function MarketListCard({ market }: { market: Market }) {
         <span>Liq {fmtUsd(m.liquidity ?? 0)}</span>
         <span>{fmtEndDate(m.end_date)}</span>
       </div>
-    </Link>
+      </Link>
+      {m.status !== 'resolved' && (
+        <div className="flex gap-2">
+          <button
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              addLeg({ market_id: m.id, market: m, outcome: 'yes', side: 'buy', amount: 100 });
+              setIsOpen(true);
+            }}
+            className="flex-1 rounded-[6px] border border-pos/40 bg-pos/5 py-[6px] text-center font-mono text-[10px] uppercase tracking-[.06em] text-pos hover:bg-pos/10"
+          >
+            + Add YES to slip
+          </button>
+          <button
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              addLeg({ market_id: m.id, market: m, outcome: 'no', side: 'buy', amount: 100 });
+              setIsOpen(true);
+            }}
+            className="flex-1 rounded-[6px] border border-neg/40 bg-neg/5 py-[6px] text-center font-mono text-[10px] uppercase tracking-[.06em] text-neg hover:bg-neg/10"
+          >
+            + Add NO to slip
+          </button>
+        </div>
+      )}
+    </div>
   );
 }

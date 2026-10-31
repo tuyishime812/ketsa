@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useState } from 'react';
 import { useWallet } from '@/components/wallet/WalletProvider';
+import { useBetSlip } from '@/components/betslip/BetSlipProvider';
 import NotificationsBell from '@/components/notifications/NotificationsBell';
 import { fmtBalance } from '@/lib/utils';
 
@@ -20,6 +21,7 @@ export default function Nav() {
   const pathname = usePathname();
   const { wallet, user, loading, openConnect, openAuth, disconnect, logout } =
     useWallet();
+  const { count, setIsOpen } = useBetSlip();
 
   const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
   const signOut = () => (user ? logout() : disconnect());
@@ -62,6 +64,14 @@ export default function Nav() {
         </nav>
 
         <div className="flex items-center gap-[10px]">
+          {count > 0 && (
+            <button
+              onClick={() => setIsOpen(true)}
+              className="hidden md:flex items-center gap-2 rounded-full border border-line-strong px-[12px] py-[7px] font-mono text-[10.5px] uppercase tracking-[.08em] text-ink transition-colors hover:border-ink hover:bg-paper-alt"
+            >
+              Bet Slip <span className="rounded-full bg-brand px-1.5 text-white">{count}</span>
+            </button>
+          )}
           <div className="hidden md:block">
             <NotificationsBell />
           </div>
@@ -118,6 +128,17 @@ export default function Nav() {
               </Link>
             ))}
             <div className="mt-3 border-t border-line pt-4">
+              {count > 0 && (
+                <button
+                  onClick={() => {
+                    setIsOpen(true);
+                    setOpen(false);
+                  }}
+                  className="mb-3 w-full flex items-center justify-between rounded-[9px] border border-line-strong px-[14px] py-[11px] font-mono text-[11px] uppercase tracking-[.08em] text-ink"
+                >
+                  Bet Slip <span className="rounded-full bg-brand px-1.5 text-white">{count}</span>
+                </button>
+              )}
               <div className="flex items-center justify-between pb-3">
                 <NotificationsBell />
               </div>

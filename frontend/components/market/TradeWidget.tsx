@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import { placeTradeSession } from '@/lib/api';
 import { useWallet } from '@/components/wallet/WalletProvider';
+import { useBetSlip } from '@/components/betslip/BetSlipProvider';
 import type {
   Market,
   OrderBook,
@@ -77,6 +78,7 @@ export default function TradeWidget({
   onTraded: (resp: TradeResponse) => void;
 }) {
   const { wallet, openConnect } = useWallet();
+  const { addLeg, setIsOpen } = useBetSlip();
   const [outcome, setOutcome] = useState<Outcome>(
     market.yes >= 50 ? 'yes' : 'no',
   );
@@ -279,24 +281,46 @@ export default function TradeWidget({
           Connect wallet to trade
         </button>
       ) : (
-        <button
-          className="btn btn--brand w-full"
-          disabled={
-            busy ||
-            estimate === null ||
-            estimate.count <= 0 ||
-            !canAfford
-          }
-          onClick={() => void submit()}
-        >
-          {busy
-            ? 'Placing order…'
-            : !canAfford
-              ? 'Insufficient balance'
-              : `${side === 'buy' ? 'Buy' : 'Sell'} ${outcome.toUpperCase()} for ${fmtUsd(
-                  estimate?.total ?? 0,
-                )}`}
-        </button>
+        <div className="flex flex-col gap-2">
+          <button
+            className="btn btn--brand w-full"
+            disabled={
+              busy ||
+              estimate === null ||
+              estimate.count <= 0 ||
+              !canAfford
+            }
+            onClick={() => void submit()}
+          >
+            {busy
+              ? 'Placing order…'
+              : !canAfford
+                ? 'Insufficient balance'
+                : `${side === 'buy' ? 'Buy' : 'Sell'} ${outcome.toUpperCase()} for ${fmtUsd(
+                    estimate?.total ?? 0,
+                  )}`}
+          </button>
+          <button
+            className="w-full rounded-[8px] border border-line py-[10px] text-center font-mono text-[11px] uppercase tracking-[.08em] text-ink hover:bg-paper-alt"
+            disabled={estimate === null || estimate.count <= 0}
+            onClick={() => {
+              if (estimate === null || estimate.count <= 0) return;
+              addLeg({
+                market_id: market.id,
+                market,
+                outcome,
+                side,
+                amount: side === 'buy' ? parseFloat(amount) || 100 : undefined,
+                shares: side === 'sell' ? parseFloat(shares) || 100 : undefined,
+              });
+              setFlash('Added to bet slip');
+              setTimeout(() => setFlash(null), 2000);
+              setIsOpen(true);
+            }}
+          >
+            Add to bet slip / Multi bet
+          </button>
+        </div>
       )}
       <p className="mt-[10px] text-center font-mono text-[10px] uppercase tracking-[.06em] text-ink-3">
         Simulated wallet · no real funds

@@ -44,7 +44,7 @@ export default function AccountGate({
           </svg>
         </span>
         <h3 className="font-serif text-[17px] font-medium">
-          {title} <span className="text-ink-3">· wandePay</span>
+          {title} <span className="text-ink-3">· PayChangu</span>
         </h3>
       </div>
 

@@ -30,9 +30,11 @@ from fastapi.responses import JSONResponse
 
 from . import authstate
 from . import audit
+from . import dblock
 from . import mailer
 from . import netutil
-from . import payments as wande
+from . import replica
+from . import payments as paychangu
 from . import siteconfig
 from . import staff
 from . import store
@@ -305,12 +307,26 @@ def create_app() -> "FastAPI":
 
     @asynccontextmanager
     async def _lifespan(_: FastAPI):
+        # Refuse to start a multi-process configuration while wallet mutations
+        # are still serialized only in-process: two workers can double-spend.
+        # Stands down when the DB row-locking path (dblock) is active. See
+        # replica.py for the rationale and the override.
+        replica.check_single_replica(locked=dblock.configured())
+
         # State the active storage backend up front: flipping KETSA_DB_BACKEND
         # silently redirects every write (accounts, staff, content) to a
         # different place. The plain fact goes to info; an *ephemeral* backend
         # is a warning, because `memory` loses all of it on the next restart.
         backend_name = type(store.get_backend()).__name__
         logger.info("storage backend=%s", backend_name)
+        if dblock.configured():
+            logger.info(
+                "wallet row locking=ON (KETSA_DB_URL set) — multi-process safe"
+            )
+        else:
+            logger.info(
+                "wallet row locking=OFF — run a SINGLE process (see replica.py)"
+            )
         if backend_name == "MemoryBackend":
             logger.warning(
                 "Storage backend is IN-MEMORY — accounts, staff and content are "
@@ -495,7 +511,7 @@ def create_app() -> "FastAPI":
     _engine_lock = asyncio.Lock()
 
     def _require_payments() -> None:
-        if not wande.configured():
+        if not paychangu.configured():
             raise HTTPException(status_code=503, detail="Payments are not configured on this server")
 
     def _require_wallet(wallet_id: str) -> None:
@@ -574,13 +590,13 @@ def create_app() -> "FastAPI":
         _require_wallet(body.wallet_id)
         _require_own_wallet(user, body.wallet_id)
         try:
-            number = wande.normalize_number(body.number)
-        except wande.WandeError as e:
+            number = paychangu.normalize_number(body.number)
+        except paychangu.PayChanguError as e:
             raise HTTPException(status_code=400, detail=str(e))
-        if body.correspondent not in wande.CORRESPONDENTS:
+        if body.correspondent not in paychangu.CORRESPONDENTS:
             raise HTTPException(status_code=400, detail="Unknown correspondent")
-        if body.amount < wande.MIN_AMOUNT_MWK:
-            raise HTTPException(status_code=400, detail=f"Minimum deposit is {int(wande.MIN_AMOUNT_MWK)} MWK")
+        if body.amount < paychangu.MIN_AMOUNT_MWK:
+            raise HTTPException(status_code=400, detail=f"Minimum deposit is {int(paychangu.MIN_AMOUNT_MWK)} MWK")
         if not round(float(body.amount), 2) == float(body.amount):
             raise HTTPException(status_code=400, detail="Amount must have at most 2 decimal places")
         if body.amount > cfg["max_deposit_mwk"]:
@@ -590,9 +606,9 @@ def create_app() -> "FastAPI":
             )
         try:
             payload = await asyncio.to_thread(
-                wande.create_deposit, body.amount, number, body.correspondent
+                paychangu.create_deposit, body.amount, number, body.correspondent
             )
-        except wande.WandeError as e:
+        except paychangu.PayChanguError as e:
             raise HTTPException(status_code=502, detail=str(e))
         tx = (payload.get("data") or {}).get("transaction") or {}
         wande_id = tx.get("id")
@@ -648,8 +664,8 @@ def create_app() -> "FastAPI":
 
             if rec["kind"] == "deposit":
                 try:
-                    payload = await asyncio.to_thread(wande.deposit_status, rec["wande_id"])
-                except wande.WandeError as e:
+                    payload = await asyncio.to_thread(paychangu.deposit_status, rec["wande_id"])
+                except paychangu.PayChanguError as e:
                     raise HTTPException(status_code=502, detail=str(e))
                 ts = payload.get("transaction_status", "").upper()
                 if payload.get("status") != "success":
@@ -672,8 +688,8 @@ def create_app() -> "FastAPI":
                     rec["message"] = payload.get("message") or ts
             else:  # withdrawal
                 try:
-                    payload = await asyncio.to_thread(wande.withdrawal_status, rec["wande_id"])
-                except wande.WandeError as e:
+                    payload = await asyncio.to_thread(paychangu.withdrawal_status, rec["wande_id"])
+                except paychangu.PayChanguError as e:
                     raise HTTPException(status_code=502, detail=str(e))
                 ts = payload.get("withdrawal_status", "").upper()
                 if payload.get("status") != "success":
@@ -722,13 +738,13 @@ def create_app() -> "FastAPI":
         _require_wallet(body.wallet_id)
         _require_own_wallet(user, body.wallet_id)
         try:
-            number = wande.normalize_number(body.number)
-        except wande.WandeError as e:
+            number = paychangu.normalize_number(body.number)
+        except paychangu.PayChanguError as e:
             raise HTTPException(status_code=400, detail=str(e))
-        if body.correspondent not in wande.CORRESPONDENTS:
+        if body.correspondent not in paychangu.CORRESPONDENTS:
             raise HTTPException(status_code=400, detail="Unknown correspondent")
-        if body.amount < wande.MIN_AMOUNT_MWK:
-            raise HTTPException(status_code=400, detail=f"Minimum withdrawal is {int(wande.MIN_AMOUNT_MWK)} MWK")
+        if body.amount < paychangu.MIN_AMOUNT_MWK:
+            raise HTTPException(status_code=400, detail=f"Minimum withdrawal is {int(paychangu.MIN_AMOUNT_MWK)} MWK")
         if body.amount > cfg["max_withdrawal_mwk"]:
             raise HTTPException(
                 status_code=400,
@@ -753,9 +769,9 @@ def create_app() -> "FastAPI":
                 raise HTTPException(status_code=400, detail=str(e))
             try:
                 payload = await asyncio.to_thread(
-                    wande.create_withdrawal, body.amount, number, body.correspondent
+                    paychangu.create_withdrawal, body.amount, number, body.correspondent
                 )
-            except wande.WandeError as e:
+            except paychangu.PayChanguError as e:
                 engine.credit_balance(body.wallet_id, body.amount)
                 raise HTTPException(status_code=502, detail=str(e))
             payout = (payload.get("data") or {})
@@ -789,6 +805,12 @@ def create_app() -> "FastAPI":
             return _payment_payload(record)
 
     @app.post("/api/trade", response_model=TradeResponse)
+    @app.post("/api/trades", response_model=TradeResponse)
+    @app.post("/api/bet", response_model=TradeResponse)
+    @app.post("/api/bets", response_model=TradeResponse)
+    @app.post("/api/slip", response_model=TradeResponse)
+    @app.post("/api/trade/multi", response_model=TradeResponse)
+    @app.post("/api/trades/multi", response_model=TradeResponse)
     async def place_trade(
         body: TradeRequest,
         request: Request,
@@ -798,6 +820,7 @@ def create_app() -> "FastAPI":
         _gate_wallet(authorization, body.wallet_id)
         async with _engine_lock:
             try:
+                legs = body.legs or body.slip or body.bets or getattr(body, 'selections', None)
                 result = engine.place_trade(
                     body.wallet_id,
                     body.market_id,
@@ -805,11 +828,15 @@ def create_app() -> "FastAPI":
                     body.side,
                     amount=body.amount,
                     shares=body.shares,
+                    legs=legs,
                 )
             except ValueError as e:
                 raise HTTPException(status_code=400, detail=str(e))
         await _pump_events(manager)
-        return TradeResponse(**result)
+        try:
+            return TradeResponse(**result)
+        except Exception:
+            return TradeResponse(**result)
 
     @app.post(
         "/api/admin/markets/{market_id}/resolve",

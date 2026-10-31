@@ -142,7 +142,7 @@ export default function PaymentsPanel() {
     <div className="rounded-m border border-line bg-white p-5">
       <div className="mb-4 flex items-center justify-between gap-3">
         <h3 className="font-serif text-[17px] font-medium">
-          Payments <span className="text-ink-3">· wandePay</span>
+          Payments <span className="text-ink-3">·</span>
         </h3>
         <div className="segment">
           <button
@@ -231,7 +231,7 @@ export default function PaymentsPanel() {
         {busy
           ? 'Processing…'
           : mode === 'deposit'
-            ? 'Deposit via wandePay'
+            ? 'Deposit'
             : `Withdraw ${wallet ? fmtBalance(wallet.withdrawable, wallet.currency) : ''} withdrawable`}
       </button>
 

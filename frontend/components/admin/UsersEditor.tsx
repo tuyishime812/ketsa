@@ -16,14 +16,18 @@ function fmtDate(ts?: number | null): string {
   });
 }
 
+/** Grouped money amount (currency shown once in the Wallet column). */
+function fmtMoney(n?: number | null): string {
+  return (n ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
 export default function UsersEditor() {
   const [users, setUsers] = useState<AdminUserView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
-  const [sortBy, setSortBy] = useState<keyof Pick<
-    AdminUserView,
-    'wallet_equity' | 'created' | 'name'
-  >>('wallet_equity');
+  const [sortBy, setSortBy] = useState<
+    'wallet_equity' | 'wallet_balance' | 'wallet_withdrawable' | 'created' | 'name'
+  >('wallet_equity');
 
   const load = useCallback(async () => {
     setError(null);
@@ -93,12 +97,16 @@ export default function UsersEditor() {
               setSortBy(
                 e.target.value as
                   | 'wallet_equity'
+                  | 'wallet_balance'
+                  | 'wallet_withdrawable'
                   | 'created'
                   | 'name',
               )
             }
           >
             <option value="wallet_equity">Equity</option>
+            <option value="wallet_balance">Balance</option>
+            <option value="wallet_withdrawable">Cashable</option>
             <option value="created">Newest</option>
             <option value="name">Name</option>
           </select>
@@ -111,6 +119,10 @@ export default function UsersEditor() {
                 <th>User</th>
                 <th>Wallet</th>
                 <th>Equity</th>
+                <th>Balance</th>
+                <th>Cashable</th>
+                <th>Deposits</th>
+                <th>Withdrawals</th>
                 <th>Positions</th>
                 <th>Trades</th>
                 <th>Member since</th>
@@ -120,14 +132,14 @@ export default function UsersEditor() {
             <tbody>
               {sorted === null && (
                 <tr>
-                  <td colSpan={7} className="admin-muted">
+                  <td colSpan={11} className="admin-muted">
                     Loading users…
                   </td>
                 </tr>
               )}
               {sorted !== null && sorted.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="admin-muted">
+                  <td colSpan={11} className="admin-muted">
                     No accounts yet.
                   </td>
                 </tr>
@@ -180,13 +192,20 @@ function UserRow({
           <div className="admin-td-name">{user.name}</div>
           <div className="admin-td-sub">{user.email || user.phone || '—'}</div>
         </td>
-        <td className="admin-mono">{user.wallet_id}</td>
         <td className="admin-mono">
-          {(user.wallet_equity ?? 0).toLocaleString(undefined, {
-            maximumFractionDigits: 2,
-          })}{' '}
-          MWK
+          {user.wallet_id}
+          <div className="admin-td-sub">{user.wallet_currency ?? 'MWK'}</div>
         </td>
+        <td className="admin-mono">{fmtMoney(user.wallet_equity)}</td>
+        <td className="admin-mono">{fmtMoney(user.wallet_balance)}</td>
+        <td className="admin-mono">
+          {fmtMoney(user.wallet_withdrawable)}
+          {user.pending_payments > 0 && (
+            <div className="admin-td-sub">{user.pending_payments} pending</div>
+          )}
+        </td>
+        <td className="admin-mono">{fmtMoney(user.deposits_total)}</td>
+        <td className="admin-mono">{fmtMoney(user.withdrawals_total)}</td>
         <td className="admin-mono">{user.positions}</td>
         <td className="admin-mono">{user.trades}</td>
         <td className="admin-mono">{fmtDate(user.created)}</td>
@@ -203,7 +222,7 @@ function UserRow({
       </tr>
       {editing && (
         <tr>
-          <td colSpan={7} className="admin-reset-row">
+          <td colSpan={11} className="admin-reset-row">
             <div className="admin-grid admin-grid--2">
               <Field label="New password" hint="At least 8 characters">
                 <TextInput
@@ -233,7 +252,7 @@ function UserRow({
 
 function useSorted(
   users: AdminUserView[] | null,
-  by: 'wallet_equity' | 'created' | 'name',
+   by: 'wallet_equity' | 'wallet_balance' | 'wallet_withdrawable' | 'created' | 'name',
 ): AdminUserView[] | null {
   if (users === null) return null;
   const copy = [...users];

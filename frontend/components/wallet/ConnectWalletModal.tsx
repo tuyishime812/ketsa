@@ -60,7 +60,7 @@ export default function ConnectWalletModal({
 
         <p className="mb-5 text-sm text-ink-2">
           Markets run on a simulated wallet — no sign-up needed to explore the
-          order books. Create an account to deposit real money through wandePay
+          order books. Create an account to deposit real money 
           and trade with actual MWK.
         </p>
 

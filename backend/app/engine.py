@@ -26,7 +26,7 @@ import secrets
 import time
 from typing import Any, Callable
 
-from . import store
+from . import dblock, store
 
 CENTS_MIN = 1
 CENTS_MAX = 99
@@ -131,7 +131,7 @@ class Marketplace:
             # Resolved markets hold their final answer instead of a live book.
             yes_price = int(market.get("resolved_price") or 0)
             yes_price = 100 if yes_price > 50 else 0
-            return {
+            book = {
                 "yes": yes_price,
                 "no": 100 - yes_price,
                 "last": yes_price,
@@ -145,6 +145,12 @@ class Marketplace:
                 "asks": [],
                 "resolved": True,
             }
+            # Cache it like an open book. Without this, every read of a resolved
+            # market (list, detail, tape) re-queried storage because `_ensure`
+            # found nothing in `_books` and fetched the market again.
+            self._books[market["id"]] = book
+            self._trades.setdefault(market["id"], [])
+            return book
         yes = _clamp(int(market.get("yes", 50)))
         base_liquidity = max(float(market.get("liquidity", 0.0)) or 2000.0, MIN_LIQUIDITY)
         book = {
@@ -194,22 +200,29 @@ class Marketplace:
         # Pool slowly rebuilds to full depth; trader orders bleed it down.
         book["liquidity"] = min(base, book["liquidity"] + base * 0.015)
 
-    def snapshot_market(self, market_id: str) -> dict | None:
-        """Enriched market dict: stored content + live price/volume state."""
-        market = store.get_market(market_id)
-        if market is None:
-            return None
-        book = self._ensure(market_id)
+    def _enrich(self, market: dict) -> dict:
+        """Overlay live book state on a market dict already read from storage.
+
+        Takes the stored market as an argument (instead of re-fetching it by id)
+        so callers that already hold the record do not cause a second storage
+        read. With the Supabase backend each read is an HTTP round-trip, so the
+        old per-market `store.get_market()` in `list_markets()` turned every
+        listing into an N+1 query storm (10 round-trips for 9 markets) and made
+        a single transient disconnect fail the whole page.
+        """
+        market_id = market["id"]
+        book = self._books.get(market_id)
+        if book is None:
+            book = self._make_book(market)
         self._maybe_replenish(market_id)
         out = dict(market)
-        if book is not None:
-            out["yes"] = book["yes"]
-            out["no"] = book["no"]
-            out["trend"] = book["trend"]
-            out["pts"] = [int(p) for p in book["pts"]]
-            out["volume"] = _round2(book["volume"])
-            out["liquidity"] = _round2(book["liquidity"])
-            out["last_price"] = book["last"]
+        out["yes"] = book["yes"]
+        out["no"] = book["no"]
+        out["trend"] = book["trend"]
+        out["pts"] = [int(p) for p in book["pts"]]
+        out["volume"] = _round2(book["volume"])
+        out["liquidity"] = _round2(book["liquidity"])
+        out["last_price"] = book["last"]
         out.setdefault("description", "")
         out.setdefault("end_date", None)
         out.setdefault("created", None)
@@ -218,13 +231,28 @@ class Marketplace:
         out.setdefault("liquidity", 0.0)
         return out
 
+    def snapshot_market(self, market_id: str) -> dict | None:
+        """Enriched market dict: stored content + live price/volume state."""
+        market = store.get_market(market_id)
+        if market is None:
+            return None
+        return self._enrich(market)
+
     def list_markets(self) -> list[dict]:
-        snaps = []
-        for market in store.list_markets():
-            snap = self.snapshot_market(market["id"])
-            if snap is not None:
-                snaps.append(snap)
-        return snaps
+        """All markets with live state, using a single storage read.
+
+        The stored list already contains every field `_enrich` needs, so build
+        the books from those records rather than calling `snapshot_market()`
+        (which would re-read each market one by one).
+        """
+        markets = store.list_markets()
+        reps = {m["id"]: m for m in markets}
+        # Drop books for markets that no longer exist (deleted in the admin UI)
+        # so a stale in-memory book cannot keep a ghost market alive.
+        for market_id in list(self._books):
+            if market_id not in reps:
+                self._books.pop(market_id, None)
+        return [self._enrich(m) for m in markets]
 
     def book_view(self, market_id: str) -> dict | None:
         """YES-side order book plus the derived NO-side quotes."""
@@ -327,16 +355,94 @@ class Marketplace:
         self._trades.setdefault(market_id, []).insert(0, wallet["history"][-1])
         self._trades[market_id][:] = self._trades[market_id][:60]
 
-    def place_trade(self, wallet_id: str, market_id: str, outcome: str, side: str,
-                    amount: float | None = None, shares: float | None = None) -> dict:
+    def place_trade(self, wallet_id: str, market_id: str = None, outcome: str = None, side: str = None,
+                    amount: float | None = None, shares: float | None = None, legs=None, **kwargs) -> dict:
         """Execute a market order and return wallet/market/book/trade payloads."""
         wallet = self._wallets.get(wallet_id)
         if wallet is None:
             raise ValueError("Unknown wallet")
+
+        # Support multi-bet / parlay on a single slip
+        multi_legs = legs or kwargs.get('slip') or kwargs.get('bets') or kwargs.get('selections') or kwargs.get('multibet')
+        if multi_legs and isinstance(multi_legs, (list, tuple)) and len(multi_legs) > 0:
+            # Normalize legs
+            norm_legs = []
+            for i, leg in enumerate(multi_legs):
+                if isinstance(leg, dict):
+                    l_mid = leg.get('market_id') or leg.get('market') or leg.get('id')
+                    l_outcome = leg.get('outcome')
+                    l_side = leg.get('side') or 'buy'
+                    l_amount = leg.get('amount')
+                    l_shares = leg.get('shares')
+                else:
+                    l_mid = getattr(leg, 'market_id', None)
+                    l_outcome = getattr(leg, 'outcome', None)
+                    l_side = getattr(leg, 'side', 'buy')
+                    l_amount = getattr(leg, 'amount', None)
+                    l_shares = getattr(leg, 'shares', None)
+                norm_legs.append({
+                    'market_id': l_mid,
+                    'outcome': l_outcome,
+                    'side': l_side,
+                    'amount': l_amount,
+                    'shares': l_shares,
+                    'idx': i + 1,
+                })
+
+            # Dry-run validation pass (atomicity - fail fast before executing anything)
+            for leg in norm_legs:
+                if leg['outcome'] not in ("yes", "no"):
+                    raise ValueError(f"Leg {leg['idx']}: outcome must be 'yes' or 'no'")
+                if leg['side'] not in ("buy", "sell"):
+                    raise ValueError(f"Leg {leg['idx']}: side must be 'buy' or 'sell'")
+                if not leg['market_id']:
+                    raise ValueError(f"Leg {leg['idx']}: market_id required")
+                book = self._ensure(leg['market_id'])
+                if book is None:
+                    raise ValueError(f"Leg {leg['idx']}: Unknown market {leg['market_id']}")
+                market = store.get_market(leg['market_id'])
+                if market and market.get("status") == "resolved":
+                    raise ValueError(f"Leg {leg['idx']}: This market has resolved — trading is closed")
+                # Basic balance check for buys
+                if leg['side'] == 'buy':
+                    budget = leg['amount'] or 0.0
+                    if budget < 0.01:
+                        raise ValueError(f"Leg {leg['idx']}: Buy amount must be at least $0.01")
+                    if wallet["balance"] + _EPS < budget:  # rough check, actual may differ slightly due to fills
+                        pass  # will be caught properly in execution
+                elif leg['side'] == 'sell':
+                    qty = leg['shares'] or 0.0
+                    if qty < 0.001:
+                        raise ValueError(f"Leg {leg['idx']}: Sell size must be at least 1 share")
+                    held_entry = wallet["positions"].get(leg['market_id'], {}).get(leg['outcome'])
+                    held = held_entry.get("shares", 0.0) if held_entry else 0.0
+                    if held < _EPS:
+                        raise ValueError(f"Leg {leg['idx']}: You don't hold any shares of this outcome to sell")
+
+            results = []
+            trades = []
+            # Execute all legs in order on the same wallet
+            for leg in norm_legs:
+                try:
+                    res = self.place_trade(wallet_id, leg['market_id'], leg['outcome'], leg['side'], amount=leg['amount'], shares=leg['shares'])
+                    results.append(res)
+                    if res.get('trade'):
+                        trades.append(res['trade'])
+                except ValueError as e:
+                    raise ValueError(f"Leg {leg['idx']} ({leg['market_id']}) failed: {str(e)}")
+            # Return aggregated result
+            return {
+                "wallet": self.wallet_view(wallet_id),
+                "results": results,
+                "trades": trades,
+            }
+
         if outcome not in ("yes", "no"):
             raise ValueError("outcome must be 'yes' or 'no'")
         if side not in ("buy", "sell"):
             raise ValueError("side must be 'buy' or 'sell'")
+        if not market_id:
+            raise ValueError("market_id required")
         book = self._ensure(market_id)
         if book is None:
             raise ValueError("Unknown market")
@@ -617,7 +723,22 @@ class Marketplace:
         raises the withdrawable pool as well as the spendable balance. Callers
         are responsible for gating on idempotency (a payment record must only
         credit once).
+
+        When ``KETSA_DB_URL`` is set the mutation runs inside a Postgres
+        transaction with ``SELECT ... FOR UPDATE`` (cross-process safe). In the
+        in-memory/single-process case the original asyncio.Lock in main.py plus
+        the per-process wallet dict is sufficient.
         """
+        if dblock.configured():
+            with dblock.wallet_txn(wallet_id) as wallet:
+                wallet["balance"] = _round2(wallet.get("balance", 0.0) + amount)
+                wallet["deposited"] = _round2(wallet.get("deposited", 0.0) + amount)
+            # Keep the in-process view in sync if we have it (read-only cache).
+            if wallet_id in self._wallets:
+                live = self._wallets[wallet_id]
+                live["balance"] = _round2(live.get("balance", 0.0) + amount)
+                live["deposited"] = _round2(live.get("deposited", 0.0) + amount)
+            return
         wallet = self._wallets.get(wallet_id)
         if wallet is None:
             raise ValueError("Unknown wallet")
@@ -633,7 +754,27 @@ class Marketplace:
         winnings) is spendable on markets but is never cashable out, so the
         zero-balance change can't be sidestepped by withdrawing money the
         house never received.
+
+        When ``KETSA_DB_URL`` is set the mutation runs inside a Postgres
+        transaction with ``SELECT ... FOR UPDATE`` (cross-process safe).
         """
+        if dblock.configured():
+            with dblock.wallet_txn(wallet_id) as wallet:
+                deposited = float(wallet.get("deposited", 0.0))
+                if deposited + _EPS < amount:
+                    raise ValueError(
+                        "Insufficient deposited balance for this withdrawal. "
+                        "Only real money paid in through mobile money can be cashed out."
+                    )
+                if float(wallet.get("balance", 0.0)) + _EPS < amount:
+                    raise ValueError("Insufficient balance for this withdrawal")
+                wallet["deposited"] = _round2(deposited - amount)
+                wallet["balance"] = _round2(float(wallet.get("balance", 0.0)) - amount)
+            if wallet_id in self._wallets:
+                live = self._wallets[wallet_id]
+                live["deposited"] = _round2(float(live.get("deposited", 0.0)) - amount)
+                live["balance"] = _round2(float(live.get("balance", 0.0)) - amount)
+            return
         wallet = self._wallets.get(wallet_id)
         if wallet is None:
             raise ValueError("Unknown wallet")

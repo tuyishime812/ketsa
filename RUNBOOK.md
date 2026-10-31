@@ -122,6 +122,7 @@ host's env UI. Full descriptions are in `.env.production.example`.
 | `KETSA_PROXY_SECRET` | **yes (with frontend)** | same random value as the frontend's `KETSA_PROXY_SECRET`; lets the proxy sign the real client IP so per-IP limits/lockout work behind it |
 | `KETSA_TRUSTED_PROXIES` | optional | only if a known reverse proxy hits the API directly (alternative to the secret); never `0.0.0.0/0` |
 | `KETSA_DB_BACKEND` | **yes for persistence** | `supabase` |
+| `KETSA_DB_URL` | optional | Postgres connection string. With `psycopg[binary]`, deposit/withdrawal/refund balance mutations use `SELECT ... FOR UPDATE` across processes; the startup guard still requires a single process until the trade path is migrated. |
 | `SUPABASE_URL` | if supabase | `https://<ref>.supabase.co` |
 | `SUPABASE_SERVICE_ROLE_KEY` | if supabase | service-role secret (secret manager only) |
 | `KETSA_WANDE_TOKEN` | if payments | wandePay token (secret manager only) |

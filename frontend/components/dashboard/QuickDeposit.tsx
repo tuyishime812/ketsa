@@ -99,7 +99,7 @@ export default function QuickDeposit() {
       <div className="mb-4 flex items-center justify-between">
         <h3 className="font-serif text-[17px] font-medium">
           {mode === 'deposit' ? 'Fund wallet' : 'Withdraw'}
-          <span className="text-ink-3"> · wandePay</span>
+          <span className="text-ink-3"> · PayChangu</span>
         </h3>
         <div className="segment">
           <button
@@ -165,7 +165,7 @@ export default function QuickDeposit() {
           {busy
             ? 'Processing…'
             : mode === 'deposit'
-              ? 'Deposit with wandePay'
+              ? 'Deposit with PayChangu'
               : 'Withdraw to mobile money'}
         </button>
         {notice && <p className="text-[12px] leading-snug text-pos">{notice}</p>}

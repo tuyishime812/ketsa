@@ -31,19 +31,52 @@ import type {
 } from './types';
 import { loadStoredSession } from './wallet';
 
-const API_BASE = process.env.KETSA_BACKEND_URL || 'http://127.0.0.1:8000';
+const API_BASE = (process.env.KETSA_BACKEND_URL || 'http://127.0.0.1:8000').replace(/\/+$/, '');
+
+/** A failed API call. `status` is 0 when the request never got a response. */
+export class ApiError extends Error {
+  readonly status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
+/**
+ * True when a *read* may safely be attempted again.
+ *
+ * Only transport failures (status 0) and server/gateway errors are retryable.
+ * Deliberately excludes 4xx: retrying a 401/404/422 can never help, and 429 is
+ * a rate-limit signal, not a transient fault.
+ */
+export function isRetryableReadError(err: unknown): boolean {
+  return (
+    err instanceof ApiError &&
+    (err.status === 0 ||
+      err.status === 500 ||
+      err.status === 502 ||
+      err.status === 503 ||
+      err.status === 504)
+  );
+}
 
 export async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
-    ...init,
-    // Never allow credentials on these public GET endpoints.
-    credentials: 'omit',
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-      ...(init?.headers ?? {}),
-    },
-  });
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      ...init,
+      // Never allow credentials on these public GET endpoints.
+      credentials: 'omit',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        ...(init?.headers ?? {}),
+      },
+    });
+  } catch {
+    throw new ApiError(0, `Cannot reach the API: ${path}`);
+  }
   if (!res.ok) {
     let detail = `API request failed (${res.status}): ${path}`;
     try {
@@ -52,9 +85,32 @@ export async function fetchJson<T>(path: string, init?: RequestInit): Promise<T>
     } catch {
       /* fall through to generic message */
     }
-    throw new Error(detail);
+    throw new ApiError(res.status, detail);
   }
   return (await res.json()) as T;
+}
+
+/**
+ * GET helper with a small bounded retry, for idempotent reads only.
+ *
+ * The market data pages are server-rendered, so a single transient blip
+ * between the Next server and the API (a dropped Supabase connection, a
+ * restarting backend) used to blank the whole markets section with
+ * "Temporarily unavailable". Reads are side-effect free, so retrying twice
+ * costs at most ~0.8s and turns a transient 5xx into a rendered page.
+ *
+ * Never use this for POSTs: a retried trade/deposit could execute twice.
+ */
+async function fetchReadJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const delays = [200, 600];
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await fetchJson<T>(path, init);
+    } catch (err) {
+      if (attempt >= delays.length || !isRetryableReadError(err)) throw err;
+      await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
+    }
+  }
 }
 
 /** Attach the authenticated user's bearer token to a client request, if signed in. */
@@ -99,32 +155,32 @@ export interface MarketsGroup {
 
 /** Fetch the full home bundle from the backend (server-side helper). */
 export async function fetchHomeData(): Promise<HomeData> {
-  return fetchJson<HomeData>(`${API_BASE}/api/home`);
+  return fetchReadJson<HomeData>(`${API_BASE}/api/home`);
 }
 
 export async function fetchWatch(): Promise<WatchItem[]> {
-  return fetchJson<WatchItem[]>(`${API_BASE}/api/watch`);
+  return fetchReadJson<WatchItem[]>(`${API_BASE}/api/watch`);
 }
 
 export async function fetchMarket(id: string): Promise<Market> {
-  return fetchJson<Market>(`${API_BASE}/api/markets/${encodeURIComponent(id)}`);
+  return fetchReadJson<Market>(`${API_BASE}/api/markets/${encodeURIComponent(id)}`);
 }
 
 export async function fetchMarketBook(id: string): Promise<OrderBook> {
-  return fetchJson<OrderBook>(
+  return fetchReadJson<OrderBook>(
     `${API_BASE}/api/markets/${encodeURIComponent(id)}/book`,
   );
 }
 
 export async function fetchMarketTrades(id: string, limit = 30): Promise<Trade[]> {
-  return fetchJson<Trade[]>(
+  return fetchReadJson<Trade[]>(
     `${API_BASE}/api/markets/${encodeURIComponent(id)}/trades?limit=${limit}`,
   );
 }
 
 /** All markets as a group (used by server-side listings). */
 export async function fetchMarketsGroup(): Promise<MarketsGroup> {
-  return fetchJson<MarketsGroup>(`${API_BASE}/api/markets`);
+  return fetchReadJson<MarketsGroup>(`${API_BASE}/api/markets`);
 }
 
 // ---------------------------------------------------------------------------
@@ -155,6 +211,35 @@ export async function placeTradeSession(req: TradeRequest): Promise<TradeRespons
     method: 'POST',
     body: JSON.stringify(req),
   });
+}
+
+export async function placeMultiTradeSession(req: TradeRequest): Promise<TradeResponse> {
+  // Try dedicated multi endpoints first, fallback to flexible routes
+  try {
+    return await clientJson<TradeResponse>('/trade/multi', {
+      method: 'POST',
+      body: JSON.stringify(req),
+    });
+  } catch {
+    try {
+      return await clientJson<TradeResponse>('/bets', {
+        method: 'POST',
+        body: JSON.stringify(req),
+      });
+    } catch {
+      try {
+        return await clientJson<TradeResponse>('/slip', {
+          method: 'POST',
+          body: JSON.stringify(req),
+        });
+      } catch {
+        return await clientJson<TradeResponse>('/trade', {
+          method: 'POST',
+          body: JSON.stringify(req),
+        });
+      }
+    }
+  }
 }
 
 export async function fetchBookSession(id: string): Promise<OrderBook> {
@@ -203,7 +288,7 @@ export async function refreshPaymentSession(id: string): Promise<Payment> {
 }
 
 export async function fetchWallet(id: string): Promise<Wallet> {
-  return fetchJson<Wallet>(`${API_BASE}/api/wallet/${encodeURIComponent(id)}`);
+  return fetchReadJson<Wallet>(`${API_BASE}/api/wallet/${encodeURIComponent(id)}`);
 }
 
 export async function connectWallet(
@@ -599,7 +684,7 @@ export function getBroadcastStatus(jobId: string): Promise<BroadcastStatus> {
 
 /** Public team directory (server-side helper; PII-free). */
 export async function fetchStaffPublic(): Promise<StaffPublic[]> {
-  return fetchJson<StaffPublic[]>(`${API_BASE}/api/staff`);
+  return fetchReadJson<StaffPublic[]>(`${API_BASE}/api/staff`);
 }
 
 /** Public team directory (client-side, via the same-origin proxy). */

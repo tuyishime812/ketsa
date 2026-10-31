@@ -151,7 +151,7 @@ export default function Portfolio({
               Portfolio
             </h1>
             <p className="mt-[6px] max-w-[520px] text-sm text-ink-2">
-              Balance, open exposure and P&L across every market, plus wandePay
+              Balance, open exposure and P&L across every market, plus PayChangu
               top-up and cash-out.
             </p>
           </div>

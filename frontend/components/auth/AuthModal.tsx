@@ -12,6 +12,8 @@ interface AuthModalProps {
   error: string | null;
   /** Email awaiting OTP verification, when a signup is in flight. */
   pendingEmail: string | null;
+  /** Local-dev only: the signup code echoed by the API (never in production). */
+  devOtp?: string | null;
   onLogin: (identifier: string, password: string) => void;
   /**
    * Ask for a sign-in code to be emailed. Resolves true when the backend
@@ -177,6 +179,7 @@ export default function AuthModal({
   busy,
   error,
   pendingEmail,
+  devOtp,
   onLogin,
   onRequestLoginCode,
   onLoginWithCode,
@@ -516,9 +519,9 @@ export default function AuthModal({
             </h2>
             <ul className="mt-6 space-y-3 text-[13px] text-white/70">
               {[
-                'Create an account and fund your wallet with real MWK via wandePay',
+                'Create an account and fund your wallet with real MWK ',
                 'Buy Yes or No and cash out the instant odds move',
-                'Top up with real money through wandePay',
+                'Top up with real money ',
               ].map((t) => (
                 <li key={t} className="flex items-start gap-2.5">
                   <span className="mt-[1px] flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full bg-brand text-[10px]">
@@ -581,19 +584,7 @@ export default function AuthModal({
                 </button>
               </div>
 
-              <div className="mt-6">
-                <button
-                  type="button"
-                  onClick={busy ? undefined : onGoogle}
-                  disabled={busy}
-                  className="flex w-full items-center justify-center gap-2.5 rounded-[9px] border border-line bg-white px-5 py-[12px] text-sm font-semibold text-ink transition-all duration-200 ease-ketsa hover:-translate-y-[1px] hover:border-ink hover:bg-paper disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <GoogleG />
-                  Continue with Google
-                </button>
-              </div>
-
-              <div className="my-5 flex items-center gap-3" aria-hidden>
+               <div className="my-5 flex items-center gap-3" aria-hidden>
                 <span className="h-px flex-1 bg-line" />
                 <span className="font-mono text-[10px] font-semibold uppercase tracking-[.08em] text-ink-3">
                   or
@@ -741,6 +732,26 @@ export default function AuthModal({
                 Enter it to activate your account — your Ketsa wallet is created
                 the moment the code checks out.
               </p>
+              {devOtp && (
+                <div className="rounded-[8px] border border-brand/25 bg-brand-tint px-[13px] py-[10px] text-[12.5px] leading-snug text-ink-2">
+                  <div className="font-semibold text-ink">Local development</div>
+                  <div className="mt-1">
+                    Email delivery is set to <span className="font-mono">log</span>,
+                    so no message was sent. Your code is{' '}
+                    <span className="font-mono text-[13px] font-bold tracking-[.15em] text-ink">
+                      {devOtp}
+                    </span>
+                    .
+                  </div>
+                  <button
+                    type="button"
+                    className="mt-2 font-semibold text-brand transition-colors hover:text-brand-ink"
+                    onClick={() => setOtp(devOtp)}
+                  >
+                    Use this code
+                  </button>
+                </div>
+              )}
               <Field
                 label="Verification code"
                 value={otp}
