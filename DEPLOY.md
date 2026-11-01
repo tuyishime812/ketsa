@@ -172,12 +172,11 @@ protected `/api/admin/*` through the same-origin `/api` path.
    > simply inert here. If you deliberately add a provider, enable it **and**
    > set `KETSA_AUTH0_CONNECTION` to its name.
 5. **Transactional email via Resend (recommended).** These flows depend on
-   it: **email-OTP signup verification** (an email registration is held
-   pending — no account, no seeded wallet — until the user enters the 6-digit
-   code), **forgot-password** (reset code emailed to the account's email),
+   it: **forgot-password** (reset code emailed to the account's email),
    **passwordless sign-in** (`POST /api/auth/login/code` emails a 6-digit
    sign-in code), and **admin → Broadcast** (one announcement per account that
-   has an email). Set `KETSA_RESEND_API_KEY` (from https://resend.com/api-keys)
+   has an email). Email registration does not send mail — the account and
+   wallet are created immediately. Set `KETSA_RESEND_API_KEY` (from https://resend.com/api-keys)
    and `KETSA_RESEND_FROM` to an address on a domain you've **verified in
    Resend** (Resend's default sandbox domain only delivers to your own inbox).
    Without the key no mail is sent: the API still answers normally but codes

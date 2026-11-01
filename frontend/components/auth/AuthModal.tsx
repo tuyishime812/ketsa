@@ -4,16 +4,12 @@ import { useEffect, useRef, useState } from 'react';
 
 type Mode = 'login' | 'register';
 type IdKind = 'email' | 'phone';
-type Step = 'auth' | 'verify' | 'forgot' | 'logincode';
+type Step = 'auth' | 'forgot' | 'logincode';
 
 interface AuthModalProps {
   initialMode?: Mode;
   busy: boolean;
   error: string | null;
-  /** Email awaiting OTP verification, when a signup is in flight. */
-  pendingEmail: string | null;
-  /** Local-dev only: the signup code echoed by the API (never in production). */
-  devOtp?: string | null;
   onLogin: (identifier: string, password: string) => void;
   /**
    * Ask for a sign-in code to be emailed. Resolves true when the backend
@@ -24,18 +20,14 @@ interface AuthModalProps {
   /** Complete a passwordless sign-in with the emailed code. */
   onLoginWithCode: (email: string, otp: string) => Promise<void>;
   /**
-   * Register. Resolves 'pending' when the backend answered 202 (email OTP
-   * emailed — the modal moves to the verify step) or null otherwise.
+   * Register. Email and phone signups complete immediately — the account and
+   * wallet exist as soon as this resolves, with no verification step.
    */
   onRegister: (
     name: string,
     identifier: string,
     password: string,
-  ) => Promise<'pending' | null>;
-  /** Complete an email signup with the emailed code. */
-  onVerify: (email: string, otp: string) => Promise<void>;
-  /** Re-send the signup code; true when a fresh code was emailed. */
-  onResendOtp: (email: string) => Promise<boolean>;
+  ) => Promise<void>;
   /** Request a password-reset code; resolves true when the request was sent. */
   onForgot: (identifier: string) => Promise<boolean>;
   /** Set a new password with the emailed code; true on success. */
@@ -178,14 +170,10 @@ export default function AuthModal({
   initialMode = 'login',
   busy,
   error,
-  pendingEmail,
-  devOtp,
   onLogin,
   onRequestLoginCode,
   onLoginWithCode,
   onRegister,
-  onVerify,
-  onResendOtp,
   onForgot,
   onReset,
   onGoogle,
@@ -201,14 +189,13 @@ export default function AuthModal({
   const [confirm, setConfirm] = useState('');
   const [showPw, setShowPw] = useState(false);
   const [localErrors, setLocalErrors] = useState<Record<string, string>>({});
-  // Verify step (email signup)
-  const [otp, setOtp] = useState('');
-  const [resent, setResent] = useState(false);
   // Forgot-password step
+  const [otp, setOtp] = useState('');
   const [forgotId, setForgotId] = useState('');
   const [forgotKind, setForgotKind] = useState<IdKind>('email');
   const [forgotEmail, setForgotEmail] = useState('');
   const [forgotSent, setForgotSent] = useState(false);
+  const [resetResent, setResetResent] = useState(false);
   const [newPw, setNewPw] = useState('');
   const [newPw2, setNewPw2] = useState('');
   const [resetDone, setResetDone] = useState(false);
@@ -216,15 +203,6 @@ export default function AuthModal({
   const [codeEmail, setCodeEmail] = useState('');
   const [codeSent, setCodeSent] = useState(false);
   const [codeResent, setCodeResent] = useState(false);
-
-  // A pending email signup flips the modal to the verify step.
-  useEffect(() => {
-    if (pendingEmail) {
-      setStep('verify');
-      setOtp('');
-      setResent(false);
-    }
-  }, [pendingEmail]);
 
   // --- Dialog accessibility ---------------------------------------------
   // The modal is exclusive: focus moves into it, Tab cycles within it, and
@@ -278,8 +256,6 @@ export default function AuthModal({
     };
   }, []);
 
-  const verifyEmailTarget = pendingEmail || identifier.trim();
-
   function switchMode(next: Mode) {
     setMode(next);
     setLocalErrors({});
@@ -305,43 +281,12 @@ export default function AuthModal({
     if (busy || !validate()) return;
     setResetDone(false);
     if (mode === 'login') onLogin(identifier.trim(), password);
-    else {
-      const outcome = await onRegister(name.trim(), identifier.trim(), password);
-      if (outcome === 'pending') {
-        setStep('verify');
-        setOtp('');
-        setResent(false);
-        setLocalErrors({});
-      }
-    }
-  }
-
-  async function submitVerify(e: React.FormEvent) {
-    e.preventDefault();
-    if (busy) return;
-    const code = otp.trim();
-    if (!OTP_RE.test(code)) {
-      setLocalErrors({ otp: 'Enter the 6-digit code from the email' });
-      return;
-    }
-    setLocalErrors({});
-    await onVerify(verifyEmailTarget, code);
-  }
-
-  async function resend() {
-    if (busy) return;
-    const ok = await onResendOtp(verifyEmailTarget);
-    if (ok) {
-      setResent(true);
-      setOtp('');
-      setLocalErrors({});
-    }
+    else await onRegister(name.trim(), identifier.trim(), password);
   }
 
   function backToForm() {
     setStep('auth');
     setOtp('');
-    setResent(false);
     setLocalErrors({});
   }
 
@@ -423,6 +368,7 @@ export default function AuthModal({
     if (forgotKind === 'email') {
       setForgotEmail(raw);
       setForgotSent(true);
+      setResetResent(false);
       setOtp('');
       setNewPw('');
       setNewPw2('');
@@ -454,11 +400,22 @@ export default function AuthModal({
     setMode('login');
     setResetDone(true);
     setForgotSent(false);
+    setResetResent(false);
     setForgotEmail('');
     setForgotId('');
     setOtp('');
     setNewPw('');
     setNewPw2('');
+  }
+
+  /** Re-send the reset code (backend enforces a 60s cooldown). */
+  async function resendResetCode() {
+    if (busy) return;
+    const ok = await onForgot(forgotEmail);
+    if (!ok) return;
+    setResetResent(true);
+    setOtp('');
+    setLocalErrors({});
   }
 
   const tab =
@@ -471,21 +428,17 @@ export default function AuthModal({
     'text-[12.5px] font-medium text-ink-3 transition-colors hover:text-ink disabled:cursor-not-allowed disabled:opacity-60';
 
   const kicker =
-    step === 'verify'
-      ? 'Check your email'
-      : step === 'forgot'
-        ? 'Password reset'
-        : mode === 'login'
-          ? 'Welcome back'
-          : 'Create your account';
+    step === 'forgot'
+      ? 'Password reset'
+      : mode === 'login'
+        ? 'Welcome back'
+        : 'Create your account';
   const heading =
-    step === 'verify'
-      ? 'Enter your code'
-      : step === 'forgot'
-        ? 'Recover your account'
-        : mode === 'login'
-          ? 'Log in to Ketsa'
-          : 'Start trading in minutes';
+    step === 'forgot'
+      ? 'Recover your account'
+      : mode === 'login'
+        ? 'Log in to Ketsa'
+        : 'Start trading in minutes';
 
   return (
     <div
@@ -724,70 +677,6 @@ export default function AuthModal({
             </>
           )}
 
-          {step === 'verify' && (
-            <form onSubmit={submitVerify} className="mt-6 space-y-4" noValidate>
-              <p className="text-[13.5px] leading-relaxed text-ink-2">
-                We emailed a 6-digit code to{' '}
-                <span className="font-semibold text-ink">{verifyEmailTarget}</span>.
-                Enter it to activate your account — your Ketsa wallet is created
-                the moment the code checks out.
-              </p>
-              {devOtp && (
-                <div className="rounded-[8px] border border-brand/25 bg-brand-tint px-[13px] py-[10px] text-[12.5px] leading-snug text-ink-2">
-                  <div className="font-semibold text-ink">Local development</div>
-                  <div className="mt-1">
-                    Email delivery is set to <span className="font-mono">log</span>,
-                    so no message was sent. Your code is{' '}
-                    <span className="font-mono text-[13px] font-bold tracking-[.15em] text-ink">
-                      {devOtp}
-                    </span>
-                    .
-                  </div>
-                  <button
-                    type="button"
-                    className="mt-2 font-semibold text-brand transition-colors hover:text-brand-ink"
-                    onClick={() => setOtp(devOtp)}
-                  >
-                    Use this code
-                  </button>
-                </div>
-              )}
-              <Field
-                label="Verification code"
-                value={otp}
-                onChange={(v) => setOtp(v.replace(/\D/g, '').slice(0, 6))}
-                placeholder="••••••"
-                inputMode="numeric"
-                error={localErrors.otp}
-              />
-              {error && (
-                <div role="alert" className="rounded-[8px] border border-neg/25 bg-neg-tint px-[13px] py-[10px] text-[13px] font-medium text-neg">
-                  {error}
-                </div>
-              )}
-              <button type="submit" className={submitBtn} disabled={busy}>
-                {busy ? 'Verifying…' : 'Verify & continue'}
-              </button>
-              <div className="flex items-center justify-between pt-1">
-                <button
-                  type="button"
-                  className={linkBtn}
-                  onClick={busy ? undefined : backToForm}
-                >
-                  ← Back
-                </button>
-                <button
-                  type="button"
-                  className={linkBtn}
-                  onClick={busy ? undefined : resend}
-                  disabled={busy}
-                >
-                  {resent ? 'Code resent — check your inbox' : 'Resend code'}
-                </button>
-              </div>
-            </form>
-          )}
-
           {step === 'logincode' && (
             <div className="mt-6">
               {!codeSent ? (
@@ -948,16 +837,29 @@ export default function AuthModal({
                   <button type="submit" className={submitBtn} disabled={busy}>
                     {busy ? 'Resetting…' : 'Set new password'}
                   </button>
-                  <button
-                    type="button"
-                    className={`${linkBtn} w-full text-center`}
-                    onClick={busy ? undefined : () => {
-                      setForgotSent(false);
-                      setLocalErrors({});
-                    }}
-                  >
-                    ← Back
-                  </button>
+                  <div className="flex items-center justify-between pt-1">
+                    <button
+                      type="button"
+                      className={linkBtn}
+                      onClick={busy ? undefined : () => {
+                        setForgotSent(false);
+                        setResetResent(false);
+                        setLocalErrors({});
+                      }}
+                    >
+                      ← Back
+                    </button>
+                    <button
+                      type="button"
+                      className={linkBtn}
+                      onClick={busy ? undefined : resendResetCode}
+                      disabled={busy}
+                    >
+                      {resetResent
+                        ? 'Code resent — check your inbox'
+                        : 'Resend code'}
+                    </button>
+                  </div>
                 </form>
               )}
             </div>

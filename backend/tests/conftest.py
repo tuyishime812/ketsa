@@ -70,29 +70,15 @@ def register_user(
     name: str = "Alice Trader",
     password: str = "password123",
 ) -> dict:
-    """Register a user, completing the email-OTP step when needed.
+    """Register a user and return the auth body.
 
-    Email signups return 202 pending (a code is "mailed" — captured via the
-    patched mailer transport) and only become accounts after verification;
-    phone signups return a session immediately. Returns the final auth body
-    (a 200 AuthResponse in both cases), asserting intermediate statuses.
+    Registration is immediate for both email and phone identifiers — there is
+    no email-OTP step — so this is a single POST that must answer 200 with a
+    full session.
     """
-    sent: list[tuple[str, str]] = []
-    with mock.patch(
-        "app.mailer.send_otp_email",
-        side_effect=lambda to, code, purpose, ttl, name="": (
-            sent.append((to, code)) or True
-        ),
-    ):
-        res = client.post(
-            "/api/auth/register",
-            json={"name": name, "identifier": identifier, "password": password},
-        )
-        if res.status_code == 202:
-            code = next(c for t, c in sent if t == identifier.strip().lower())
-            res = client.post(
-                "/api/auth/register/verify",
-                json={"email": identifier.strip().lower(), "otp": code},
-            )
-        assert res.status_code == 200, res.text
-        return res.json()
+    res = client.post(
+        "/api/auth/register",
+        json={"name": name, "identifier": identifier, "password": password},
+    )
+    assert res.status_code == 200, res.text
+    return res.json()

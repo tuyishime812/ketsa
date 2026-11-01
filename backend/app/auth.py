@@ -20,7 +20,7 @@ import re
 import secrets
 import time
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
@@ -154,8 +154,8 @@ def lookup_user_by_identifier(identifier: str) -> dict | None:
 # Codes are 6 random digits whose SHA-256 digest is stored (never plaintext),
 # single-use, TTL'd, capped at a few attempts, with a resend cooldown. Every
 # code is keyed by a scope string that also carries its payload:
-#   "signup:<email>" -> {name, password_hash} waiting for verification
 #   "reset:<user_id>" -> {} (user already exists)
+#   "login:<user_id>" -> {} (user already exists)
 # All thresholds are env-tunable so tests can force short windows.
 _OTP_TTL_SECONDS = 10 * 60
 _OTP_MAX_ATTEMPTS = 5
@@ -185,21 +185,6 @@ def _otp_resend_cooldown() -> int:
         return int(os.getenv("KETSA_OTP_RESEND_SECONDS", str(_OTP_RESEND_SECONDS)))
     except ValueError:
         return _OTP_RESEND_SECONDS
-
-
-def _dev_otp_visible() -> bool:
-    """True only for a local dev box that explicitly opted in.
-
-    With ``KETSA_EMAIL_DELIVERY=log`` no email is sent at all (the code is
-    printed to the backend log), so a developer has no way to complete an email
-    signup from the UI. Including the code in the 202 response fixes that — but
-    it would be an account-takeover hole anywhere real mail is configured, so
-    it is gated twice: log delivery (never used in production) *and* an explicit
-    ``KETSA_DEV_OTP_IN_RESPONSE=1`` opt-in. Either one missing keeps it off.
-    """
-    delivery = os.getenv("KETSA_EMAIL_DELIVERY", "").strip().lower()
-    opt_in = os.getenv("KETSA_DEV_OTP_IN_RESPONSE", "").strip().lower()
-    return delivery in {"log", "console"} and opt_in in {"1", "true", "yes", "on"}
 
 
 def _issue_otp(key: str, payload: dict | None = None) -> str:
@@ -276,15 +261,6 @@ class RegisterRequest(BaseModel):
     password: str
 
 
-class VerifyEmailRequest(BaseModel):
-    email: str
-    otp: str
-
-
-class ResendOtpRequest(BaseModel):
-    email: str
-
-
 class ForgotPasswordRequest(BaseModel):
     identifier: str  # email address OR Malawian phone number
 
@@ -324,17 +300,6 @@ class AuthResponse(BaseModel):
     token: str
     user: User
     wallet: Wallet
-
-
-class PendingVerifyResponse(BaseModel):
-    """202 returned by /register for email signups awaiting OTP verification."""
-    ok: bool = True
-    pending: bool = True
-    email: str
-    # Local-dev only: the code to type, present only when BOTH
-    # KETSA_EMAIL_DELIVERY=log and KETSA_DEV_OTP_IN_RESPONSE=1 are set.
-    # Production (Resend delivery) never returns it.
-    dev_otp: str | None = None
 
 
 def _create_account(*, identifier: str, email: str, phone: str, name: str, password_hash: str) -> dict:
@@ -468,10 +433,14 @@ def resolve_optional_user(authorization: str | None) -> dict | None:
 
 # --- Routes -----------------------------------------------------------------
 
-@router.post("/register", response_model=AuthResponse | PendingVerifyResponse)
-def register(
-    body: RegisterRequest, response: Response
-) -> AuthResponse | PendingVerifyResponse:
+@router.post("/register", response_model=AuthResponse)
+def register(body: RegisterRequest) -> AuthResponse:
+    """Create an account + wallet immediately (no email-verification step).
+
+    Both email and phone signups answer 200 with a full session. Note this
+    means an email address is *not* proven to belong to the registrant; the
+    duplicate check below is the only claim on an address.
+    """
     name = body.name.strip()
     try:
         kind, identifier = normalize_identifier(body.identifier)
@@ -490,111 +459,20 @@ def register(
         email, phone = identifier, ""
         if store.get_user_by_email(email):
             raise HTTPException(status_code=409, detail="An account with this email already exists")
-        # Proof-of-inbox first: no account, no wallet until the emailed code
-        # comes back. Pending signups expire with the OTP.
-        try:
-            code = _issue_otp(
-                f"signup:{email}",
-                payload={"name": name, "password_hash": _hash_password(body.password)},
-            )
-        except _OtpCooldown:
-            raise HTTPException(
-                status_code=429,
-                detail="A verification code was recently sent to this email. Try again shortly.",
-            )
-        sent = mailer.send_otp_email(email, code, "signup", _otp_ttl() // 60, name=name)
-        if not sent:
-            # The code never left the building. Discard it so the user can retry
-            # at once instead of being locked out by the resend cooldown for a
-            # code they never received, and tell the caller the truth rather
-            # than routing them to a verify step that can never be completed —
-            # that dead end is indistinguishable from a broken button.
-            # This path is taken identically for every address, so it leaks
-            # nothing beyond the existence disclosure the 409 above already makes.
-            authstate.delete_otp(f"signup:{email}")
-            raise HTTPException(
-                status_code=502,
-                detail="We couldn't send the verification email. Please try again in a moment.",
-            )
-        response.status_code = 202  # pending — account appears only after OTP
-        return PendingVerifyResponse(
-            email=email, dev_otp=code if _dev_otp_visible() else None
-        )
     else:
         email, phone = "", identifier
         if store.get_user_by_phone(phone):
             raise HTTPException(status_code=409, detail="An account with this phone number already exists")
-        user = _create_account(
-            identifier=identifier,
-            email=email,
-            phone=phone,
-            name=name,
-            password_hash=_hash_password(body.password),
-        )
-        token = _issue_session(user["id"])
-        return AuthResponse(token=token, user=_user_public(user), wallet=_wallet_for_user(user))
 
-
-@router.post("/register/verify", response_model=AuthResponse)
-def verify_email(body: VerifyEmailRequest) -> AuthResponse:
-    """Complete an email signup with the emailed one-time passcode."""
-    email = body.email.strip().lower()
-    if not _EMAIL_RE.match(email):
-        raise HTTPException(status_code=400, detail="Enter a valid email address")
-    if store.get_user_by_email(email):
-        raise HTTPException(status_code=409, detail="An account with this email already exists")
-    payload = _consume_otp(f"signup:{email}", body.otp.strip())
-    if payload is None:
-        raise HTTPException(status_code=401, detail="Invalid or expired verification code")
-    payload = payload.get("payload") or {}
-    name = str(payload.get("name") or email.split("@")[0])
-    password_hash = str(payload.get("password_hash") or "")
     user = _create_account(
-        identifier=email,
+        identifier=identifier,
         email=email,
-        phone="",
+        phone=phone,
         name=name,
-        password_hash=password_hash,
+        password_hash=_hash_password(body.password),
     )
     token = _issue_session(user["id"])
     return AuthResponse(token=token, user=_user_public(user), wallet=_wallet_for_user(user))
-
-
-@router.post("/register/resend", response_model=PendingVerifyResponse)
-def resend_register_otp(body: ResendOtpRequest, response: Response) -> PendingVerifyResponse:
-    """Re-email the signup code for a pending registration (cooldown-gated)."""
-    email = body.email.strip().lower()
-    if not _EMAIL_RE.match(email):
-        raise HTTPException(status_code=400, detail="Enter a valid email address")
-    if authstate.get_otp(f"signup:{email}") is None:
-        raise HTTPException(status_code=400, detail="No pending registration for this email")
-    try:
-        code = _issue_otp(f"signup:{email}")
-    except _OtpCooldown:
-        raise HTTPException(
-            status_code=429,
-            detail="A verification code was recently sent to this email. Try again shortly.",
-        )
-    entry = authstate.get_otp(f"signup:{email}") or {}
-    payload = entry.get("payload") or {}
-    sent = mailer.send_otp_email(
-        email, code, "signup", _otp_ttl() // 60, name=str(payload.get("name") or "")
-    )
-    if not sent:
-        # Report the failure rather than pretending the code is on its way.
-        # State is left as-is on purpose: the pending signup (and its payload)
-        # must survive, and clearing the cooldown here would let a caller loop
-        # this endpoint against the provider without limit. The honest message
-        # costs the user one cooldown window; losing their signup would cost
-        # them the whole form.
-        raise HTTPException(
-            status_code=502,
-            detail="We couldn't send the verification email. Please try again in a moment.",
-        )
-    response.status_code = 202
-    return PendingVerifyResponse(
-        email=email, dev_otp=code if _dev_otp_visible() else None
-    )
 
 
 @router.post("/forgot-password")

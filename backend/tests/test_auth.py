@@ -353,107 +353,52 @@ def test_phone_login_throttling(client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Email OTP verification (register) + password reset (forgot-password)
+# Registration is immediate (no email-OTP step) + password reset
 # ---------------------------------------------------------------------------
 
-def _start_email_signup(
-    client: TestClient,
-    email: str = "otp@ketsa.io",
-    name: str = "Otp User",
-    password: str = "password123",
-) -> tuple[list[tuple[str, str, str]], str]:
-    """POST /register for an email; returns (mail log, pending body email)."""
+def test_email_signup_is_immediate(client: TestClient) -> None:
+    """Email registration creates the account + wallet right away."""
     sent: list[tuple[str, str, str]] = []
-
-    def fake(to: str, code: str, purpose: str, ttl: int, name: str = "") -> bool:
-        sent.append((to, code, purpose))
-        return True
-
-    with mock.patch("app.mailer.send_otp_email", side_effect=fake):
+    with mock.patch(
+        "app.mailer.send_otp_email",
+        side_effect=lambda to, code, purpose, ttl, name="": (
+            sent.append((to, code, purpose)) or True
+        ),
+    ):
         res = client.post(
             "/api/auth/register",
-            json={"name": name, "identifier": email, "password": password},
+            json={
+                "name": "Otto User",
+                "identifier": "otp@ketsa.io",
+                "password": "password123",
+            },
         )
-    assert res.status_code == 202, res.text
-    body = res.json()
-    assert body["pending"] is True and body["email"] == email
-    assert len(sent) == 1 and sent[0][2] == "signup"
-    return sent, body["email"]
-
-
-def _verify(client: TestClient, email: str, otp: str):
-    return client.post(
-        "/api/auth/register/verify", json={"email": email, "otp": otp}
-    )
-
-
-def test_email_signup_waits_for_otp(client: TestClient) -> None:
-    sent, email = _start_email_signup(client, email="hover@ketsa.io")
-    code = sent[0][1]
-
-    # No account yet — nothing in the store, cannot log in, no wallet minted.
-    assert auth_mod.store.get_user_by_email(email) is None
-    assert client.post(
-        "/api/auth/login", json={"identifier": email, "password": "password123"}
-    ).status_code == 401
-
-    # Wrong code rejected.
-    assert _verify(client, email, "000000").status_code == 401
-
-    # Correct code completes the signup with a wallet (zero-funded — no mint).
-    res = _verify(client, email, code)
     assert res.status_code == 200, res.text
-    assert res.json()["user"]["id"] == email
-    assert res.json()["user"]["email"] == email
-    assert res.json()["wallet"]["balance"] == 0.0
+    body = res.json()
+    assert body["token"]
+    assert body["user"]["id"] == "otp@ketsa.io"
+    assert body["user"]["email"] == "otp@ketsa.io"
+    assert body["wallet"]["balance"] == 0.0
+    # Signup no longer sends an OTP email.
+    assert sent == []
+    assert auth_mod.store.get_user_by_email("otp@ketsa.io") is not None
 
-    # The code is single-use — and the account now exists, so the verify
-    # route answers 409 (account exists) before it would even look at the code.
-    assert _verify(client, email, code).status_code == 409
-    # A second signup for the now-taken email is rejected.
+    # The new account can log in straight away.
+    assert client.post(
+        "/api/auth/login",
+        json={"identifier": "otp@ketsa.io", "password": "password123"},
+    ).status_code == 200
+
+
+def test_email_signup_duplicate_rejected(client: TestClient) -> None:
+    _register(client, email="once@ketsa.io")
     assert client.post(
         "/api/auth/register",
-        json={"name": "Dup", "identifier": email, "password": "password123"},
+        json={"name": "Dup", "identifier": "once@ketsa.io", "password": "password123"},
     ).status_code == 409
 
 
-def test_email_signup_otp_attempts_then_resend(client: TestClient) -> None:
-    with mock.patch.dict(
-        os.environ, {"KETSA_OTP_MAX_ATTEMPTS": "1", "KETSA_OTP_RESEND_SECONDS": "0"}
-    ):
-        sent, email = _start_email_signup(client, email="tries@ketsa.io")
-        code = sent[0][1]
-
-        # One wrong attempt burns the code.
-        assert _verify(client, email, "000000").status_code == 401
-        assert _verify(client, email, code).status_code == 401  # correct but burned
-
-        # Resend issues a fresh code that works.
-        sent2: list[tuple[str, str, str]] = []
-
-        def fake(to, code, purpose, ttl, name="") -> bool:
-            sent2.append((to, code, purpose))
-            return True
-
-        with mock.patch("app.mailer.send_otp_email", side_effect=fake):
-            res = client.post("/api/auth/register/resend", json={"email": email})
-            assert res.status_code == 202, res.text
-        new_code = sent2[0][1]
-        assert new_code != code
-        assert _verify(client, email, new_code).status_code == 200
-
-
-def test_email_signup_resend_cooldown(client: TestClient) -> None:
-    _, email = _start_email_signup(client, email="resend@ketsa.io")
-    # Immediate resend hits the default 60s cooldown.
-    res = client.post("/api/auth/register/resend", json={"email": email})
-    assert res.status_code == 429
-    # Nobody can verify an email that was never asked to sign up.
-    assert _verify(client, "ghost@nowhere.io", "123456").status_code == 401
-
-
-def test_register_phone_skips_otp(client: TestClient) -> None:
-    # Phone signups are immediate (no email to verify) — unchanged behavior.
+def test_register_phone_is_immediate(client: TestClient) -> None:
     res = client.post(
         "/api/auth/register",
         json={"name": "Phona Gwede", "identifier": "0997 654 321", "password": "password123"},
@@ -544,23 +489,24 @@ def test_reset_password_unknown_email_uniform(client: TestClient) -> None:
     assert res.status_code == 401
 
 
-def test_otp_expired_by_ttl(client: TestClient) -> None:
-    with mock.patch.dict(os.environ, {"KETSA_OTP_TTL_SECONDS": "3", "KETSA_OTP_RESEND_SECONDS": "0"}):
-        sent, email = _start_email_signup(client, email="tick@ketsa.io")
-        code = sent[0][1]
-        # Age the entry past its TTL without sleeping.
-        key = f"signup:{email}"
-        authstate.expire_otp(key, time.time() - 1)
-        assert _verify(client, email, code).status_code == 401
-        # Resend is still possible and issues a working code.
-        sent2: list[tuple[str, str, str]] = []
+def test_reset_otp_expired_by_ttl(client: TestClient) -> None:
+    reg = _register(client, email="tick@ketsa.io")
+    sent: list[tuple[str, str, str]] = []
 
-        def fake(to, code, purpose, ttl, name="") -> bool:
-            sent2.append((to, code, purpose))
-            return True
+    def fake(to, code, purpose, ttl, name="") -> bool:
+        sent.append((to, code, purpose))
+        return True
 
-        with mock.patch("app.mailer.send_otp_email", side_effect=fake):
-            assert client.post(
-                "/api/auth/register/resend", json={"email": email}
-            ).status_code == 202
-        assert _verify(client, email, sent2[0][1]).status_code == 200
+    with mock.patch("app.mailer.send_otp_email", side_effect=fake):
+        assert client.post(
+            "/api/auth/forgot-password", json={"identifier": "tick@ketsa.io"}
+        ).status_code == 200
+    code = sent[0][1]
+
+    # Age the entry past its TTL without sleeping.
+    key = f"reset:{reg['user']['id']}"
+    authstate.expire_otp(key, time.time() - 1)
+    assert client.post(
+        "/api/auth/reset-password",
+        json={"email": "tick@ketsa.io", "otp": code, "new_password": "brandnew123"},
+    ).status_code == 401

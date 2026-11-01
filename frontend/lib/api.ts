@@ -16,9 +16,7 @@ import type {
   NotificationItem,
   OrderBook,
   Payment,
-  PendingVerification,
   RegisterCredentials,
-  RegisterResult,
   StaffInviteResult,
   StaffMember,
   StaffPublic,
@@ -380,13 +378,12 @@ async function authRequest<T>(path: string, init?: RequestInit): Promise<T> {
 /**
  * Register a user account.
  *
- * Email signups answer 202 with `{ok, pending, email}` — an emailed OTP must
- * be verified via `verifyEmail()` before the account exists (and a wallet is
- * minted). Phone signups answer 200 with a full session immediately.
+ * Both email and phone signups answer 200 with a full session — the account
+ * (and its wallet) exists as soon as this resolves. No email-OTP step.
  */
 export async function registerSession(
   body: RegisterCredentials,
-): Promise<RegisterResult> {
+): Promise<AuthSession> {
   const res = await authFetch('/register', {
     method: 'POST',
     body: JSON.stringify(body),
@@ -395,26 +392,10 @@ export async function registerSession(
     throw new Error(await authErrorFrom(res));
   }
   try {
-    return (await res.json()) as RegisterResult;
+    return (await res.json()) as AuthSession;
   } catch {
     throw new Error(AUTH_BAD_RESPONSE);
   }
-}
-
-/** Complete an email signup with the emailed one-time passcode. */
-export function verifyEmail(email: string, otp: string): Promise<AuthSession> {
-  return authRequest<AuthSession>('/register/verify', {
-    method: 'POST',
-    body: JSON.stringify({ email, otp }),
-  });
-}
-
-/** Re-email the signup code for a pending registration (cooldown-gated). */
-export function resendRegisterOtp(email: string): Promise<PendingVerification> {
-  return authRequest<PendingVerification>('/register/resend', {
-    method: 'POST',
-    body: JSON.stringify({ email }),
-  });
 }
 
 /** Request a password-reset code for an email account (uniform 200 reply). */

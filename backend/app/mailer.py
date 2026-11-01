@@ -1,16 +1,16 @@
 """Email delivery via Resend (https://resend.com).
 
-Sends transactional emails (signup verification OTP, password-reset OTP)
-through the Resend REST API. The transport is a thin ``urllib`` POST; the
-test-suite patches ``send_email`` directly, so no network is ever touched
-there.
+Sends transactional emails (password-reset OTP, passwordless sign-in OTP,
+admin broadcasts) through the Resend REST API. The transport is a thin
+``urllib`` POST; the test-suite patches ``send_email`` directly, so no network
+is ever touched there.
 
 Dev/offline mode: with ``KETSA_EMAIL_DELIVERY=log`` (or no
 ``KETSA_RESEND_API_KEY`` under the default ``auto`` mode) the message is logged
-instead of sent, so a local checkout can exercise the full register/verify and
-forgot-password flows before a sending domain exists. The OTP visible in the
-server log is exactly what the email would have contained — never run this in
-production, where the startup banner warns when the transport cannot deliver.
+instead of sent, so a local checkout can exercise the full forgot-password and
+passwordless sign-in flows before a sending domain exists. The OTP visible in
+the server log is exactly what the email would have contained — never run this
+in production, where the startup banner warns when the transport cannot deliver.
 """
 
 import html
@@ -85,8 +85,8 @@ def _delivery_mode() -> str:
       a misconfigured deployment is loud rather than silently dropping mail.
     * ``log`` — never touch the network; write the message to the server log.
       This is the supported local-dev workflow: the OTP is visible in the
-      backend output, so register/verify, password reset and login codes can be
-      exercised end-to-end without a sending domain.
+      backend output, so password reset and login codes can be exercised
+      end-to-end without a sending domain.
     * ``auto`` (default) — ``resend`` when an API key is configured, else
       ``log``. Keeps a bare checkout working with no setup while still sending
       for real the moment a key appears.

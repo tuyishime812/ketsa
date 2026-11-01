@@ -237,7 +237,6 @@ The current local value is `KETSA_RESEND_FROM=Ketsa <onboarding@resend.dev>`.
 **That is Resend's sandbox sender and only delivers to Resend's own test inbox.**
 With it, every code-bearing flow fails silently for real users:
 
-- signup verification (email registration stays pending forever),
 - forgot-password reset codes,
 - passwordless sign-in codes,
 - admin → Broadcast.
@@ -250,18 +249,20 @@ With it, every code-bearing flow fails silently for real users:
    in the backend host's env.
 
 **If you are NOT shipping email accounts yet:** you may launch with the sandbox
-sender, but keep email registration effectively off (or accept that email users
-never receive codes). Phone-only accounts do not need Resend.
+sender. Email *registration* still works (accounts are created immediately), but
+password-reset and passwordless sign-in codes will never reach real users.
+Phone-only accounts do not need Resend.
 
 > Phone-only accounts cannot self-reset (no SMS provider) — reset them from the
 > admin panel. That is a known, documented gap, not a regression.
 
 > **Local dev vs production.** `backend/.env` sets `KETSA_EMAIL_DELIVERY=log`,
 > so locally every OTP is written to the uvicorn log instead of being sent —
-> register/verify works for any address with no sending domain. The backend
-> prints a startup banner naming the active transport; if it says `log`, or
-> warns that the sender is Resend's sandbox, email signup cannot reach real
-> users. Production must use `resend` with a verified domain.
+> forgot-password and passwordless sign-in work for any address with no sending
+> domain. The backend prints a startup banner naming the active transport; if
+> it says `log`, or warns that the sender is Resend's sandbox, reset/sign-in
+> codes cannot reach real users. Production must use `resend` with a verified
+> domain.
 
 ---
 
@@ -300,7 +301,7 @@ so they are always reachable.
 | 3 | robots + sitemap on real domain | `curl -s "$FRONTEND_ORIGIN/robots.txt"` | `Host: $FRONTEND_ORIGIN` |
 | 4 | Admin login | open `$FRONTEND_ORIGIN/admin` | wrong password rejected; `KETSA_ADMIN_PASSWORD` accepted |
 | 5 | Edit persists | change a market/hero, restart backend, reload | edit survives (proves Supabase) |
-| 6 | Email signup | register an email account (if Step 5 passed) | code arrives in inbox |
+| 6 | Email signup | register an email account | account + wallet created immediately (no code) |
 | 7 | Social login | "Continue with Google" (if Auth0 set) | returns to `$FRONTEND_ORIGIN/auth/callback`, logged in |
 | 8 | Payments | `/portfolio` → deposit (if wandePay set) | no error; `KETSA_WANDE_TOKEN` set in host, **not** in repo |
 | 9 | WS live feed | open a market page, watch the order book | ticks update without refresh |

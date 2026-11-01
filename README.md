@@ -212,15 +212,16 @@ With both services running you can trade each market for real on the site:
     free seed) and trading winnings are spendable on markets but are never
     cashable out, so the house can never be asked to pay out funds it did not
     receive.
-  - **Email signups are verified.** With Resend configured, an email
-    registration returns a pending state and emails a 6-digit code — the
-    account (and its wallet) is only created once the code is entered,
-    so plaintext addresses can't be squatted. Resend also powers
-    **forgot-password**: enter the account email, enter the emailed code plus
-    a new password, and all existing sessions are revoked. Phone-only accounts
-    can't self-reset yet (no SMS provider) — an admin resets those from the
-    dashboard. Without `KETSA_RESEND_API_KEY` the resend flows still respond,
-    but no mail goes out (codes land in the server log for local testing).
+  - **Email signups are immediate.** An email registration creates the account
+    (and its wallet) straight away — there is no email-verification step, so an
+    address is not proven to belong to the registrant (registration only checks
+    it is not already taken). Resend powers **forgot-password**: enter the
+    account email, enter the emailed code plus a new password ("Resend code"
+    re-sends it, subject to the same cooldown), and all existing sessions are
+    revoked. Phone-only accounts can't self-reset yet (no SMS provider) — an
+    admin resets those from the dashboard. Without `KETSA_RESEND_API_KEY` the
+    reset/sign-in flows still respond, but no mail goes out (codes land in the
+    server log for local testing).
   - **Passwordless sign-in by email code.** The login modal also offers
     "Sign in with a code instead of a password": enter the account email and
     Resend delivers a 6-digit code ("Resend code" re-sends it, subject to the
@@ -232,7 +233,7 @@ With both services running you can trade each market for real on the site:
     Because the reply is deliberately uninformative, the UI shows the code
     step either way; that's the same trade-off `forgot-password` already makes.
     Codes are bound to one account, stored only as a SHA-256 digest, burned on
-    use, attempt-capped and TTL'd by the same OTP engine as signup/reset.
+    use, attempt-capped and TTL'd by the same OTP engine as password reset.
   - **Broadcast (admin).** Admin → Broadcast emails one announcement to every
     account that has an email address (phone-only accounts are skipped). The
     send runs as a background job — `POST /api/admin/broadcast` returns a
@@ -304,8 +305,8 @@ cd backend
 # withdrawable-balance rule (real money vs. play money, legacy seeds),
 # WebSocket subscription authorization + connection cap, Auth0 social login
 # (PKCE, state/nonce, connection binding, ticket + state store bounds, no
-# provider-detail leakage), OTP email delivery policy (honest failure on
-# signup vs. no-enumeration on account-discovery endpoints), passwordless
+# provider-detail leakage), OTP email delivery policy (no-enumeration on
+# account-discovery endpoints), passwordless
 # email-code sign-in (single-use, account-bound, expiry, per-IP relay
 # throttle), admin broadcast (admin-only, one job at a time, dedupe + cap,
 # HTML-escaped copy, CRLF-safe subject, progress), market resolution
@@ -371,7 +372,7 @@ and wired through `docker-compose.yml`.
 | `KETSA_AUTH0_CONNECTION`     | backend   | Auth0 connection accepted at the callback (guards against a token from any other connection in the tenant) | `google-oauth2` |
 | `KETSA_PUBLIC_BASE_URL`      | backend   | Public backend origin; Auth0 callback URI is `<this>/api/auth/social/callback` | `http://127.0.0.1:8000` |
 | `KETSA_FRONTEND_URL`         | backend   | Where the browser lands after Google login (`/auth/callback`) | `http://localhost:3000` |
-| `KETSA_RESEND_API_KEY`       | backend   | Resend API key — emails signup-verification, sign-in and password-reset OTPs, plus admin broadcasts (absent ⇒ no mail sent; codes logged for dev) | — (email OTP off) |
+| `KETSA_RESEND_API_KEY`       | backend   | Resend API key — emails password-reset and sign-in OTPs, plus admin broadcasts (absent ⇒ no mail sent; codes logged for dev) | — (email OTP off) |
 | `KETSA_RESEND_FROM`          | backend   | "From" address for OTP + broadcast emails; must be on a domain verified in Resend (the default sandbox sender only accepts `delivered@resend.dev`) | `Ketsa <onboarding@resend.dev>` |
 | `KETSA_EMAIL_DELIVERY`       | backend   | Transport for OTP/broadcast email: `auto` (Resend when a key is set, else log), `resend` (always send; missing key is a hard 502), or `log` (never send; write the code to the server log — **local dev only**) | `auto` |
 | `NEXT_PUBLIC_KETSA_CONTACT_EMAIL` | frontend | Contact address shown on the Terms/Privacy pages | — (generic "via the app" wording) |

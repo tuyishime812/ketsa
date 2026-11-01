@@ -110,7 +110,7 @@ create unique index if not exists ketsa_staff_phone_idx
 -- Auth state store (sessions, OTPs, SSO tickets, throttles).
 --
 -- One table serves every ephemeral auth purpose. `id` is namespaced by kind
--- ("session:<digest>", "otp:signup:<email>", "ticket:<t>", "throttle:<bucket>")
+-- ("session:<digest>", "otp:reset:<user_id>", "ticket:<t>", "throttle:<bucket>")
 -- so one sweep covers all of them. `secret_hash` holds a SHA-256 digest (never
 -- a plaintext code or token); `user_id` carries ownership for session/ticket
 -- rows so "revoke every session for this account" is one indexed delete;
