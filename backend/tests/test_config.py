@@ -207,11 +207,11 @@ def test_payments_disabled_blocks_deposits_and_withdrawals(admin: TestClient) ->
         "wallet_id": "w-anything",
         "amount": 500,
         "number": "0991234567",
-        "correspondent": "AIRTEL_MWI",
+        "correspondent": "AIRTEL",
     }
     # Pretend the gateway is configured, so the only reason left to refuse is the
     # admin toggle (the enabled check runs before auth).
-    with mock.patch("app.main.wande.configured", return_value=True):
+    with mock.patch("app.main.paychangu.configured", return_value=True):
         assert (
             admin.put("/api/admin/config/payments", json={"deposits_enabled": False}, headers=a).status_code
             == 200

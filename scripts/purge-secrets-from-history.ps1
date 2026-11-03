@@ -41,7 +41,8 @@ $Repo       = (git rev-parse --show-toplevel)
 $LeakedPath = 'backend/.env'
 $LeakCommit = 'de191c6'                      # commit that added the file
 $Sensitive  = @(
-  'KETSA_WANDE_TOKEN',
+  'PAYCHANGU_SECRET_KEY',
+  'PAYCHANGU_WEBHOOK_SECRET',
   'SUPABASE_SERVICE_ROLE_KEY',
   'KETSA_RESEND_API_KEY',
   'KETSA_AUTH0_CLIENT_SECRET',

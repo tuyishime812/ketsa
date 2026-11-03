@@ -11,7 +11,7 @@
 --                        these.
 --   ketsa_wallets      — persisted wallet balances. Real-money state: it is
 --                        NEVER wiped by the admin "reset content" action.
---   ketsa_payments     — the mobile-money (wandePay) payment ledger.
+--   ketsa_payments     — the mobile-money (PayChangu) payment ledger.
 --                        Idempotency flags live here, so this is also never
 --                        wiped by resets.
 --   ketsa_users        — accounts (password + Auth0/Google sign-ins).
@@ -65,9 +65,17 @@ create unique index if not exists ketsa_users_auth0_sub_idx
   on public.ketsa_users ((value ->> 'auth0_sub'))
   where value ->> 'auth0_sub' is not null;
 
+-- An empty string is NOT a phone number. Email-only accounts have no phone;
+-- older builds stored that as `""`, which still occupies a unique-index slot
+-- and made the *second* email signup fail with 23505 on this index (the first
+-- `""` row won). New rows store JSON null (see auth._create_account), and this
+-- predicate also exempts legacy `""` rows. Drop+recreate is needed because
+-- `if not exists` cannot change an existing index's predicate; the rebuild is
+-- brief and the whole file stays safe to re-run.
+drop index if exists public.ketsa_users_phone_idx;
 create unique index if not exists ketsa_users_phone_idx
   on public.ketsa_users ((value ->> 'phone'))
-  where value ->> 'phone' is not null;
+  where nullif(value ->> 'phone', '') is not null;
 
 -- Wallet ownership: EVERY authenticated request resolves the caller's account
 -- by wallet id (the ownership gate on wallet reads, trades and notifications).

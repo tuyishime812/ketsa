@@ -45,8 +45,9 @@ Pick one host (Railway, Render, or Fly). All run the same FastAPI app.
    | `KETSA_ADMIN_PASSWORD` | **required** — a strong, unique password for the `/admin` panel (see Step 2b) |
    | `KETSA_DB_BACKEND` | `supabase` if you want admin edits to persist across redeploys (and — required for payments — wallet balances + ledger). Defaults to `memory`, which resets on every restart. |
    | `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` | (**Supabase only** — see Step 2b) the project URL and secret service-role key |
-   | `KETSA_WANDE_TOKEN` | (**payments** — see Step 2b) wandePay API token for MWK deposits/withdrawals; inject via secret manager, never in code. Absent ⇒ payments `503` |
-   | `KETSA_WANDE_BASE_URL` | (**payments**) wandePay API base URL (defaults to `https://apiv1.wandepay.site/api/`) |
+   | `PAYCHANGU_SECRET_KEY` | (**payments** — see Step 2b) PayChangu secret API key for MWK deposits/withdrawals; inject via secret manager, never in code. Absent ⇒ payments `503` |
+   | `PAYCHANGU_WEBHOOK_SECRET` | (**payments**) PayChangu webhook signing secret (Settings → API & Webhooks); absent ⇒ `/api/payments/webhook` `503` |
+   | `PAYCHANGU_BASE_URL` | (**payments**) PayChangu API base URL (defaults to `https://api.paychangu.com`) |
 5. Deploy → note the **public HTTPS URL** (e.g. `https://ketsa-api.onrender.com`).
    Sanity check: `curl https://<your-backend>/api/health` → `{"status":"ok"}`.
 
@@ -135,12 +136,17 @@ protected `/api/admin/*` through the same-origin `/api` path.
    environment and **never** falls back to a committed secret. In production it
    does **not** default to `ketsa-admin` — leave it unset only for local dev.
 3. **Enable payments (optional).** To let users fund their wallet with real
-   money (MWK) and withdraw to mobile money, set **`KETSA_WANDE_TOKEN`** (from
-   wandePay) via your host's secret manager — never in code — and
-   `KETSA_WANDE_BASE_URL` (defaults to the production API). Keep
-   `KETSA_DB_BACKEND=supabase` so funded balances and the payment ledger
-   survive restarts. Without the token the payment endpoints return `503` and
-   the site runs purely on play money.
+   money (MWK) and withdraw to mobile money, set **`PAYCHANGU_SECRET_KEY`**
+   (from the PayChangu dashboard) via your host's secret manager — never in
+   code — plus `PAYCHANGU_WEBHOOK_SECRET` (Settings → API & Webhooks) and, if
+   you use a proxy/sandbox, `PAYCHANGU_BASE_URL` (defaults to the production
+   API). Keep `KETSA_DB_BACKEND=supabase` so funded balances and the payment
+   ledger survive restarts. Without the secret key the payment endpoints return
+   `503` and the site runs purely on play money. In the PayChangu dashboard
+   (Settings → API & Webhooks), register
+   `https://<your-backend>/api/payments/webhook` and use its signing secret as
+   `PAYCHANGU_WEBHOOK_SECRET`; polling plus the background reconciler still
+   settle payments if a webhook is missed.
 4. **Social login via Auth0 — "Continue with Google" (optional).** Set
    `KETSA_AUTH0_DOMAIN`, `KETSA_AUTH0_CLIENT_ID`, `KETSA_AUTH0_CLIENT_SECRET`
    (Auth0 application type **Regular Web Application** — the backend runs the
@@ -231,8 +237,8 @@ protected `/api/admin/*` through the same-origin `/api` path.
 - [ ] Admin edit persists after a backend restart (i.e. `KETSA_DB_BACKEND=supabase`
       with valid credentials — see Step 2b).
 - [ ] (If payments enabled) `/portfolio` shows the Payments panel and creating a
-      deposit/withdrawal does not error; `KETSA_WANDE_TOKEN` is set in the host's
-      secret manager and **not** committed to the repo.
+      deposit/withdrawal does not error; `PAYCHANGU_SECRET_KEY` is set in the
+      host's secret manager and **not** committed to the repo.
 - [ ] **The backend runs a single replica/worker.** See the warning below — this
       is a correctness requirement, not a scaling preference.
 - [ ] (If Supabase) `schema.sql` has been re-run since the `ketsa_users_wallet_id_idx`
@@ -308,12 +314,13 @@ from `POST /api/admin/login` (password = `KETSA_ADMIN_PASSWORD`), held in
 memory in dev), so a page refresh (and every subsequent visitor) sees the change.
 
 ### Payments are chosen + executed server-side
-The **browser never talks to wandePay**. The portfolio panel only submits
+The **browser never talks to PayChangu**. The portfolio panel only submits
 intent to the backend (`POST /api/payments/deposits` / `withdrawals`); the
-backend calls wandePay's API with the token server-to-server, stores a payment
-record, and credits/refunds the wallet only after polling confirms completion.
-Deposits are idempotent (a completed record credits exactly once) and failed
-withdrawals are refunded automatically.
+backend calls PayChangu's API with the secret key server-to-server, stores a
+payment record, and credits/refunds the wallet only after the provider confirms
+completion (webhook, poll, or the background reconciler). Deposits are
+idempotent (a completed record credits exactly once) and failed withdrawals are
+refunded automatically.
 
 ---
 
@@ -334,5 +341,5 @@ persistent admin edits set `KETSA_DB_BACKEND=supabase` and supply
 `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` (run `backend/db/schema.sql`
 once in the Supabase SQL editor); with the default memory backend, edits reset
 on restart. To enable
-payments add `KETSA_WANDE_TOKEN` (from a secret store) via the compose env.
+payments add `PAYCHANGU_SECRET_KEY` (from a secret store) via the compose env.
 Both images run as non-root users.

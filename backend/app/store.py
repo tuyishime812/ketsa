@@ -148,6 +148,10 @@ def get_payment(payment_id: str) -> dict | None:
     return get_backend().get_payment(payment_id)
 
 
+def find_payment_by_provider_id(provider_id: str) -> dict | None:
+    return get_backend().find_payment_by_provider_id(provider_id)
+
+
 def list_payments(wallet_id: str | None = None) -> list[dict]:
     return get_backend().list_payments(wallet_id)
 

@@ -5,6 +5,7 @@ import Link from 'next/link';
 import type { Category, Market, SectionCopy } from '@/lib/types';
 import { randomChange, sparkPath, trendColor } from '@/lib/utils';
 import { liveOf, useMarketFeed } from '@/components/market/MarketFeed';
+import { useBetSlip } from '@/components/betslip/BetSlipProvider';
 
 const TABS: { key: 'all' | Category; label: string }[] = [
   { key: 'all', label: 'All' },
@@ -86,7 +87,7 @@ export default function Markets({
  * card scrolls into view, staggered by index.
  */
 function RevealCard({ market, index }: { market: Market; index: number }) {
-  const ref = useRef<HTMLAnchorElement>(null);
+  const ref = useRef<HTMLDivElement>(null);
   const [drawn, setDrawn] = useState(false);
 
   useEffect(() => {
@@ -130,14 +131,18 @@ interface MarketCardProps {
   delay: number;
 }
 
-const MarketCard = forwardRef<HTMLAnchorElement, MarketCardProps>(
+const MarketCard = forwardRef<HTMLDivElement, MarketCardProps>(
   function MarketCard({ market: m, drawn, delay }, ref) {
+    const { addLeg, setIsOpen } = useBetSlip();
     return (
-      <Link
+      <div
         ref={ref}
-        href={`/markets/${m.id}`}
         className="group flex flex-col gap-[13px] rounded-m border border-line bg-white p-[18px] transition-all duration-200 ease-ketsa hover:-translate-y-[1px] hover:border-ink-3 hover:shadow-[0_12px_32px_-16px_rgba(12,21,38,.22)]"
       >
+        <Link
+          href={`/markets/${m.id}`}
+          className="flex flex-col gap-[13px]"
+        >
         <div className="flex items-center justify-between">
           <span className="rounded-[5px] bg-brand-tint px-[8px] py-[3px] font-mono text-[10px] font-semibold uppercase tracking-[.05em] text-brand">
             {m.tag}
@@ -206,7 +211,32 @@ const MarketCard = forwardRef<HTMLAnchorElement, MarketCardProps>(
           <span>{m.meta[0]}</span>
           <span>{m.meta[1]}</span>
         </div>
-      </Link>
+        </Link>
+        {m.status !== 'resolved' && (
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                addLeg({ market_id: m.id, market: m, outcome: 'yes', side: 'buy', amount: 100 });
+                setIsOpen(true);
+              }}
+              className="flex-1 rounded-[6px] border border-pos/40 bg-pos/5 py-[6px] text-center font-mono text-[10px] uppercase tracking-[.06em] text-pos hover:bg-pos/10"
+            >
+              + Add YES to slip
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                addLeg({ market_id: m.id, market: m, outcome: 'no', side: 'buy', amount: 100 });
+                setIsOpen(true);
+              }}
+              className="flex-1 rounded-[6px] border border-neg/40 bg-neg/5 py-[6px] text-center font-mono text-[10px] uppercase tracking-[.06em] text-neg hover:bg-neg/10"
+            >
+              + Add NO to slip
+            </button>
+          </div>
+        )}
+      </div>
     );
   },
 );

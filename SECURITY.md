@@ -1,6 +1,6 @@
 # Security Policy
 
-Ketsa moves real money (MWK via wandePay) and stores PII (email / phone). Treat
+Ketsa moves real money (MWK via PayChangu) and stores PII (email / phone). Treat
 every credential as production-grade and every write path as adversarial.
 
 ---
@@ -84,7 +84,8 @@ to `origin/main`. That file contained **live** credentials:
 
 | Variable | Exposure |
 |----------|----------|
-| `KETSA_WANDE_TOKEN` | real-money mobile-money gateway — issue payouts |
+| `PAYCHANGU_SECRET_KEY` | real-money mobile-money gateway — issue payouts |
+| `PAYCHANGU_WEBHOOK_SECRET` | forge payment-settled webhooks (still re-verified before crediting) |
 | `SUPABASE_SERVICE_ROLE_KEY` | bypasses Row Level Security — full read/write on wallets, payments, users |
 | `KETSA_RESEND_API_KEY` | send mail as the verified sending domain |
 | `KETSA_AUTH0_CLIENT_SECRET` | OAuth client secret |
@@ -97,7 +98,7 @@ in git **history** and remote clones. Untracking alone does not un-leak it.
 
 1. **Rotate every credential above, at the source.** Rotation — not the history
    rewrite — is what actually stops the bleed:
-   - wandePay: issue a new token, revoke the old one.
+   - PayChangu: issue a new secret + webhook secret, revoke the old ones.
    - Supabase: rotate the `service_role` JWT secret (Project Settings → API), or
      create a fresh key and invalidate the old.
    - Resend: delete the exposed key in the dashboard, create a new one.
@@ -145,10 +146,10 @@ in git **history** and remote clones. Untracking alone does not un-leak it.
    (Alternatively use BFG Repo-Cleaner. Rotating is mandatory either way — the
    values were already fetchable.)
 3. **Audit for abuse since the leak** (commit dated 2026-10-11): review Supabase
-   logs, the wandePay payment ledger, Resend send history, and `/admin` access
+   logs, the PayChangu payment ledger, Resend send history, and `/admin` access
    for unknown mutations, payouts, or sends.
 4. **Verify:** `git log --all -- backend/.env` returns nothing, and
-   `git grep -I -n 'SERVICE_ROLE_KEY\|WANDE_TOKEN\|RESEND_API_KEY' $(git rev-list --all)`
+   `git grep -I -n 'SERVICE_ROLE_KEY\|PAYCHANGU_SECRET_KEY\|PAYCHANGU_WEBHOOK_SECRET\|RESEND_API_KEY' $(git rev-list --all)`
    finds no live value.
 5. **Prevent recurrence:** confirm the gitleaks workflow is green and enable
    GitHub push protection.

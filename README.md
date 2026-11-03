@@ -260,7 +260,7 @@ With both services running you can trade each market for real on the site:
   chart, a live YES/NO order book, a trade widget and a recent-trades tape.
 - **Portfolio.** `/portfolio` tracks wallet balance, open positions, and realized
   + unrealized P&L against live prices, plus a **payments** panel for deposits
-  and withdrawals via wandePay.
+  and withdrawals via PayChangu.
 - **Live updates.** A WebSocket feed (`ws://…/api/ws`) streams market ticks,
   fills, **resolutions** and **leaderboard changes** to all open pages; clients
   can subscribe a wallet on the same socket to receive that wallet's private
@@ -275,12 +275,13 @@ With both services running you can trade each market for real on the site:
   but **wallets are persisted** through the storage backend — a funded balance
   survives a backend restart (use `KETSA_DB_BACKEND=supabase` in production
   when real money is involved).
-- **Payments (wandePay — MWK).** With `KETSA_WANDE_TOKEN` configured, the
+- **Payments (PayChangu — MWK).** With `PAYCHANGU_SECRET_KEY` configured, the
   portfolio lets users top up their balance with real money via Airtel Money /
-  TNM Mpamba and payout back to mobile money. Deposits are credited when the
-  wandePay order completes (idempotent — never double-credited); failed payouts
-  are refunded automatically. Without a token the payment endpoints return 503
-  and the site runs purely on play money.
+  TNM Mpamba and payout back to mobile money. Payments settle through a signed
+  webhook, status polling, or a background reconciler, and are credited exactly
+  once (idempotent — never double-credited); failed payouts are refunded
+  automatically. Without a secret key the payment endpoints return 503 and the
+  site runs purely on play money.
 
 Note: when the backend is **not** reachable from the browser at the default
 `127.0.0.1:8000` (e.g. a Vercel frontend + hosted backend), set
@@ -300,8 +301,8 @@ cd backend
 # management, admin login brute-force throttling, the matching engine
 # (wallets, books, execution, WS feed), account auth (register/login,
 # sessions, throttling, change password, wallet-binding on writes),
-# leaderboard + notifications, wandePay payments (deposits, withdrawals,
-# idempotent crediting, refunds, transaction + daily caps), the
+# leaderboard + notifications, PayChangu payments (deposits, withdrawals,
+# idempotent crediting, refunds, webhook + reconciler, transaction + daily caps), the
 # withdrawable-balance rule (real money vs. play money, legacy seeds),
 # WebSocket subscription authorization + connection cap, Auth0 social login
 # (PKCE, state/nonce, connection binding, ticket + state store bounds, no
@@ -362,8 +363,9 @@ and wired through `docker-compose.yml`.
 | `KETSA_DB_BACKEND`           | backend   | Storage backend: `memory` (default) or `supabase`   | `memory` |
 | `SUPABASE_URL`               | backend   | Supabase project URL (Supabase only)                | — |
 | `SUPABASE_SERVICE_ROLE_KEY`  | backend   | Supabase secret service-role key (Supabase only)    | — |
-| `KETSA_WANDE_TOKEN`          | backend   | wandePay API token for MWK deposits/withdrawals (secret; absent ⇒ payments 503) | — (payments off) |
-| `KETSA_WANDE_BASE_URL`       | backend   | wandePay API base URL                              | `https://apiv1.wandepay.site/api/` |
+| `PAYCHANGU_SECRET_KEY`       | backend   | PayChangu secret API key for MWK deposits/withdrawals (secret; absent ⇒ payments 503) | — (payments off) |
+| `PAYCHANGU_WEBHOOK_SECRET`   | backend   | PayChangu webhook signing secret (secret; absent ⇒ webhook 503) | — (webhook off) |
+| `PAYCHANGU_BASE_URL`         | backend   | PayChangu API base URL                             | `https://api.paychangu.com` |
 | `KETSA_AUTH_MAX_FAILURES`    | backend   | Failed logins per email/phone before a temporary lockout  | `5` |
 | `KETSA_AUTH_LOCKOUT_SECONDS` | backend   | Lockout window after too many failed logins         | `900` |
 | `KETSA_AUTH0_DOMAIN`         | backend   | Auth0 tenant (e.g. `ketsa.us.auth0.com`) — enables "Continue with Google" | — (social off; button returns 503) |
@@ -393,7 +395,7 @@ allowlist). The trading features add two **public write** endpoints —
 ledger (no real funds unless payments are configured) and are gated by the
 per-IP rate limiter. The payments endpoints (`POST /api/payments/deposits`,
 `POST /api/payments/withdrawals`, `GET /api/payments/{id}`) move **real money
-in MWK** and require `KETSA_WANDE_TOKEN`; without it they respond `503` so the
+in MWK** and require `PAYCHANGU_SECRET_KEY`; without it they respond `503` so the
 site degrades to play-money mode. Payment state is guarded: deposits are
 credited idempotently against the payment record and failed withdrawals are
 refunded, so restarting or double-polling cannot double-credit funds. Wallet
@@ -504,7 +506,7 @@ the same treatment.
 
 **Withdrawal ceiling (real vs. play money).** Every wallet tracks two pools:
 `balance` (spendable on markets) and `withdrawable` (real money that actually
-arrived through wandePay, plus refunds). Only the second can be paid out. This
+arrived through PayChangu, plus refunds). Only the second can be paid out. This
 is what stops a wallet persisted under the old free-money seed — or a trader
 running up winnings on house money — from cashing out funds the house never
 received. Wallets persisted before this field existed read `withdrawable` as
@@ -588,9 +590,10 @@ Any Node + Python PaaS works:
   set `KETSA_DB_BACKEND=supabase` with `SUPABASE_URL` +
   `SUPABASE_SERVICE_ROLE_KEY` (run `backend/db/schema.sql` once in the
   Supabase SQL editor).
-  To enable real-money payments, inject `KETSA_WANDE_TOKEN` via your host's
-  secret manager (never in code) — and keep `KETSA_DB_BACKEND=supabase` so
-  funded balances and the payment ledger persist.
+  To enable real-money payments, inject `PAYCHANGU_SECRET_KEY` (and
+  `PAYCHANGU_WEBHOOK_SECRET`) via your host's secret manager (never in code) —
+  and keep `KETSA_DB_BACKEND=supabase` so funded balances and the payment
+  ledger persist.
 - **All-in-one** — use `docker compose up --build` behind a TLS proxy.
 
 See `DEPLOY.md` for the full admin + persistent-storage walkthrough.

@@ -215,6 +215,7 @@ class StoreBackend(Protocol):
     def delete_user(self, user_id: str) -> bool: ...
     def upsert_payment(self, payment: dict) -> None: ...
     def get_payment(self, payment_id: str) -> dict | None: ...
+    def find_payment_by_provider_id(self, provider_id: str) -> dict | None: ...
     def list_payments(self, wallet_id: str | None = None) -> list[dict]: ...
     def upsert_notification(self, notification: dict) -> None: ...
     def list_notifications(self, wallet_id: str | None = None, limit: int = 50) -> list[dict]: ...
@@ -456,7 +457,9 @@ class MemoryBackend:
             return None
         needle = "".join(phone.split()).lstrip("0")
         for u in self._users.values():
-            if u.get("phone", "").lstrip("0") == needle:
+            # `phone` is NULL for email-only accounts; `or ""` keeps the scan
+            # from raising on None.
+            if (u.get("phone") or "").lstrip("0") == needle:
                 return copy.deepcopy(u)
         return None
 
@@ -490,6 +493,15 @@ class MemoryBackend:
         self.init()
         p = self._payments.get(payment_id)
         return dict(p) if p else None
+
+    def find_payment_by_provider_id(self, provider_id: str) -> dict | None:
+        self.init()
+        for p in self._payments.values():
+            if provider_id and provider_id in (
+                p.get("provider_charge_id"), p.get("wande_id")
+            ):
+                return dict(p)
+        return None
 
     def list_payments(self, wallet_id: str | None = None) -> list[dict]:
         self.init()
@@ -1037,12 +1049,46 @@ class SupabaseBackend:
         self.init()
         return self._get_row(PAYMENTS_TABLE, payment_id)
 
+    def _payments_by_json_field(self, field: str, value: str) -> list[dict]:
+        """Filter payment rows by a top-level key in the `value` JSONB column.
+
+        Uses a PostgREST expression filter (matching the indexes in
+        ``schema.sql``), with a full-scan fallback so older projects without
+        the index still work.
+        """
+        if not value:
+            return []
+        try:
+            res = (
+                self.client.table(PAYMENTS_TABLE)
+                .select("*")
+                .eq(f"value->>{field}", value)
+                .execute()
+            )
+            return [_as_json(r.get("value")) for r in (res.data or [])]
+        except Exception:
+            return [p for p in self._list_rows(PAYMENTS_TABLE) if p.get(field) == value]
+
+    def find_payment_by_provider_id(self, provider_id: str) -> dict | None:
+        self.init()
+        if not provider_id:
+            return None
+        rows = self._payments_by_json_field("provider_charge_id", provider_id)
+        if not rows:
+            # Rows written before the rename stored the provider id as `wande_id`.
+            rows = self._payments_by_json_field("wande_id", provider_id)
+        return rows[0] if rows else None
+
     def list_payments(self, wallet_id: str | None = None) -> list[dict]:
         self.init()
-        items = self._list_rows(PAYMENTS_TABLE)
         if wallet_id:
-            items = [p for p in items if p.get("wallet_id") == wallet_id]
-        return sorted(items, key=lambda p: p.get("created", 0), reverse=True)
+            try:
+                rows = self._payments_by_json_field("wallet_id", wallet_id)
+            except Exception:
+                rows = [p for p in self._list_rows(PAYMENTS_TABLE) if p.get("wallet_id") == wallet_id]
+        else:
+            rows = self._list_rows(PAYMENTS_TABLE)
+        return sorted(rows, key=lambda p: p.get("created", 0), reverse=True)
 
     # --- notifications --------------------------------------------------------
     def upsert_notification(self, notification: dict) -> None:

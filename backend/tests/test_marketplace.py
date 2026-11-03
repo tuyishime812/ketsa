@@ -207,7 +207,7 @@ def test_buy_no_then_sell_no(client: TestClient) -> None:
         "/api/trade",
         json={
             "wallet_id": w["id"],
-            "market_id": "fed-cuts",
+            "market_id": "eu-dma",
             "outcome": "no",
             "side": "buy",
             "amount": 30.0,
@@ -222,7 +222,7 @@ def test_buy_no_then_sell_no(client: TestClient) -> None:
         "/api/trade",
         json={
             "wallet_id": w["id"],
-            "market_id": "fed-cuts",
+            "market_id": "eu-dma",
             "outcome": "no",
             "side": "sell",
             "shares": shares,
@@ -249,7 +249,7 @@ def test_sell_without_position_rejected(client: TestClient) -> None:
 
 def test_yes_no_price_invariants_hold_under_trading(client: TestClient) -> None:
     w = _wallet(client)
-    ids = ["btc-120k", "fed-cuts", "nova-finals", "ai-10t", "eth-gas"]
+    ids = ["btc-120k", "eu-dma", "nova-finals", "ai-10t", "hottest-year"]
     for i, market_id in enumerate(ids):
         outcome = "yes" if i % 2 == 0 else "no"
         client.post(

@@ -1,7 +1,7 @@
 """Environment loading for the Ketsa backend.
 
 Loads ``backend/.env`` into the process environment at import time so local
-development can keep secrets (Supabase URL + service-role key, wandePay token)
+development can keep secrets (Supabase URL + service-role key, PayChangu keys)
 out of version control. The file is gitignored (see ``backend/.gitignore``).
 
 Values already present in the environment win — a deployment that injects real

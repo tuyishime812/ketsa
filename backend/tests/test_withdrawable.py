@@ -1,7 +1,7 @@
 """Tests for the withdrawable-balance rule (real money vs. play money).
 
 `wallet.balance` is what can be traded with. `wallet.withdrawable` is the
-money that actually arrived through wandePay, and it is the only pool a
+money that actually arrived through PayChangu, and it is the only pool a
 withdrawal may draw on. The distinction matters because the free 1,000 MWK
 seed that pre-change wallets were minted with is still sitting in their
 persisted `balance` — without this rule that house money could be paid out
@@ -23,7 +23,7 @@ def _account(client: TestClient, identifier: str = "alice@ketsa.io") -> dict:
 
 
 def _fund_directly(client: TestClient, token: str, wallet_id: str, amount: float) -> None:
-    """Credit real funds without standing up the wandePay mock.
+    """Credit real funds without standing up the PayChangu mock.
 
     `credit_balance` is exactly what a completed deposit calls, so this
     exercises the same accounting path the payment route uses.
@@ -128,15 +128,13 @@ def test_api_rejects_withdrawal_above_withdrawable() -> None:
     import os
     from unittest import mock
 
-    from app import payments as wande
+    from app import payments as paychangu
 
     reset_backend()
     engine.reset()
-    m_wande = mock.Mock()
-    m_wande.create_withdrawal.return_value = {"data": {"payoutId": "p1"}}
-    m_wande.create_deposit.return_value = {"data": {"orderId": "d1"}}
-    with mock.patch.object(wande, "_http_post", m_wande), mock.patch.dict(
-        os.environ, {"KETSA_WANDE_TOKEN": "t"}, clear=False
+    m_http = mock.Mock()
+    with mock.patch.object(paychangu, "_http", m_http), mock.patch.dict(
+        os.environ, {"PAYCHANGU_SECRET_KEY": "t"}, clear=False
     ):
         client = TestClient(create_app())
         account = register_user(client, identifier="bob@ketsa.io")
@@ -155,5 +153,5 @@ def test_api_rejects_withdrawal_above_withdrawable() -> None:
         )
         assert res.status_code == 400
         assert "deposited" in res.json()["detail"].lower()
-        # wandePay was never called.
-        assert m_wande.create_withdrawal.call_count == 0
+        # PayChangu was never called.
+        assert m_http.call_count == 0

@@ -24,6 +24,7 @@ import copy
 import random
 import secrets
 import time
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 from . import dblock, store
@@ -52,6 +53,34 @@ def _round4(x: float) -> float:
     return round(x, 4)
 
 
+def _trading_block_reason(market: dict | None) -> str | None:
+    """Return why a market cannot accept new orders, or ``None`` if it can.
+
+    Trading is settled against real money, so a market must stop accepting
+    orders the moment its published end date passes — not only when an operator
+    later marks it resolved. Unparseable/missing dates are treated as open (a
+    content bug must not silently freeze every market).
+    """
+    if not market:
+        return None
+    if market.get("status") == "resolved":
+        return "This market has resolved — trading is closed"
+    if market.get("status") == "closed":
+        return "This market is closed — trading has stopped"
+    end_date = market.get("end_date")
+    if not end_date:
+        return None
+    try:
+        due = datetime.fromisoformat(str(end_date).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if due.tzinfo is None:
+        due = due.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) >= due:
+        return "This market has reached its end date — trading is closed"
+    return None
+
+
 class Marketplace:
     """Holds books, wallets and trades; executes market orders."""
 
@@ -65,6 +94,12 @@ class Marketplace:
         # tick. This is what makes admin-side changes (e.g. staff uploads) push
         # to connected clients in real time. None in tests / bare imports.
         self._emit_hook: Callable[[], None] | None = None
+        # Multi-leg execution is atomic: while a slip runs, notifications and
+        # stream events are queued (and wallet writes deferred) so a failure in
+        # leg N cannot leak fills/events from legs 1..N-1. See `place_trade`.
+        self._deferred_notifications: list[dict[str, Any]] | None = None
+        self._deferred_events: list[dict[str, Any]] | None = None
+        self._deferred_persist = False
 
     # ------------------------------------------------------------------
     # Event stream (pumped to WebSocket clients by main.py)
@@ -85,6 +120,9 @@ class Marketplace:
         self._emit_hook = hook
 
     def _emit(self, payload: dict[str, Any]) -> None:
+        if self._deferred_events is not None:
+            self._deferred_events.append(payload)
+            return
         self._events.append(payload)
         hook = self._emit_hook
         if hook is not None:
@@ -401,8 +439,9 @@ class Marketplace:
                 if book is None:
                     raise ValueError(f"Leg {leg['idx']}: Unknown market {leg['market_id']}")
                 market = store.get_market(leg['market_id'])
-                if market and market.get("status") == "resolved":
-                    raise ValueError(f"Leg {leg['idx']}: This market has resolved — trading is closed")
+                block = _trading_block_reason(market)
+                if block:
+                    raise ValueError(f"Leg {leg['idx']}: {block}")
                 # Basic balance check for buys
                 if leg['side'] == 'buy':
                     budget = leg['amount'] or 0.0
@@ -421,15 +460,58 @@ class Marketplace:
 
             results = []
             trades = []
-            # Execute all legs in order on the same wallet
-            for leg in norm_legs:
-                try:
-                    res = self.place_trade(wallet_id, leg['market_id'], leg['outcome'], leg['side'], amount=leg['amount'], shares=leg['shares'])
-                    results.append(res)
-                    if res.get('trade'):
-                        trades.append(res['trade'])
-                except ValueError as e:
-                    raise ValueError(f"Leg {leg['idx']} ({leg['market_id']}) failed: {str(e)}")
+            # Execute all legs atomically. A slip that touches several markets
+            # must either fill every leg or leave the wallet/books/tape exactly
+            # as they were; otherwise a late failure (illiquidity, balance) can
+            # strand earlier fills and emit phantom "Order filled" events.
+            affected = {leg["market_id"] for leg in norm_legs}
+            wallet_snapshot = copy.deepcopy(wallet)
+            book_snapshots = {
+                mid: copy.deepcopy(self._books[mid]) for mid in affected
+            }
+            trade_snapshots = {
+                mid: copy.deepcopy(self._trades.get(mid, [])) for mid in affected
+            }
+            previous_notifications = self._deferred_notifications
+            previous_events = self._deferred_events
+            previous_persist = self._deferred_persist
+            self._deferred_notifications = []
+            self._deferred_events = []
+            self._deferred_persist = True
+            try:
+                # Execute all legs in order on the same wallet.
+                for leg in norm_legs:
+                    try:
+                        res = self.place_trade(wallet_id, leg['market_id'], leg['outcome'], leg['side'], amount=leg['amount'], shares=leg['shares'])
+                        results.append(res)
+                        if res.get('trade'):
+                            trades.append(res['trade'])
+                    except ValueError as e:
+                        raise ValueError(f"Leg {leg['idx']} ({leg['market_id']}) failed: {str(e)}")
+            except BaseException:
+                # Roll back every leg's wallet, book and tape mutations, then
+                # discard the notifications/events they queued.
+                self._wallets[wallet_id] = wallet_snapshot
+                for mid, snapshot in book_snapshots.items():
+                    self._books[mid] = snapshot
+                for mid, snapshot in trade_snapshots.items():
+                    self._trades[mid] = snapshot
+                self._deferred_notifications = previous_notifications
+                self._deferred_events = previous_events
+                self._deferred_persist = previous_persist
+                self._persist(wallet_id)
+                raise
+            queued_notifications = self._deferred_notifications or []
+            queued_events = self._deferred_events or []
+            self._deferred_notifications = previous_notifications
+            self._deferred_events = previous_events
+            self._deferred_persist = previous_persist
+            # One durable write for the whole slip, then deliver its effects.
+            self._persist(wallet_id)
+            for item in queued_notifications:
+                store.upsert_notification(item)
+            for payload in queued_events:
+                self._emit(payload)
             # Return aggregated result
             return {
                 "wallet": self.wallet_view(wallet_id),
@@ -448,8 +530,9 @@ class Marketplace:
             raise ValueError("Unknown market")
         market = store.get_market(market_id)
         question = market["q"] if market else market_id
-        if market and market.get("status") == "resolved":
-            raise ValueError("This market has resolved — trading is closed")
+        block = _trading_block_reason(market)
+        if block:
+            raise ValueError(block)
 
         self._maybe_replenish(market_id)
 
@@ -457,17 +540,22 @@ class Marketplace:
             budget = amount or 0.0
             if budget < 0.01:
                 raise ValueError("Buy amount must be at least $0.01")
-            if outcome == "yes":
-                fills, avg_price, last_yes = self._fill_buy_yes(book, budget)
-                new_price = avg_price
-            else:
-                fills, avg_price, last_yes = self._fill_buy_no(book, budget)
-                new_price = avg_price
+            fill = self._fill_buy_yes if outcome == "yes" else self._fill_buy_no
+            # Probe the fill on a clone first: the fill helpers consume book
+            # levels as they walk them, so checking affordability *after* a
+            # real fill would permanently drain liquidity on every rejected
+            # (insufficient-balance) order.
+            probe_fills, _, _ = fill(copy.deepcopy(book), budget)
+            probe_spent = sum(f["notional"] for f in probe_fills)
+            if probe_spent <= _EPS:
+                raise ValueError("Not enough liquidity to place this order")
+            if wallet["balance"] + _EPS < probe_spent:
+                raise ValueError("Insufficient balance for this order")
+            fills, avg_price, last_yes = fill(book, budget)
+            new_price = avg_price
             spent = sum(f["notional"] for f in fills)
             if spent <= _EPS:
                 raise ValueError("Not enough liquidity to place this order")
-            if wallet["balance"] + _EPS < spent:
-                raise ValueError("Insufficient balance for this order")
             bought_shares = sum(f["qty"] for f in fills)
             self._apply_wallet(wallet_id, market_id, question, outcome, "buy",
                                bought_shares, new_price, spent)
@@ -648,6 +736,8 @@ class Marketplace:
 
     def _persist(self, wallet_id: str) -> None:
         """Persist a wallet snapshot so real funds survive restarts."""
+        if self._deferred_persist:
+            return
         wallet = self._wallets.get(wallet_id)
         if wallet is not None:
             store.upsert_wallet(copy.deepcopy(wallet))
@@ -668,6 +758,9 @@ class Marketplace:
             "ts": time.time(),
             "read": False,
         }
+        if self._deferred_notifications is not None:
+            self._deferred_notifications.append(item)
+            return
         store.upsert_notification(item)
         self._emit({"type": "notification", "notification": item})
 
@@ -719,7 +812,7 @@ class Marketplace:
     def credit_balance(self, wallet_id: str, amount: float) -> None:
         """Add real funds to a wallet's balance (a completed deposit, or a refund).
 
-        Every caller passes money that genuinely arrived via wandePay, so this
+        Every caller passes money that genuinely arrived via PayChangu, so this
         raises the withdrawable pool as well as the spendable balance. Callers
         are responsible for gating on idempotency (a payment record must only
         credit once).
@@ -750,7 +843,7 @@ class Marketplace:
         """Reserve funds for a withdrawal; raises if real funds are short.
 
         Withdrawals draw on ``deposited`` only — the money that actually
-        arrived through wandePay. Play balance (a legacy free seed, or trading
+        arrived through PayChangu. Play balance (a legacy free seed, or trading
         winnings) is spendable on markets but is never cashable out, so the
         zero-balance change can't be sidestepped by withdrawing money the
         house never received.

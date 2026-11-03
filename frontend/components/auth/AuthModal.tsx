@@ -537,6 +537,16 @@ export default function AuthModal({
                 </button>
               </div>
 
+              <button
+                type="button"
+                className="mt-4 flex w-full items-center justify-center gap-2 rounded-[9px] border border-line bg-white px-5 py-[10px] text-sm font-semibold text-ink transition-colors hover:bg-paper-alt disabled:cursor-not-allowed disabled:opacity-60"
+                onClick={busy ? undefined : onGoogle}
+                disabled={busy}
+              >
+                <GoogleG />
+                Continue with Google
+              </button>
+
                <div className="my-5 flex items-center gap-3" aria-hidden>
                 <span className="h-px flex-1 bg-line" />
                 <span className="font-mono text-[10px] font-semibold uppercase tracking-[.08em] text-ink-3">
@@ -563,11 +573,6 @@ export default function AuthModal({
                   onChange={setIdentifier}
                   error={localErrors.identifier}
                 />
-                {mode === 'register' && idKind === 'email' && !localErrors.identifier && (
-                  <p className="-mt-2 text-[11.5px] text-ink-3">
-                    Email signups are verified with a code we email to your inbox.
-                  </p>
-                )}
                 <div>
                   <div className="mb-1.5 flex items-center justify-between">
                     <span className="font-mono text-[11px] font-semibold uppercase tracking-[.07em] text-ink-3">

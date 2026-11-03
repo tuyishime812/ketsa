@@ -37,6 +37,7 @@ export default function BetSlip() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
+  const sharedStake = legs[0]?.amount;
   const totalStake = legs.reduce((sum, leg) => {
     const amt = typeof leg.amount === 'number' ? leg.amount : 0;
     return sum + amt;
@@ -181,25 +182,8 @@ export default function BetSlip() {
                           ✕
                         </button>
                       </div>
-                      <div className="mt-3">
-                        <label className="block">
-                          <span className="mb-1 block font-mono text-[10px] uppercase tracking-[.06em] text-ink-3">
-                            Stake ({wallet?.currency ?? 'MWK'})
-                          </span>
-                          <input
-                            type="number"
-                            inputMode="decimal"
-                            min="0.01"
-                            step="1"
-                            className="field w-full"
-                            value={leg.amount ?? ''}
-                            onChange={(e) => {
-                              const val = e.target.value === '' ? undefined : parseFloat(e.target.value);
-                              updateLeg(idx, { amount: Number.isFinite(val as number) ? (val as number) : undefined });
-                            }}
-                            placeholder="100"
-                          />
-                        </label>
+                      <div className="mt-2 font-mono text-[10.5px] text-ink-3">
+                        Stake {fmtUsd(leg.amount ?? 0)}
                       </div>
                       {leg.side === 'buy' && est && (
                         <div className="mt-2 rounded-[6px] bg-paper-alt px-2 py-1.5 font-mono text-[10.5px] text-ink-2">
@@ -214,6 +198,25 @@ export default function BetSlip() {
 
             {legs.length > 0 && (
               <div className="border-t border-line px-5 py-4 space-y-3">
+                <label className="block">
+                  <span className="mb-1 block font-mono text-[10px] uppercase tracking-[.06em] text-ink-3">
+                    Same stake for every selection ({wallet?.currency ?? 'MWK'})
+                  </span>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    min="0.01"
+                    step="1"
+                    className="field w-full"
+                    value={sharedStake ?? ''}
+                    onChange={(e) => {
+                      const val = e.target.value === '' ? undefined : parseFloat(e.target.value);
+                      const amount = Number.isFinite(val as number) ? (val as number) : undefined;
+                      legs.forEach((_, index) => updateLeg(index, { amount }));
+                    }}
+                    placeholder="100"
+                  />
+                </label>
                 <div className="space-y-1">
                   <div className="flex items-center justify-between font-mono text-[12px]">
                     <span className="text-ink-3 uppercase tracking-[.06em]">Total stake</span>

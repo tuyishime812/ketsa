@@ -8,7 +8,7 @@ Next.js frontend consumes. Keep field names/types in sync with
 import math
 from typing import List, Literal, Optional, Tuple
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 Category = Literal['politics', 'crypto', 'sports', 'culture', 'tech', 'climate']
 Trend = Literal['up', 'down']
@@ -101,7 +101,7 @@ class Wallet(BaseModel):
     id: str
     name: str
     balance: float
-    # Real money paid in via wandePay — the ceiling on a withdrawal. Absent on
+    # Real money paid in via PayChangu — the ceiling on a withdrawal. Absent on
     # wallets persisted before the field existed, so default to 0.0 (a legacy
     # free seed stays play money and is never cashable).
     withdrawable: float = 0.0
@@ -147,7 +147,7 @@ class AdminUserView(BaseModel):
     wallet_currency: str = "MWK"
     positions: int = 0
     trades: int = 0
-    # Wallet cash flow, from the (completed) wandePay ledger, plus a count of
+    # Wallet cash flow, from the (completed) PayChangu ledger, plus a count of
     # payments still in flight so an operator can spot a stuck withdrawal.
     deposits_total: float = 0.0
     withdrawals_total: float = 0.0
@@ -395,7 +395,20 @@ class Payment(BaseModel):
     status: str  # pending | completed | failed
     credited: bool = False  # deposits only — idempotency guard
     rolled_back: bool = False  # withdrawals only — refund guard if the payout fails
+    # The provider's charge id. We generate it ourselves (the payment id) so it
+    # is stable across retries and webhooks can be matched idempotently.
+    provider_charge_id: str | None = None
+    # Legacy field name kept on the wire so older clients/records still parse.
     wande_id: str | None = None
     message: str | None = None
     created: float
     updated: float
+
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_provider_id(cls, data):
+        if isinstance(data, dict):
+            provider = data.get("provider_charge_id") or data.get("wande_id")
+            if provider:
+                data = {**data, "provider_charge_id": provider, "wande_id": data.get("wande_id") or provider}
+        return data

@@ -86,7 +86,8 @@ export function BetSlipProvider({ children }: { children: React.ReactNode }) {
               p.side === leg.side,
           );
           if (exists) return prev;
-          return [...prev, { ...leg, addedAt: Date.now() }];
+          const sharedAmount = prev.length > 0 ? prev[0].amount : leg.amount;
+          return [...prev, { ...leg, amount: sharedAmount ?? leg.amount, addedAt: Date.now() }];
         });
         setIsOpen(true);
       },

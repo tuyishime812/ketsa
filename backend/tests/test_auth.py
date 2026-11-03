@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import auth as auth_mod
-from app import authstate
+from app import authstate, store
 from app.engine import engine
 from conftest import register_user
 
@@ -47,6 +47,27 @@ def test_register_duplicate_email(client: TestClient) -> None:
         "/api/auth/register",
         json={"name": "Bob", "identifier": "alice@ketsa.io", "password": "password123"},
     ).status_code == 409
+
+
+def test_email_signup_stores_null_phone_not_empty_string(client: TestClient) -> None:
+    """Regression: email-only accounts must persist phone as NULL, not "".
+
+    Postgres treats NULLs as distinct in a unique index but ``""`` as one
+    concrete value, so storing ``""`` for the first email account made every
+    later email signup fail with 23505 on ``ketsa_users_phone_idx``. The
+    in-memory backend does not enforce that index, so assert the stored shape
+    that keeps the real index exempt.
+    """
+    first = _register(client, email="first@ketsa.io")
+    assert first["user"]["phone"] is None
+    stored = store.get_user("first@ketsa.io")
+    assert stored is not None
+    assert stored["phone"] is None
+
+    # A second, different email account must remain creatable.
+    second = _register(client, email="second@ketsa.io")
+    assert second["user"]["phone"] is None
+    assert second["user"]["id"] == "second@ketsa.io"
 
 
 def test_login_success_and_failure(client: TestClient) -> None:
@@ -267,7 +288,7 @@ def _register_phone(
 
 def test_register_with_phone_normalizes_identifier(client: TestClient) -> None:
     body = _register_phone(client)
-    # Leading 0, spaces stripped → canonical 9-digit form (wandePay-compatible).
+    # Leading 0, spaces stripped → canonical 9-digit form (payments-compatible).
     assert body["user"]["id"] == "991234567"
     assert body["user"]["phone"] == "991234567"
     assert body["user"]["email"] == ""

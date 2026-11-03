@@ -41,7 +41,7 @@ so the hardened code is what is actually exposed.
 - [ ] Admin access to the **backend host** (Railway / Render / Fly / VPS).
 - [ ] Access to the **Supabase** project (`SUPABASE_URL` + service-role key).
 - [ ] Access to the **Resend** dashboard and the DNS host for the sending domain.
-- [ ] Access to the **Auth0** tenant and the **wandePay** account.
+- [ ] Access to the **Auth0** tenant and the **PayChangu** account.
 - [ ] Confirm the backend will run as **exactly one** replica/worker (see
       `DEPLOY.md` → "Run exactly ONE backend process while real money is in play").
 
@@ -56,7 +56,7 @@ BACKEND_ORIGIN  = https://<your-backend-domain>    # e.g. https://ketsa-api.onre
 
 ## Step −1 — Rotate the leaked credentials (**BLOCKER, do first**)
 
-`backend/.env` with **live** secrets (wandePay token, Supabase service-role key,
+`backend/.env` with **live** secrets (PayChangu secret key, Supabase service-role key,
 Resend key, Auth0 client secret, admin password) was committed in `de191c6` and
 pushed to `origin/main`. The file is now untracked, but the values are still in
 history and must be treated as publicly known.
@@ -125,8 +125,9 @@ host's env UI. Full descriptions are in `.env.production.example`.
 | `KETSA_DB_URL` | optional | Postgres connection string. With `psycopg[binary]`, deposit/withdrawal/refund balance mutations use `SELECT ... FOR UPDATE` across processes; the startup guard still requires a single process until the trade path is migrated. |
 | `SUPABASE_URL` | if supabase | `https://<ref>.supabase.co` |
 | `SUPABASE_SERVICE_ROLE_KEY` | if supabase | service-role secret (secret manager only) |
-| `KETSA_WANDE_TOKEN` | if payments | wandePay token (secret manager only) |
-| `KETSA_WANDE_BASE_URL` | if payments | `https://apiv1.wandepay.site/api/` |
+| `PAYCHANGU_SECRET_KEY` | if payments | PayChangu secret key (secret manager only) |
+| `PAYCHANGU_WEBHOOK_SECRET` | if payments | PayChangu webhook signing secret (secret manager only) |
+| `PAYCHANGU_BASE_URL` | if payments | `https://api.paychangu.com` |
 | `KETSA_RESEND_API_KEY` | **yes for email accounts** | Resend key (secret manager only) |
 | `KETSA_RESEND_FROM` | **yes for email accounts** | verified-domain sender — see Step 5 |
 | `KETSA_EMAIL_DELIVERY` | if sending email | `resend` (the default `auto` also sends when a key is set; never leave `log` in production) |
@@ -147,7 +148,7 @@ live (and turn deposits/withdrawals/resolution on or off) from the admin
 **Settings** tab, which persists in the storage backend.
 
 **GO / NO-GO:** if you are taking real money, `KETSA_DB_BACKEND=supabase` **and**
-`KETSA_WANDE_TOKEN` must both be set, and the backend must run one replica.
+`PAYCHANGU_SECRET_KEY` must both be set, and the backend must run one replica.
 
 ---
 
@@ -303,7 +304,7 @@ so they are always reachable.
 | 5 | Edit persists | change a market/hero, restart backend, reload | edit survives (proves Supabase) |
 | 6 | Email signup | register an email account | account + wallet created immediately (no code) |
 | 7 | Social login | "Continue with Google" (if Auth0 set) | returns to `$FRONTEND_ORIGIN/auth/callback`, logged in |
-| 8 | Payments | `/portfolio` → deposit (if wandePay set) | no error; `KETSA_WANDE_TOKEN` set in host, **not** in repo |
+| 8 | Payments | `/portfolio` → deposit (if PayChangu set) | no error; `PAYCHANGU_SECRET_KEY` set in host, **not** in repo |
 | 9 | WS live feed | open a market page, watch the order book | ticks update without refresh |
 | 10 | Security headers | devtools → Network → document response | `Content-Security-Policy` contains `'nonce-` and **not** `script-src 'unsafe-inline'`; `X-Frame-Options: DENY`; `X-Content-Type-Options: nosniff` |
 | 11 | Proxy path for auth | `curl -si -X POST "$FRONTEND_ORIGIN/api/auth/social/login" \| head -1` | not `404` (route exists; `503` if Auth0 unset) |

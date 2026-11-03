@@ -104,8 +104,8 @@ _PBKDF2_ITER = 100_000
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 # Malawian mobile numbers, canonical form: 9 digits starting with 8 or 9
 # (TNM: 098/099, Airtel: 088/099). Stored/compared without leading 0 or
-# country code — matching wandePay's normalize_number() so a registered phone
-# can be reused directly for deposits/payouts later.
+# country code — matching payments.normalize_number(), which accepts this form
+# so a registered phone can be reused directly for deposits/payouts later.
 _PHONE_RE = re.compile(r"^[89]\d{8}$")
 
 
@@ -302,11 +302,23 @@ class AuthResponse(BaseModel):
     wallet: Wallet
 
 
-def _create_account(*, identifier: str, email: str, phone: str, name: str, password_hash: str) -> dict:
+def _create_account(
+    *,
+    identifier: str,
+    email: str,
+    phone: str | None,
+    name: str,
+    password_hash: str,
+) -> dict:
     """Create the account record + wallet and send the welcome notification.
 
     ``identifier`` is the record id (email or canonical phone); ``email`` and
-    ``phone`` are the displayed contact fields (one of them empty).
+    ``phone`` are the displayed contact fields. For email signups the phone is
+    stored as JSON ``null`` — never ``""``: an empty string is a *value*, so it
+    would occupy the unique ``ketsa_users_phone_idx`` slot and make every
+    subsequent email-only signup collide with the first one (Postgres treats
+    NULLs as distinct, but not ``''``). Phone signups keep ``email=""`` because
+    ``User.email`` is a required string and email has no unique index.
     """
     wallet = engine.connect_wallet(name=name)
     user = {
@@ -323,7 +335,7 @@ def _create_account(*, identifier: str, email: str, phone: str, name: str, passw
         wallet["id"],
         "system",
         "Welcome to Ketsa",
-        "Your account is ready. Deposit via mobile money (wandePay) to fund "
+        "Your account is ready. Deposit via mobile money (PayChangu) to fund "
         "your wallet, then trade any open market.",
     )
     return user
@@ -456,7 +468,7 @@ def register(body: RegisterRequest) -> AuthResponse:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
 
     if kind == "email":
-        email, phone = identifier, ""
+        email, phone = identifier, None
         if store.get_user_by_email(email):
             raise HTTPException(status_code=409, detail="An account with this email already exists")
     else:
@@ -737,7 +749,9 @@ def _realize_social_user(claims: dict) -> dict:
         user = {
             "id": uid,
             "email": email,
-            "phone": "",
+            # NULL, not "": see _create_account — an empty string would claim
+            # the unique phone slot shared by every phone-less account.
+            "phone": None,
             "name": name,
             "password": None,  # Google-created accounts log in via Auth0 only
             "wallet_id": wallet["id"],

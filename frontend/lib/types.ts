@@ -183,11 +183,12 @@ export interface Payment {
   kind: PaymentKind;
   amount: number;
   number: string;
-  correspondent: string; // AIRTEL_MWI | TNM_MWI
+  correspondent: string; // "AIRTEL" | "TNM" (legacy *_MWI aliases accepted)
   status: PaymentStatus;
   credited: boolean;
   rolled_back: boolean;
-  wande_id: string | null;
+  provider_charge_id: string | null; // stable idempotency key / webhook correlation id
+  wande_id: string | null; // legacy alias of provider_charge_id, kept for old records
   message: string | null;
   created: number;
   updated: number;
