@@ -7,7 +7,9 @@ import {
   deleteStaff,
   getAdminConfig,
   inviteStaff,
+  inviteStaffCredentials,
   listStaff,
+  resetStaffCredentials,
   updateStaff,
   uploadStaff,
 } from '@/lib/api';
@@ -35,7 +37,15 @@ function labelRole(r: string): string {
   return r.charAt(0).toUpperCase() + r.slice(1).replace(/[_-]+/g, ' ');
 }
 
-export default function StaffEditor() {
+/** Credential state for the table — derived, never credential material. */
+function loginStatus(m: StaffMember): { label: string; cls: string } {
+  if (!m.active) return { label: 'Disabled', cls: 'admin-pill--off' };
+  if (m.login_enabled) return { label: 'Password set', cls: 'admin-pill--on' };
+  if (m.invite_pending) return { label: 'Invite pending', cls: 'admin-pill--warn' };
+  return { label: 'No login yet', cls: 'admin-pill--off' };
+}
+
+export default function StaffEditor({ canWrite = false }: { canWrite?: boolean }) {
   const [staff, setStaff] = useState<StaffMember[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
@@ -207,107 +217,151 @@ export default function StaffEditor() {
     }
   }
 
+  function reportCredentialSend(res: { delivered: boolean; detail: string }) {
+    // Same honest reporting as the welcome invite: log mode means "logged, not
+    // delivered", and the UI must not promise an inbox.
+    if (res.delivered) setMsg(res.detail);
+    else setWarn(res.detail);
+  }
+
+  async function sendLoginLink(member: StaffMember) {
+    setError(null);
+    setMsg(null);
+    setWarn(null);
+    try {
+      reportCredentialSend(await inviteStaffCredentials(member.id));
+      await load();
+    } catch (err) {
+      setError(apiError(err));
+    }
+  }
+
+  async function sendPasswordReset(member: StaffMember) {
+    setError(null);
+    setMsg(null);
+    setWarn(null);
+    try {
+      reportCredentialSend(await resetStaffCredentials(member.id));
+      await load();
+    } catch (err) {
+      setError(apiError(err));
+    }
+  }
+
   return (
     <div className="admin-stack">
       {error && <div className="admin-error">{error}</div>}
       {warn && <div className="admin-warn">{warn}</div>}
       {msg && <div className="admin-saved-msg">{msg}</div>}
 
-      <Card title="Add a staff member">
-        <p className="admin-muted">
-          Staff are platform operators (support, finance, …), separate from trader
-          accounts. Every change appears instantly on this page and on the public
-          team directory.{' '}
-          <span className={connected ? 'admin-live' : 'admin-live admin-live--off'}>
-            {connected ? 'Live' : 'Reconnecting…'}
-          </span>
-        </p>
-        <div className="admin-grid admin-grid--2" style={{ marginTop: 14 }}>
-          <Field label="Full name">
-            <TextInput value={name} onChange={setName} placeholder="Maya Banda" />
-          </Field>
-          <Field label="Email">
-            <TextInput value={email} onChange={setEmail} placeholder="maya@ketsa.io" />
-          </Field>
-          <Field label="Phone" hint="Optional">
-            <TextInput value={phone} onChange={setPhone} placeholder="0991 234 567" />
-          </Field>
+      {!canWrite && (
+        <Card title="Read-only access">
+          <p className="admin-muted">
+            Your role can view the team directory but cannot add, edit or send
+            credential links.
+          </p>
+        </Card>
+      )}
+
+      {canWrite && (
+        <Card title="Add a staff member">
+          <p className="admin-muted">
+            Staff are platform operators (support, finance, …), separate from trader
+            accounts. Every change appears instantly on this page and on the public
+            team directory.{' '}
+            <span className={connected ? 'admin-live' : 'admin-live admin-live--off'}>
+              {connected ? 'Live' : 'Reconnecting…'}
+            </span>
+          </p>
+          <div className="admin-grid admin-grid--2" style={{ marginTop: 14 }}>
+            <Field label="Full name">
+              <TextInput value={name} onChange={setName} placeholder="Maya Banda" />
+            </Field>
+            <Field label="Email">
+              <TextInput value={email} onChange={setEmail} placeholder="maya@ketsa.io" />
+            </Field>
+            <Field label="Phone" hint="Optional">
+              <TextInput value={phone} onChange={setPhone} placeholder="0991 234 567" />
+            </Field>
             <Field label="Role">
               <SelectInput value={role} onChange={setRole} options={roleOptions} />
             </Field>
-        </div>
-        <div className="admin-save-row">
-          <button
-            type="button"
-            className="admin-btn admin-btn--primary"
-            disabled={adding || !name.trim() || !email.trim()}
-            onClick={() => void addOne()}
-          >
-            {adding ? 'Adding…' : 'Add staff'}
-          </button>
-        </div>
-      </Card>
-
-      <Card title="Bulk upload">
-        <p className="admin-muted">
-          Upload a CSV or JSON file, or paste the text. Columns:{' '}
-          <code>name, email, phone, role</code>. Existing staff (matched by email
-          or phone) are updated; invalid rows are skipped and listed below.
-        </p>
-        <div style={{ marginTop: 12, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          <input
-            ref={fileRef}
-            type="file"
-            accept=".csv,.json,.txt,text/csv,application/json"
-            style={{ display: 'none' }}
-            onChange={(e) => void onFile(e)}
-          />
-          <button
-            type="button"
-            className="admin-btn admin-btn--ghost"
-            onClick={() => fileRef.current?.click()}
-            disabled={uploading}
-          >
-            {uploading ? 'Uploading…' : 'Choose file'}
-          </button>
-        </div>
-        <div style={{ marginTop: 12 }}>
-          <textarea
-            className="admin-input admin-textarea"
-            rows={6}
-            value={bulkText}
-            onChange={(e) => setBulkText(e.target.value)}
-            placeholder={
-              'name,email,phone,role\nMaya Banda,maya@ketsa.io,0991234567,support'
-            }
-          />
-        </div>
-        <div className="admin-save-row">
-          <button
-            type="button"
-            className="admin-btn admin-btn--primary"
-            disabled={uploading}
-            onClick={() => void runUpload(bulkText)}
-          >
-            {uploading ? 'Uploading…' : 'Upload pasted text'}
-          </button>
-        </div>
-        {uploadResult && (
-          <div className="admin-upload-result" style={{ marginTop: 12 }}>
-            <strong>
-              {uploadResult.added} added · {uploadResult.updated} updated ·{' '}
-              {uploadResult.skipped} skipped
-            </strong>
-            {uploadResult.errors.length > 0 && (
-              <ul className="admin-upload-errors">
-                {uploadResult.errors.map((e, i) => (
-                  <li key={i}>{e}</li>
-                ))}
-              </ul>
-            )}
           </div>
-        )}
-      </Card>
+          <div className="admin-save-row">
+            <button
+              type="button"
+              className="admin-btn admin-btn--primary"
+              disabled={adding || !name.trim() || !email.trim()}
+              onClick={() => void addOne()}
+            >
+              {adding ? 'Adding…' : 'Add staff'}
+            </button>
+          </div>
+        </Card>
+      )}
+
+      {canWrite && (
+        <Card title="Bulk upload">
+          <p className="admin-muted">
+            Upload a CSV or JSON file, or paste the text. Columns:{' '}
+            <code>name, email, phone, role</code>. Existing staff (matched by email
+            or phone) are updated; invalid rows are skipped and listed below.
+          </p>
+          <div style={{ marginTop: 12, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".csv,.json,.txt,text/csv,application/json"
+              style={{ display: 'none' }}
+              onChange={(e) => void onFile(e)}
+            />
+            <button
+              type="button"
+              className="admin-btn admin-btn--ghost"
+              onClick={() => fileRef.current?.click()}
+              disabled={uploading}
+            >
+              {uploading ? 'Uploading…' : 'Choose file'}
+            </button>
+          </div>
+          <div style={{ marginTop: 12 }}>
+            <textarea
+              className="admin-input admin-textarea"
+              rows={6}
+              value={bulkText}
+              onChange={(e) => setBulkText(e.target.value)}
+              placeholder={
+                'name,email,phone,role\nMaya Banda,maya@ketsa.io,0991234567,support'
+              }
+            />
+          </div>
+          <div className="admin-save-row">
+            <button
+              type="button"
+              className="admin-btn admin-btn--primary"
+              disabled={uploading}
+              onClick={() => void runUpload(bulkText)}
+            >
+              {uploading ? 'Uploading…' : 'Upload pasted text'}
+            </button>
+          </div>
+          {uploadResult && (
+            <div className="admin-upload-result" style={{ marginTop: 12 }}>
+              <strong>
+                {uploadResult.added} added · {uploadResult.updated} updated ·{' '}
+                {uploadResult.skipped} skipped
+              </strong>
+              {uploadResult.errors.length > 0 && (
+                <ul className="admin-upload-errors">
+                  {uploadResult.errors.map((e, i) => (
+                    <li key={i}>{e}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </Card>
+      )}
 
       <Card title="Team directory">
         <div className="admin-table-wrap">
@@ -316,65 +370,82 @@ export default function StaffEditor() {
               <tr>
                 <th>Member</th>
                 <th>Role</th>
-                <th>Status</th>
+                <th>Login</th>
                 <th>Added</th>
-                <th className="admin-actions">Actions</th>
+                {canWrite && <th className="admin-actions">Actions</th>}
               </tr>
             </thead>
             <tbody>
               {staff === null && (
                 <tr>
-                  <td colSpan={5} className="admin-muted">
+                  <td colSpan={canWrite ? 5 : 4} className="admin-muted">
                     Loading staff…
                   </td>
                 </tr>
               )}
               {staff !== null && staff.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="admin-muted">
+                  <td colSpan={canWrite ? 5 : 4} className="admin-muted">
                     No staff yet.
                   </td>
                 </tr>
               )}
-              {staff?.map((m) => (
-                <tr key={m.id}>
-                  <td>
-                    <div className="admin-td-name">{m.name}</div>
-                    <div className="admin-td-sub">
-                      {m.email}
-                      {m.phone ? ` · ${m.phone}` : ''}
-                    </div>
-                  </td>
-                  <td className="admin-mono">
-                    {m.role}
-                  </td>
-                  <td>
-                    <span
-                      className={`admin-pill ${m.active ? 'admin-pill--on' : 'admin-pill--off'}`}
-                    >
-                      {m.active ? 'Active' : 'Disabled'}
-                    </span>
-                  </td>
-                  <td className="admin-mono">{fmtDate(m.created)}</td>
-                  <td className="admin-actions">
-                    <button
-                      type="button"
-                      className="admin-btn admin-btn--ghost"
-                      onClick={() => void invite(m)}
-                    >
-                      Resend invite
-                    </button>
-                    <button
-                      type="button"
-                      className="admin-btn admin-btn--ghost"
-                      onClick={() => void toggleActive(m)}
-                    >
-                      {m.active ? 'Disable' : 'Enable'}
-                    </button>
-                    <DangerButton onConfirm={() => remove(m)} label="Remove" />
-                  </td>
-                </tr>
-              ))}
+              {staff?.map((m) => {
+                const login = loginStatus(m);
+                return (
+                  <tr key={m.id}>
+                    <td>
+                      <div className="admin-td-name">{m.name}</div>
+                      <div className="admin-td-sub">
+                        {m.email}
+                        {m.phone ? ` · ${m.phone}` : ''}
+                        {m.last_login_ts ? ` · last login ${fmtDate(m.last_login_ts)}` : ''}
+                      </div>
+                    </td>
+                    <td className="admin-mono">{m.role}</td>
+                    <td>
+                      <span className={`admin-pill ${login.cls}`}>{login.label}</span>
+                    </td>
+                    <td className="admin-mono">{fmtDate(m.created)}</td>
+                    {canWrite && (
+                      <td className="admin-actions">
+                        {m.login_enabled ? (
+                          <button
+                            type="button"
+                            className="admin-btn admin-btn--ghost"
+                            onClick={() => void sendPasswordReset(m)}
+                          >
+                            Reset password
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="admin-btn admin-btn--ghost"
+                            onClick={() => void sendLoginLink(m)}
+                          >
+                            Set-password link
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="admin-btn admin-btn--ghost"
+                          onClick={() => void invite(m)}
+                        >
+                          Welcome email
+                        </button>
+                        <button
+                          type="button"
+                          className="admin-btn admin-btn--ghost"
+                          onClick={() => void toggleActive(m)}
+                        >
+                          {m.active ? 'Disable' : 'Enable'}
+                        </button>
+                        <DangerButton onConfirm={() => remove(m)} label="Remove" />
+                      </td>
+                    )}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

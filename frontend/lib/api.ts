@@ -7,6 +7,7 @@
 
 import type {
   AdminConfig,
+  AdminPrincipal,
   AuthCredentials,
   AuthSession,
   Correspondent,
@@ -539,13 +540,21 @@ const ADMIN_BASE = '/api/admin';
 /**
  * Log in. On success the proxy sets the HttpOnly admin cookie; the response
  * body contains no token by design.
+ *
+ * Omit `email` for the break-glass owner password. Provide it for a per-staff
+ * account; the backend selects the right login flow from the presence of the
+ * field alone.
  */
-export async function adminLogin(password: string): Promise<void> {
+export async function adminLogin(password: string, email?: string): Promise<void> {
+  const payload: { password: string; email?: string } = { password };
+  const cleanEmail = email?.trim();
+  if (cleanEmail) payload.email = cleanEmail;
+
   const res = await fetch(`${ADMIN_BASE}/login`, {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ password }),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) {
     // Surface the server's reason detail (e.g. invalid password).
@@ -570,9 +579,14 @@ export async function adminLogout(): Promise<void> {
   });
 }
 
-/** True when the browser currently holds a valid admin session. */
-export async function adminMe(): Promise<void> {
-  await adminGet<unknown>('/me');
+/**
+ * Current admin principal (identity + capabilities).
+ *
+ * `/session` is used rather than `/me` so the dashboard can hide tabs the
+ * signed-in role cannot use. The server still enforces every capability.
+ */
+export async function adminMe(): Promise<AdminPrincipal> {
+  return adminGet<AdminPrincipal>('/session');
 }
 
 export class AdminApiError extends Error {
@@ -601,8 +615,26 @@ async function adminFetch<T>(path: string, init?: RequestInit): Promise<T> {
     // what went wrong.
     let detail = `Request failed (${res.status}): ${path}`;
     try {
-      const body = await res.json();
-      if (typeof body?.detail === 'string' && body.detail) detail = body.detail;
+      const body: unknown = await res.json();
+      const problem = (body as { detail?: unknown } | null)?.detail;
+      if (typeof problem === 'string' && problem) {
+        detail = problem;
+      } else if (Array.isArray(problem)) {
+        // FastAPI/Pydantic validation errors: show which field failed and why.
+        detail = problem
+          .map((item) => {
+            if (typeof item === 'string') return item;
+            if (!item || typeof item !== 'object') return 'Invalid input';
+            const entry = item as { loc?: unknown; msg?: unknown };
+            const field = Array.isArray(entry.loc)
+              ? entry.loc.filter((part) => part !== 'body').join('.')
+              : '';
+            const message =
+              typeof entry.msg === 'string' ? entry.msg : 'Invalid value';
+            return field ? `${field}: ${message}` : message;
+          })
+          .join('; ');
+      }
     } catch {
       /* keep the generic message */
     }
@@ -715,6 +747,69 @@ export function inviteStaff(id: string): Promise<StaffInviteResult> {
     `/staff/${encodeURIComponent(id)}/invite`,
     {},
   );
+}
+
+/** Email a first-time set-password link to a staff account. */
+export function inviteStaffCredentials(id: string): Promise<StaffInviteResult> {
+  return adminPost<StaffInviteResult>(
+    `/staff/${encodeURIComponent(id)}/credentials/invite`,
+    {},
+  );
+}
+
+/** Email a fresh reset link to an existing staff account. */
+export function resetStaffCredentials(id: string): Promise<StaffInviteResult> {
+  return adminPost<StaffInviteResult>(
+    `/staff/${encodeURIComponent(id)}/credentials/reset`,
+    {},
+  );
+}
+
+/**
+ * Unauthenticated admin-path POST used by the credential flows.
+ *
+ * These live under `/api/admin` (so they share the proxy's same-origin CSRF
+ * guard) but deliberately do not require an admin session: the emailed token
+ * is the credential. Responses carry only a generic detail — never a token.
+ */
+async function adminPublicPost<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${ADMIN_BASE}${path}`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let detail = `Request failed (${res.status})`;
+    try {
+      const payload = await res.json();
+      if (typeof payload?.detail === 'string' && payload.detail) detail = payload.detail;
+    } catch {
+      /* keep the generic message */
+    }
+    throw new Error(detail);
+  }
+  return (await res.json()) as T;
+}
+
+/** Consume a single-use set/reset-password link. */
+export function acceptStaffInvite(
+  token: string,
+  password: string,
+): Promise<{ ok: boolean; detail?: string }> {
+  return adminPublicPost<{ ok: boolean; detail?: string }>('/staff/accept-invite', {
+    token,
+    password,
+  });
+}
+
+/** Ask for a reset link. The backend answers generically for every address. */
+export function requestStaffPasswordReset(
+  email: string,
+): Promise<{ ok: boolean; detail?: string }> {
+  return adminPublicPost<{ ok: boolean; detail?: string }>('/staff/forgot', {
+    email,
+  });
 }
 
 // --- Admin config (Settings tab) ---------------------------------------------

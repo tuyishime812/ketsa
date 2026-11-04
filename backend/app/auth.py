@@ -255,6 +255,16 @@ def hash_password(password: str) -> str:
     return f"{salt.hex()}${dk.hex()}"
 
 
+def verify_password(password: str, stored: str) -> bool:
+    """Constant-time check of ``password`` against a stored PBKDF2 hash.
+
+    Public wrapper around the same verification used by user login so the
+    staff-admin path hashes identically. Malformed/legacy hashes fail closed.
+    """
+    return _verify_password(password, stored)
+
+
+
 class RegisterRequest(BaseModel):
     name: str
     identifier: str  # email address OR Malawian phone number

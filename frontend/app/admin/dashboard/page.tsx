@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { adminGet, adminLogout, AdminApiError } from '@/lib/api';
+import { adminGet, adminLogout, adminMe, AdminApiError } from '@/lib/api';
 import type {
+  AdminPrincipal,
   HomeData,
   PortfolioStats,
   Proof,
@@ -34,24 +35,38 @@ type TabKey =
   | 'settings'
   | 'manage';
 
-const TABS: { key: TabKey; label: string }[] = [
-  { key: 'markets', label: 'Markets' },
-  { key: 'hero', label: 'Hero' },
-  { key: 'ticker', label: 'Ticker' },
-  { key: 'watch', label: 'Watch' },
-  { key: 'dashboard', label: 'Dashboard' },
-  { key: 'content', label: 'Content' },
-  { key: 'users', label: 'Users' },
-  { key: 'staff', label: 'Staff' },
-  { key: 'broadcast', label: 'Broadcast' },
-  { key: 'settings', label: 'Settings' },
-  { key: 'manage', label: 'Manage' },
+interface TabDef {
+  key: TabKey;
+  label: string;
+  /** Capability the server requires for this area to be useful. */
+  capability: string;
+}
+
+// Tabs are hidden when the signed-in role lacks the capability. This is only a
+// convenience: every route re-checks the capability server-side, so hiding a
+// tab is not what stops an unauthorised write.
+const TABS: TabDef[] = [
+  { key: 'markets', label: 'Markets', capability: 'markets:write' },
+  { key: 'hero', label: 'Hero', capability: 'content:write' },
+  { key: 'ticker', label: 'Ticker', capability: 'content:write' },
+  { key: 'watch', label: 'Watch', capability: 'content:write' },
+  { key: 'dashboard', label: 'Dashboard', capability: 'content:write' },
+  { key: 'content', label: 'Content', capability: 'content:write' },
+  { key: 'users', label: 'Users', capability: 'users:read' },
+  { key: 'staff', label: 'Staff', capability: 'staff:read' },
+  { key: 'broadcast', label: 'Broadcast', capability: 'broadcast:write' },
+  { key: 'settings', label: 'Settings', capability: 'config:write' },
+  { key: 'manage', label: 'Manage', capability: 'config:write' },
 ];
 
 export default function AdminDashboard() {
   const router = useRouter();
   const [ready, setReady] = useState(false);
   const [tab, setTab] = useState<TabKey>('markets');
+  const [principal, setPrincipal] = useState<AdminPrincipal | null>(null);
+  // Off-canvas navigation on narrow screens. On desktop the sidebar is always
+  // visible and this state is ignored by CSS.
+  const [navOpen, setNavOpen] = useState(false);
 
   // Public data (read via same-origin /api proxy, no auth needed).
   const [home, setHome] = useState<HomeData | null>(null);
@@ -67,6 +82,10 @@ export default function AdminDashboard() {
   useEffect(() => {
     (async () => {
       try {
+        // Resolve the principal first: it decides which protected data we may
+        // fetch and which tabs we may show.
+        const who = await adminMe();
+
         // Public data is read from the same-origin /api proxy (no auth).
         // `/settings` is protected: it both proves the HttpOnly admin session
         // is still valid and supplies the settings the editors need.
@@ -74,8 +93,11 @@ export default function AdminDashboard() {
           fetch('/api/home').then((r) => r.json() as Promise<HomeData>),
           fetch('/api/stats').then((r) => r.json() as Promise<PortfolioStats>),
           fetch('/api/proof').then((r) => r.json() as Promise<Proof>),
-          adminGet<SiteSettings>('/settings'),
+          who.capabilities.includes('content:read')
+            ? adminGet<SiteSettings>('/settings')
+            : Promise.resolve({} as SiteSettings),
         ]);
+        setPrincipal(who);
         setHome(homeData);
         setStats(statsRes);
         setProof(proofRes);
@@ -94,6 +116,7 @@ export default function AdminDashboard() {
   }, [router]);
 
   async function handleLogout() {
+    setNavOpen(false);
     try {
       await adminLogout();
     } catch {
@@ -104,26 +127,44 @@ export default function AdminDashboard() {
 
   if (!ready) return null;
 
+  const allowedTabs = TABS.filter((t) =>
+    (principal?.capabilities ?? []).includes(t.capability),
+  );
+  const activeTab: TabKey | undefined = allowedTabs.some((t) => t.key === tab)
+    ? tab
+    : allowedTabs[0]?.key;
+  const can = (capability: string) =>
+    (principal?.capabilities ?? []).includes(capability);
+
   return (
-    <div className="admin-shell">
-      <aside className="admin-sidebar">
+    <div className={`admin-shell ${navOpen ? 'is-nav-open' : ''}`}>
+      <aside className={`admin-sidebar ${navOpen ? 'is-open' : ''}`}>
         <div className="admin-logo">
           <span className="admin-logo-dot" />
           Ketsa
         </div>
         <div className="admin-sidebar-label">Admin</div>
         <nav className="admin-nav">
-          {TABS.map((t) => (
+          {allowedTabs.map((t) => (
             <button
               key={t.key}
-              className={`admin-nav-item ${tab === t.key ? 'is-active' : ''}`}
-              onClick={() => setTab(t.key)}
+              className={`admin-nav-item ${activeTab === t.key ? 'is-active' : ''}`}
+              onClick={() => {
+                setTab(t.key);
+                setNavOpen(false);
+              }}
             >
               {t.label}
             </button>
           ))}
         </nav>
         <div className="admin-sidebar-footer">
+          {principal && (
+            <div className="admin-identity">
+              <div className="admin-identity-name">{principal.name || principal.email}</div>
+              <div className="admin-identity-role">{principal.role}</div>
+            </div>
+          )}
           <a className="admin-nav-link" href="/" target="_blank" rel="noreferrer">
             View site ↗
           </a>
@@ -133,10 +174,30 @@ export default function AdminDashboard() {
         </div>
       </aside>
 
+      {navOpen && (
+        <button
+          type="button"
+          className="admin-nav-backdrop"
+          aria-label="Close navigation"
+          onClick={() => setNavOpen(false)}
+        />
+      )}
+
       <main className="admin-main">
         <header className="admin-topbar">
+          <button
+            type="button"
+            className="admin-menu-btn"
+            aria-label="Toggle navigation"
+            aria-expanded={navOpen}
+            onClick={() => setNavOpen((open) => !open)}
+          >
+            <span />
+            <span />
+            <span />
+          </button>
           <h1 className="admin-page-title">
-            {TABS.find((t) => t.key === tab)?.label}
+            {allowedTabs.find((t) => t.key === activeTab)?.label ?? 'Admin'}
           </h1>
         </header>
 
@@ -145,33 +206,35 @@ export default function AdminDashboard() {
           {error && !loading && (
             <div className="admin-state admin-state--error">{error}</div>
           )}
-          {!loading && home && settings && tab === 'markets' && (
+          {!loading && home && settings && activeTab === 'markets' && (
             <MarketsEditor markets={home.markets.all} />
           )}
-          {!loading && settings && tab === 'hero' && (
+          {!loading && settings && activeTab === 'hero' && (
             <HeroEditor proof={proof ?? null} settings={settings} />
           )}
-          {!loading && home && tab === 'ticker' && (
+          {!loading && home && activeTab === 'ticker' && (
             <TickerEditor items={home.ticker} />
           )}
-          {!loading && home && tab === 'watch' && (
+          {!loading && home && activeTab === 'watch' && (
             <WatchEditor items={home.watch} />
           )}
-          {!loading && tab === 'dashboard' && (
+          {!loading && activeTab === 'dashboard' && (
             <DashboardEditor
               data={home?.dashboard ?? null}
               stats={stats}
               proof={proof}
             />
           )}
-          {!loading && settings && tab === 'content' && (
+          {!loading && settings && activeTab === 'content' && (
             <FooterEditor settings={settings} />
           )}
-          {!loading && tab === 'users' && <UsersEditor />}
-          {!loading && tab === 'staff' && <StaffEditor />}
-          {!loading && tab === 'broadcast' && <BroadcastEditor />}
-          {!loading && tab === 'settings' && <SettingsEditor />}
-          {!loading && tab === 'manage' && <ManageEditor />}
+          {!loading && activeTab === 'users' && <UsersEditor />}
+          {!loading && activeTab === 'staff' && <StaffEditor canWrite={can('staff:write')} />}
+          {!loading && activeTab === 'broadcast' && <BroadcastEditor />}
+          {!loading && activeTab === 'settings' && (
+            <SettingsEditor isMaster={principal?.kind === 'master'} />
+          )}
+          {!loading && activeTab === 'manage' && <ManageEditor />}
         </div>
       </main>
     </div>

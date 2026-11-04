@@ -17,6 +17,7 @@ import html
 import json
 import logging
 import os
+import re
 import urllib.error
 import urllib.request
 from typing import Any
@@ -24,6 +25,15 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 RESEND_ENDPOINT = "https://api.resend.com/emails"
+
+# Any ``token=...`` query parameter in a logged email body. Group 1 is kept so
+# the log still shows *which* link was sent while the secret itself is masked.
+_LOG_TOKEN_RE = re.compile(r"(?i)(token=)[^&\s\"'<>]+")
+
+
+def _redact_tokens_for_log(body: str) -> str:
+    """Mask credential query-string tokens in a log-bound email body."""
+    return _LOG_TOKEN_RE.sub(r"\1<redacted>", str(body or ""))
 
 _OTP_TEMPLATE = """\
 <!doctype html>
@@ -139,11 +149,17 @@ def send_email(to: str, subject: str, html: str) -> bool:
         # WARNING, not INFO, on purpose: the app logger has no handler in every
         # launcher, so an INFO body line is silently dropped and the code becomes
         # invisible — defeating the whole point of this dev transport.
+        #
+        # Redact credential tokens before logging. Without this the dev transport
+        # would write a working set-password link into the server log, which is a
+        # durable, widely-readable location (CWE-532). The rest of the body is
+        # still logged so local template work remains possible.
+        safe_html = _redact_tokens_for_log(html)
         log.warning(
             "email delivery=log — NOT sent. to=%s subject=%s\n%s",
             to,
             subject,
-            html,
+            safe_html,
         )
         return True
 
@@ -274,3 +290,85 @@ def send_staff_invite(to: str, name: str = "", role: str = "support") -> bool:
     if _delivery_mode() == "log":
         log.warning("dev staff invite for %s (role=%s)", to, clean_role)
     return send_email(to, "You've been added to the Ketsa team", body_html)
+
+
+# Staff credential invite / reset. The link carries a single-use, expiring token
+# in its query string; the recipient's name and role are escaped TEXT. The token
+# itself is never logged by this module (``send_email`` logs the whole body in
+# dev mode, which is the documented, local-only way to test the flow).
+_STAFF_CREDENTIALS_TEMPLATE = """\
+<!doctype html>
+<html>
+  <body style="margin:0;padding:24px;background:#f4f2ec;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
+    <div style="max-width:480px;margin:0 auto;background:#ffffff;border:1px solid #e6e2d8;border-radius:12px;padding:28px">
+      <div style="font-size:20px;font-weight:700;color:#101926">Ketsa</div>
+      <p style="font-size:14px;color:#46536b;line-height:1.6;margin-top:18px">Hi{name},</p>
+      <p style="font-size:14px;color:#46536b;line-height:1.6">{lead}</p>
+      <div style="margin:22px 0;text-align:center">
+        <a href="{link}" style="display:inline-block;background:#101926;color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;border-radius:8px;padding:12px 22px">{button}</a>
+      </div>
+      <p style="font-size:13px;color:#7a8294;line-height:1.5">This link expires in {ttl} minutes and can only be used once.
+         If you were not expecting it, you can safely ignore this email — no password is changed until the link is opened.</p>
+      <p style="font-size:12px;color:#7a8294;line-height:1.5;margin-top:24px;border-top:1px solid #e6e2d8;padding-top:14px">
+        Ketsa — prediction markets. Never share this link with anyone.</p>
+    </div>
+  </body>
+</html>
+"""
+
+
+def send_staff_credentials_invite(
+    to: str,
+    link: str,
+    name: str = "",
+    role: str = "support",
+    ttl_minutes: int = 1440,
+    reset: bool = False,
+) -> bool:
+    """Email a single-use link that lets a staff member set their password.
+
+    ``link`` is server-built from ``KETSA_PUBLIC_URL`` plus an unguessable
+    token; it is escaped before interpolation. Nothing in this function ever
+    receives or logs the plaintext token separately.
+
+    Returns the same honest contract as ``send_email``: True only when the
+    message was handed to the transport (in dev ``log`` mode that means it is
+    written to the server log, which is where that mode delivers).
+    """
+    clean_name = " ".join(str(name or "").split())[:80]
+    clean_role = (str(role or "").strip().lower() or "support")[:40]
+    greeting = f", {clean_name}" if clean_name else ""
+    safe_link = html.escape(str(link or ""), quote=True)
+    if reset:
+        subject = "Reset your Ketsa admin password"
+        lead = (
+            "A password reset was requested for your Ketsa admin account "
+            f"(<strong>{html.escape(clean_role, quote=True)}</strong>). "
+            "Choose a new password with the button below."
+        )
+        button = "Reset password"
+    else:
+        subject = "Set your Ketsa admin password"
+        lead = (
+            "An admin account has been created for you on the Ketsa admin panel "
+            f"(<strong>{html.escape(clean_role, quote=True)}</strong>). "
+            "Choose a password to finish setting it up."
+        )
+        button = "Set my password"
+    body_html = _STAFF_CREDENTIALS_TEMPLATE.format(
+        name=html.escape(greeting, quote=True),
+        lead=lead,
+        link=safe_link,
+        button=button,
+        ttl=max(1, int(ttl_minutes)),
+    )
+    if _delivery_mode() == "log":
+        log.warning(
+            "dev staff %s link for %s (role=%s): %s (token redacted — "
+            "set KETSA_EMAIL_DELIVERY=resend to receive a working link)",
+            "reset" if reset else "invite",
+            to,
+            clean_role,
+            str(link or "").split("?", 1)[0].split("#", 1)[0],
+        )
+    return send_email(to, subject, body_html)

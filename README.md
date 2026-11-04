@@ -151,9 +151,21 @@ services by the launcher.
 
 With both services running, log in at **`http://localhost:3000/admin`**:
 
-- The first login uses the password from `KETSA_ADMIN_PASSWORD`
-  (the local dev default is a throwaway: **you must set a strong, unique value
-  for production** — see `SECURITY.md`).
+- **Staff accounts (recommended).** Add people under **Staff**, then use
+  **Set-password link** to email them a single-use link to
+  `/admin/set-password`; they sign in with their email and password. Roles are
+  enforced by the API — a support agent can read, a marketing editor can write
+  content, and `owner` is the highest staff role — not merely hidden in the UI.
+  Links expire (`KETSA_STAFF_INVITE_TTL_SECONDS`, default 24h) and can only be
+  used once. If email delivery is not configured (`KETSA_EMAIL_DELIVERY=log`),
+  bootstrap or recover an account from `backend/` with
+  `python scripts/set_staff_password.py --email … --role owner` (it prompts for
+  the password and stores only the PBKDF2 hash).
+- **Break-glass owner login.** The **Owner** tab on `/admin` accepts
+  `KETSA_ADMIN_PASSWORD`: the shared super-user path used to bootstrap the first
+  staff account and to recover if staff credentials are lost. Keep it strong and
+  unique (the local dev default is a throwaway); it is the only session allowed
+  to change the master password or the security configuration.
 - The dashboard has a sidebar with editors for **Markets, Hero, Ticker,
   Watch, Dashboard, Content, Users, Staff, Broadcast, Settings**, and
   **Manage** (hero/CTA copy, steps, footer, section headings). The **Users**
@@ -359,7 +371,9 @@ and wired through `docker-compose.yml`.
 | `KETSA_API_PORT`             | dev only  | Port `npm run dev` gives the FastAPI backend; also pins the backend's `KETSA_PUBLIC_BASE_URL` | `8000` |
 | `KETSA_WEB_PORT`             | dev only  | Port `npm run dev` gives Next.js; also pins the backend's `KETSA_FRONTEND_URL` | `3000` |
 | `KETSA_CSP`                  | frontend  | Optional override for the nonce-based CSP emitted by `middleware.ts`. Use `{nonce}` to keep the per-request script nonce | built-in (nonce + `strict-dynamic`) |
-| `KETSA_ADMIN_PASSWORD`       | backend   | Password for the `/admin` panel (the only auth key)  | `ketsa-admin` |
+| `KETSA_ADMIN_PASSWORD`       | backend   | **Break-glass owner password** for `/admin` (staff sign in with their own email + password) | `ketsa-admin` |
+| `KETSA_PUBLIC_URL`           | backend   | Public frontend origin used to build staff set/reset-password links (falls back to `KETSA_FRONTEND_URL`) | `http://localhost:3000` |
+| `KETSA_STAFF_INVITE_TTL_SECONDS` | backend | Lifetime of a single-use staff set/reset-password link, clamped to 5 minutes – 7 days | `86400` |
 | `KETSA_DB_BACKEND`           | backend   | Storage backend: `memory` (default) or `supabase`   | `memory` |
 | `SUPABASE_URL`               | backend   | Supabase project URL (Supabase only)                | — |
 | `SUPABASE_SERVICE_ROLE_KEY`  | backend   | Supabase secret service-role key (Supabase only)    | — |
@@ -402,21 +416,30 @@ refunded, so restarting or double-polling cannot double-credit funds. Wallet
 balances and the payment ledger are persisted in the storage backend (memory
 in dev, Supabase in production). **Content writes** live only under
 `/api/admin/*` and are protected by a bearer token obtained from
-`POST /api/admin/login` with
-`KETSA_ADMIN_PASSWORD` (tokens last 12h with a sliding window). Admin
-endpoints are **not** covered by the CORS allowlist restriction in the same
-way as reads, but they require the token on every request. All dynamic content
-flows through React's escaping; a codebase grep found **no**
-`dangerouslySetInnerHTML`, `eval`, or raw-HTML sinks in app code.
+`POST /api/admin/login` — either a per-staff email + password or the break-glass
+`KETSA_ADMIN_PASSWORD` (tokens last 12h with a sliding window, and staff
+sessions are re-checked against the live role/active record on every request).
+Admin endpoints are **not** covered by the CORS allowlist restriction in the
+same way as reads, but they require the token on every request and each route
+declares the capability it needs. All dynamic content flows through React's
+escaping; a codebase grep found **no** `dangerouslySetInnerHTML`, `eval`, or
+raw-HTML sinks in app code.
 
-**Admin password.** `KETSA_ADMIN_PASSWORD` is the only key to the whole site.
-It is read from the environment (does **not** fall back to a committed secret),
-defaults to `ketsa-admin` for local dev, and **must** be set to a strong,
-unique value in production. If set from the `/api/admin/password` endpoint the
-new password is hashed (PBKDF2-HMAC-SHA256) and stored in the backend, taking
-precedence over the environment value. Token **digests** live in the shared
-auth store (memory in dev, Supabase in production), so a restart does not log
-the admin out; every session can be revoked from the UI.
+**Staff credentials and the owner password.** Staff cannot be created with a
+password by an admin: the account receives a single-use, expiring link, and
+only the SHA-256 digest of its token is stored. The link is emailed to the
+address on the staff record (the server never returns it in an API response),
+and the set-password endpoint burns it on first use. Password hashes and invite
+digests never leave the backend, and the dev email-log transport redacts the
+token. `KETSA_ADMIN_PASSWORD` remains the break-glass super-user: it is read
+from the environment (does **not** fall back to a committed secret), defaults to
+`ketsa-admin` for local dev, and **must** be set to a strong, unique value in
+production. If changed from the `/api/admin/password` endpoint the new password
+is hashed (PBKDF2-HMAC-SHA256) and stored in the backend, taking precedence over
+the environment value; only a live master session may do this. Token **digests**
+live in the shared auth store (memory in dev, Supabase in production), so a
+restart does not log anyone out; a password change or account deactivation
+revokes the relevant sessions immediately.
 
 The browser never receives that bearer token in JavaScript. The runtime `/api`
 proxy (`frontend/app/api/[...path]/route.ts`) exchanges it for an

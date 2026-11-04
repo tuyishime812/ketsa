@@ -342,14 +342,23 @@ class MemoryBackend:
 
     def get_market(self, market_id: str) -> dict | None:
         self.init()
+        if market_id in RESERVED_KV_KEYS:
+            return None
         return self._markets.get(market_id)
 
     def upsert_market(self, m: dict) -> None:
         self.init()
-        self._markets[m["id"]] = m
+        market_id = m.get("id")
+        if not isinstance(market_id, str) or not market_id:
+            raise ValueError("market id is required")
+        if market_id in RESERVED_KV_KEYS:
+            raise ValueError("market id is reserved")
+        self._markets[market_id] = m
 
     def delete_market(self, market_id: str) -> bool:
         self.init()
+        if market_id in RESERVED_KV_KEYS:
+            return False
         return self._markets.pop(market_id, None) is not None
 
     # --- watch ---
@@ -674,6 +683,19 @@ STAFF_TABLE = "ketsa_staff"
 AUTH_TABLE = "ketsa_auth"
 AUDIT_TABLE = "ketsa_audit"
 
+# One-shot marker for demo/seed market content. Without it, deleting every
+# market (so the operator can upload real ones) would make the next process
+# start see "market count == 0" and silently re-seed the demo markets.
+MARKETS_SEED_MARKER = "__seed_markets__"
+
+# `ketsa_kv` stores markets, editable content and the seed marker in one table.
+# Market ids are primary keys too, so a market id that matches a content key
+# would overwrite site content (or the marker) from the Markets admin screen.
+# Reject those ids in the store as well as at the API boundary.
+RESERVED_KV_KEYS = frozenset(
+    {"watch", "ticker", "dashboard", "stats", "proof", "settings", MARKETS_SEED_MARKER}
+)
+
 # How many audit rows the in-process (dev/preview) backend retains. The memory
 # backend is a convenience store, not a durable archive; Supabase keeps every
 # row. See audit.py.
@@ -770,16 +792,57 @@ class SupabaseBackend:
         self.client.table(table).delete().eq("id", row_id).execute()
 
     def _list_rows(self, table: str) -> list[dict]:
-        data = self.client.table(table).select("*").execute().data or []
-        return [_as_json(r.get("value")) for r in data]
+        # Same PostgREST row cap as `_list_kind`: never silently hide records
+        # past the project's "Max Rows" setting. This matters for settlement
+        # (every wallet holder must be paid) and for broadcast (every user).
+        rows: list[dict] = []
+        page_size = 1000
+        start = 0
+        while True:
+            data = (
+                self.client.table(table)
+                .select("*")
+                # Stable order is required for correct offset pagination.
+                .order("id")
+                .range(start, start + page_size - 1)
+                .execute()
+                .data
+                or []
+            )
+            rows.extend(data)
+            if len(data) < page_size:
+                break
+            start += page_size
+        return [_as_json(r.get("value")) for r in rows]
 
     def _count_kind(self, kind: str) -> int:
         res = self.client.table(KV_TABLE).select("id", count="exact").eq("kind", kind).execute()
         return int(res.count or 0)
 
     def _list_kind(self, kind: str) -> list[dict]:
-        data = self.client.table(KV_TABLE).select("*").eq("kind", kind).execute().data or []
-        return [_as_json(r.get("value")) for r in data]
+        # PostgREST caps a single response at the project's "Max Rows" setting
+        # (1000 by default). Page through so adding more markets never silently
+        # hides the ones past the cap.
+        rows: list[dict] = []
+        page_size = 1000
+        start = 0
+        while True:
+            data = (
+                self.client.table(KV_TABLE)
+                .select("*")
+                .eq("kind", kind)
+                # Stable order is required for correct offset pagination.
+                .order("id")
+                .range(start, start + page_size - 1)
+                .execute()
+                .data
+                or []
+            )
+            rows.extend(data)
+            if len(data) < page_size:
+                break
+            start += page_size
+        return [_as_json(r.get("value")) for r in rows]
 
     def _get_kv(self, key: str) -> dict | None:
         return self._get_row(KV_TABLE, key)
@@ -797,9 +860,15 @@ class SupabaseBackend:
         if self._initialized:
             return
         self._build_seed()
-        if self._count_kind("market") == 0:
-            for m in self._seed_markets.values():
-                self._upsert_kv(m["id"], "market", m)
+        # Seed the demo markets exactly once. The marker is written even when
+        # markets already exist (so an existing project is marked as seeded),
+        # and it survives deleting all markets. That is what makes "remove the
+        # demo markets, upload real ones" stick across restarts.
+        if self._get_kv(MARKETS_SEED_MARKER) is None:
+            if self._count_kind("market") == 0:
+                for m in self._seed_markets.values():
+                    self._upsert_kv(m["id"], "market", m)
+            self._upsert_kv(MARKETS_SEED_MARKER, "meta", {"seeded": True})
         if self._get_kv("watch") is None:
             self._upsert_kv("watch", "content", self._seed_watch)
         if self._get_kv("ticker") is None:
@@ -823,17 +892,40 @@ class SupabaseBackend:
         self.init()
         return self._list_kind("market")
 
+    def _get_market_row(self, market_id: str) -> dict | None:
+        data = (
+            self.client.table(KV_TABLE)
+            .select("*")
+            .eq("id", market_id)
+            .eq("kind", "market")
+            .limit(1)
+            .execute()
+            .data
+        )
+        if not data:
+            return None
+        return _as_json(data[0].get("value"))
+
     def get_market(self, market_id: str) -> dict | None:
         self.init()
-        return self._get_kv(market_id)
+        if market_id in RESERVED_KV_KEYS:
+            return None
+        return self._get_market_row(market_id)
 
     def upsert_market(self, m: dict) -> None:
         self.init()
-        self._upsert_kv(m["id"], "market", m)
+        market_id = m.get("id")
+        if not isinstance(market_id, str) or not market_id:
+            raise ValueError("market id is required")
+        if market_id in RESERVED_KV_KEYS:
+            raise ValueError("market id is reserved")
+        self._upsert_kv(market_id, "market", m)
 
     def delete_market(self, market_id: str) -> bool:
         self.init()
-        if self._get_kv(market_id) is None:
+        if market_id in RESERVED_KV_KEYS:
+            return False
+        if self._get_market_row(market_id) is None:
             return False
         self._delete_kv(market_id)
         return True
@@ -915,6 +1007,9 @@ class SupabaseBackend:
         self.client.table(KV_TABLE).delete().eq("kind", "market").execute()
         for key in ("watch", "ticker", "dashboard", "stats", "proof", "settings"):
             self._delete_kv(key)
+        # Explicit "reset content" is the one path that *should* bring the
+        # demo markets back, so clear the one-shot marker before re-initialising.
+        self._delete_kv(MARKETS_SEED_MARKER)
         self._initialized = False
         self.init()
         if keep_password is not None:
@@ -1097,6 +1192,21 @@ class SupabaseBackend:
 
     def list_notifications(self, wallet_id: str | None = None, limit: int = 50) -> list[dict]:
         self.init()
+        if wallet_id:
+            # Uses the (wallet_id, ts) expression index from schema.sql. Do not
+            # fetch the whole table just to return this user's newest handful.
+            try:
+                res = (
+                    self.client.table(NOTIFICATIONS_TABLE)
+                    .select("*")
+                    .eq("value->>wallet_id", wallet_id)
+                    .order("value->>ts", desc=True)
+                    .limit(max(1, int(limit)))
+                    .execute()
+                )
+                return [_as_json(r.get("value")) for r in (res.data or [])]
+            except Exception:
+                pass
         items = self._list_rows(NOTIFICATIONS_TABLE)
         if wallet_id:
             items = [n for n in items if n.get("wallet_id") == wallet_id]
@@ -1104,10 +1214,25 @@ class SupabaseBackend:
 
     def mark_notifications_read(self, wallet_id: str, ids: list[str] | None = None) -> int:
         self.init()
+        if not wallet_id:
+            return 0
+        try:
+            res = (
+                self.client.table(NOTIFICATIONS_TABLE)
+                .select("*")
+                .eq("value->>wallet_id", wallet_id)
+                .execute()
+            )
+            items = [_as_json(r.get("value")) for r in (res.data or [])]
+        except Exception:
+            # Older projects that reject JSON-path filters still work.
+            items = [
+                n
+                for n in self._list_rows(NOTIFICATIONS_TABLE)
+                if n.get("wallet_id") == wallet_id
+            ]
         marked = 0
-        for n in self._list_rows(NOTIFICATIONS_TABLE):
-            if n.get("wallet_id") != wallet_id:
-                continue
+        for n in items:
             if ids is not None and n.get("id") not in ids:
                 continue
             if not n.get("read"):

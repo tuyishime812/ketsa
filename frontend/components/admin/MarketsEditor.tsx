@@ -59,6 +59,7 @@ function emptyDraft(): Draft {
     pts: [10, 14, 12, 18, 16, 22, 20, 26],
     description: '',
     end_date: future.toISOString(),
+    created: now.toISOString(),
     volume: 0,
     liquidity: 500,
     status: 'open',
@@ -101,26 +102,87 @@ export default function MarketsEditor({
   async function saveCurrent() {
     if (!editing) return;
     setError(null);
-    // Build a list of pts from the textarea if provided.
+
+    // Validate in the browser first so the admin gets a precise message
+    // instead of a generic 422 from the API. The server re-checks everything.
+    const id = editing.id.trim().toLowerCase();
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id)) {
+      setError(
+        'Market ID must be a lowercase slug: letters, numbers and single hyphens (e.g. btc-120k).',
+      );
+      return;
+    }
+    if (!editing.q.trim()) {
+      setError('Question is required.');
+      return;
+    }
+    if (!editing.tag.trim()) {
+      setError('Tag is required.');
+      return;
+    }
+
+    const no = editing.isNew ? computeNo(editing.yes) : editing.no;
+    if (!Number.isInteger(editing.yes) || !Number.isInteger(no)) {
+      setError('YES and NO prices must be whole cents.');
+      return;
+    }
+    if (editing.yes + no !== 100) {
+      setError('YES and NO prices must add up to 100.');
+      return;
+    }
+    if (editing.pts.length < 2) {
+      setError('Add at least two sparkline points.');
+      return;
+    }
+    if (editing.pts.some((point) => !Number.isInteger(point))) {
+      setError('Sparkline points must be whole numbers.');
+      return;
+    }
+    if (editing.pts.some((point) => point < 0 || point > 100)) {
+      setError('Sparkline points must be between 0 and 100.');
+      return;
+    }
+
+    let endDate: string | null = null;
+    if (editing.end_date) {
+      const parsed = new Date(editing.end_date);
+      if (Number.isNaN(parsed.getTime())) {
+        setError('End date is invalid.');
+        return;
+      }
+      endDate = parsed.toISOString();
+    }
+
+    const volume = Number(editing.volume ?? 0);
+    const liquidity = Number(editing.liquidity ?? 0);
+    if (!Number.isFinite(volume) || volume < 0 || !Number.isFinite(liquidity) || liquidity < 0) {
+      setError('Volume and liquidity must be zero or positive.');
+      return;
+    }
+
     const payload: Market = {
-      id: editing.id,
+      id,
       cat: editing.cat as Market['cat'],
-      tag: editing.tag,
-      q: editing.q,
+      tag: editing.tag.trim(),
+      q: editing.q.trim(),
       yes: editing.yes,
-      no: editing.isNew ? computeNo(editing.yes) : editing.no,
+      no,
       meta: editing.meta,
       trend: editing.trend as Market['trend'],
       pts: editing.pts,
       description: editing.description ?? '',
-      end_date: editing.end_date ? new Date(editing.end_date).toISOString() : null,
-      volume: Number(editing.volume ?? 0),
-      liquidity: Number(editing.liquidity ?? 0),
+      end_date: endDate,
+      created: editing.created ?? new Date().toISOString(),
+      volume,
+      liquidity,
       status: (editing.status ?? 'open') as Market['status'],
     };
 
     try {
-      await adminPut('/markets', payload);
+      // Use POST for a new market so the server can reject a duplicate id
+      // instead of silently overwriting an existing market.
+      const save = editing.isNew ? adminPost : adminPut;
+      await save('/markets', payload);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed');
       return;
@@ -186,6 +248,12 @@ export default function MarketsEditor({
       {error && <div className="admin-error">{error}</div>}
 
       <Card>
+        {list.length === 0 ? (
+          <p className="admin-muted" style={{ padding: '18px 4px', margin: 0 }}>
+            No markets yet. Click <strong>+ Add market</strong> above to create
+            your first real market.
+          </p>
+        ) : (
         <div className="admin-table-wrap">
           <table className="admin-table">
             <thead>
@@ -276,16 +344,33 @@ export default function MarketsEditor({
             </tbody>
           </table>
         </div>
+        )}
       </Card>
 
       {editing && (
         <Card title={editing.isNew ? 'New market' : `Edit: ${editing.id}`}>
           <div className="admin-grid admin-grid--2">
-            <Field label="Market ID (URL slug)">
+            <Field
+              label="Market ID (URL slug)"
+              hint={
+                editing.isNew
+                  ? 'Lowercase letters, numbers and single hyphens.'
+                  : 'The ID is permanent; delete and recreate the market if it must change.'
+              }
+            >
               <TextInput
                 value={editing.id}
-                onChange={(v) => patch({ id: v.replace(/\s+/g, '-').toLowerCase() })}
+                onChange={(v) =>
+                  patch({
+                    id: v
+                      .toLowerCase()
+                      .replace(/[^a-z0-9-]+/g, '-')
+                      .replace(/-{2,}/g, '-')
+                      .replace(/^-+|-+$/g, ''),
+                  })
+                }
                 placeholder="btc-120k"
+                disabled={!editing.isNew}
               />
             </Field>
             <Field label="Tag (shown on card)">
@@ -301,7 +386,10 @@ export default function MarketsEditor({
             />
           </Field>
 
-          <Field label="Description" hint="Shown on the market detail page">
+          <Field
+            label="Description / resolution rules"
+            hint="Shown on the market detail page. Include the exact resolution source and criteria."
+          >
             <TextArea
               value={editing.description ?? ''}
               onChange={(v) => patch({ description: v })}
@@ -346,15 +434,25 @@ export default function MarketsEditor({
                 onChange={(v) => patch({ end_date: v || null })}
               />
             </Field>
-            <Field label="Status">
+            <Field
+              label="Status"
+              hint={
+                editing.status === 'resolved'
+                  ? 'Settled markets cannot be reopened here.'
+                  : 'Resolve a market with the Resolve action so the winning outcome is recorded.'
+              }
+            >
               <SelectInput
                 value={editing.status ?? 'open'}
                 onChange={(v) => patch({ status: v as Market['status'] })}
-                options={[
-                  { value: 'open', label: 'Open' },
-                  { value: 'closed', label: 'Closed' },
-                  { value: 'resolved', label: 'Resolved' },
-                ]}
+                options={
+                  editing.status === 'resolved'
+                    ? [{ value: 'resolved', label: 'Resolved' }]
+                    : [
+                        { value: 'open', label: 'Open' },
+                        { value: 'closed', label: 'Closed (stop trading)' },
+                      ]
+                }
               />
             </Field>
           </div>

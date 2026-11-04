@@ -39,7 +39,12 @@ from . import payments as paychangu
 from . import siteconfig
 from . import staff
 from . import store
-from .admin import MessageResponse, require_admin, router as admin_router
+from .admin import (
+    MessageResponse,
+    require_capability,
+    router as admin_router,
+)
+from . import permissions
 from .auth import require_user, resolve_optional_user, router as auth_router
 from .config import load_env_file
 from .engine import engine
@@ -443,8 +448,18 @@ def create_app() -> "FastAPI":
         if not (request.url.path.endswith("/payments/deposits")
                 or request.url.path.endswith("/payments/withdrawals")
                 or request.url.path.endswith("/trade")):
-            # Default FastAPI validation errors everywhere else.
-            return JSONResponse(status_code=422, content={"detail": exc.errors()})
+            # Keep the usual list-of-error-objects shape, but strip `input`,
+            # `ctx` and `url`: `ctx` can contain a ValueError instance (not
+            # JSON-serialisable) and `input` would echo raw request values.
+            errors = [
+                {
+                    "loc": [str(part) for part in err.get("loc", [])],
+                    "msg": str(err.get("msg", "invalid")),
+                    "type": str(err.get("type", "value_error")),
+                }
+                for err in exc.errors()
+            ]
+            return JSONResponse(status_code=422, content={"detail": errors})
         messages = []
         for err in exc.errors():
             loc = ".".join(str(p) for p in err.get("loc", []) if p != "body")
@@ -1113,7 +1128,7 @@ def create_app() -> "FastAPI":
         market_id: str,
         body: ResolveMarketRequest,
         request: Request,
-        actor: str = Depends(require_admin),
+        actor: str = Depends(require_capability(permissions.MARKETS_RESOLVE)),
     ) -> MessageResponse:
         cfg = siteconfig.resolution()
         if not cfg["resolution_enabled"]:
@@ -1133,10 +1148,12 @@ def create_app() -> "FastAPI":
         await _pump_events(manager)
         # Settlement pays out real money: record exactly who resolved which
         # market, to what outcome, and how much was paid.
+        _actor_type = "staff" if actor.startswith("staff:") else "admin"
+        _actor_id = actor.split(":", 1)[1] if _actor_type == "staff" else actor
         audit.record(
             audit.Actions.MARKET_RESOLVED,
-            actor_type="admin",
-            actor_id=actor,
+            actor_type=_actor_type,
+            actor_id=_actor_id,
             ip=netutil.client_ip(request),
             target_type="market",
             target_id=market_id,

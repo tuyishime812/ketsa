@@ -24,7 +24,7 @@ import pytest
 
 from app import authstate
 from app import storage
-from app.storage import SupabaseBackend
+from app.storage import MARKETS_SEED_MARKER, SupabaseBackend
 
 AUTH = "ketsa_auth"
 
@@ -72,6 +72,7 @@ class _Query:
         self._fields = fields
         self._filters = []
         self._limit = None
+        self._range = None
         self._order = None
 
     def eq(self, col, val):
@@ -98,6 +99,10 @@ class _Query:
         self._limit = n
         return self
 
+    def range(self, start, end):
+        self._range = (start, end)
+        return self
+
     def order(self, col, *, desc=False, **kw):
         self._order = (col, desc)
         return self
@@ -108,6 +113,9 @@ class _Query:
         if self._order:
             col, desc = self._order
             rows.sort(key=lambda r: (r.get(col), r.get("id")), reverse=desc)
+        if self._range is not None:
+            start, end = self._range
+            rows = rows[start : end + 1]
         if self._limit is not None:
             rows = rows[: self._limit]
         if self._op == "delete":
@@ -450,3 +458,74 @@ def test_state_survives_backend_restart(monkeypatch) -> None:
     # The consume after restart still burns atomically.
     assert authstate.consume_otp("otp:signup:a@b.io", "hash-1", max_attempts=5, now=time.time()) is not None
     assert authstate.consume_otp("otp:signup:a@b.io", "hash-1", max_attempts=5, now=time.time()) is None
+
+
+# --- one-shot demo market seeding -------------------------------------------
+
+
+def test_deleting_all_markets_does_not_reseed_demo_data() -> None:
+    """Operators clear the demo markets before uploading real ones.
+
+    A fresh process must not read "zero markets" as "seed the demo data" and
+    silently bring the examples back after a deploy/restart.
+    """
+    b1 = _fake_backend()
+    b1.init()
+    seeded = b1.list_markets()
+    assert seeded, "expected the demo markets to seed on a fresh database"
+    assert b1._get_kv(MARKETS_SEED_MARKER) is not None
+
+    for m in seeded:
+        assert b1.delete_market(m["id"]) is True
+    assert b1.list_markets() == []
+
+    # Simulate a restart: new backend object, same PostgREST database.
+    b2 = SupabaseBackend()
+    b2._client = b1._client
+    b2.init()
+    assert b2.list_markets() == []
+
+
+def test_explicit_content_reset_still_restores_demo_markets() -> None:
+    """The admin "reset content" action is the deliberate re-seed path."""
+    b = _fake_backend()
+    b.init()
+    for m in b.list_markets():
+        b.delete_market(m["id"])
+    assert b.list_markets() == []
+
+    b.reset_to_seed()
+    assert b.list_markets(), "an explicit content reset should re-seed"
+
+
+def test_market_reads_and_deletes_cannot_touch_content_rows() -> None:
+    """Content and markets share ketsa_kv; the kind filter must hold."""
+    b = _fake_backend()
+    b.init()
+
+    assert b.get_setting("hero") is not None
+    assert b.get_market("settings") is None
+    assert b.delete_market("settings") is False
+    # The settings row is still intact.
+    assert b.get_setting("hero") is not None
+
+
+def test_list_markets_pages_past_postgrest_row_cap() -> None:
+    """No artificial 1000-row ceiling when an operator adds many markets."""
+    b = _fake_backend()
+    b.init()
+    baseline = len(b.list_markets())
+
+    for i in range(1005):
+        b.upsert_market({"id": f"bulk-{i:04d}", "q": f"Bulk market {i}"})
+
+    assert len(b.list_markets()) == baseline + 1005
+
+
+def test_list_wallets_pages_past_postgrest_row_cap() -> None:
+    """Settlement must see every wallet, not just the first 1000 rows."""
+    b = _fake_backend()
+    for i in range(1005):
+        b.upsert_wallet({"id": f"wallet-{i:04d}", "balance": 0.0, "positions": {}})
+
+    assert len(b.list_wallets()) == 1005

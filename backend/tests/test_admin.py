@@ -84,6 +84,136 @@ def test_market_crud(admin_client: TestClient) -> None:
     assert public.get("/api/markets/test-market").status_code == 404
 
 
+def _market_payload(market_id: str = "validation-market") -> dict:
+    return {
+        "id": market_id,
+        "cat": "tech",
+        "tag": "Tech",
+        "q": "Will this market pass validation?",
+        "yes": 50,
+        "no": 50,
+        "meta": ["$1M vol", "2K traders"],
+        "trend": "up",
+        "pts": [10, 12, 14, 16],
+    }
+
+
+def test_market_id_cannot_overwrite_content(admin_client: TestClient) -> None:
+    """Market ids share the kv table with settings/watch/ticker."""
+    headers = _auth(admin_client)
+    market = _market_payload("settings")
+
+    r = admin_client.put("/api/admin/markets", json=market, headers=headers)
+    assert r.status_code == 400
+    # The content row is still readable rather than replaced by a market.
+    assert admin_client.get("/api/admin/settings", headers=headers).status_code == 200
+
+
+def test_market_payload_is_validated(admin_client: TestClient) -> None:
+    headers = _auth(admin_client)
+
+    assert admin_client.put(
+        "/api/admin/markets",
+        json={**_market_payload(), "id": "Not A Slug"},
+        headers=headers,
+    ).status_code == 422
+    assert admin_client.put(
+        "/api/admin/markets",
+        json={**_market_payload(), "yes": 60, "no": 60},
+        headers=headers,
+    ).status_code == 422
+    assert admin_client.put(
+        "/api/admin/markets",
+        json={**_market_payload(), "q": "   "},
+        headers=headers,
+    ).status_code == 422
+
+
+def test_market_update_preserves_resolution_fields(admin_client: TestClient) -> None:
+    headers = _auth(admin_client)
+    market = _market_payload("settled-market")
+
+    assert admin_client.post(
+        "/api/admin/markets", json=market, headers=headers
+    ).status_code == 200
+    assert admin_client.post(
+        "/api/admin/markets/settled-market/resolve",
+        json={"outcome": "yes"},
+        headers=headers,
+    ).status_code == 200
+
+    before = admin_client.get("/api/markets/settled-market").json()
+    assert before["resolved_outcome"] == "yes"
+
+    # Reopening a settled market through the content endpoint must fail.
+    reopen = {**market, "status": "open"}
+    assert admin_client.put(
+        "/api/admin/markets", json=reopen, headers=headers
+    ).status_code == 400
+
+    # The editor does not submit resolved_* fields; a full-row replace would
+    # wipe the settlement record. The update path must merge instead.
+    edit = {**market, "status": "resolved", "q": "Edited after settlement?"}
+    assert admin_client.put(
+        "/api/admin/markets", json=edit, headers=headers
+    ).status_code == 200
+
+    after = admin_client.get("/api/markets/settled-market").json()
+    assert after["resolved_outcome"] == "yes"
+    assert after["resolved_price"] == before["resolved_price"]
+    assert after["resolved_ts"] == before["resolved_ts"]
+
+
+def test_market_write_cannot_forge_settlement(admin_client: TestClient) -> None:
+    """markets:write must not be able to declare a payout result."""
+    headers = _auth(admin_client)
+    market = _market_payload("forge-market")
+    forged = {
+        **market,
+        "resolved_outcome": "yes",
+        "resolved_price": 100,
+        "resolved_ts": 1.0,
+    }
+
+    assert admin_client.put(
+        "/api/admin/markets", json=forged, headers=headers
+    ).status_code == 400
+    assert admin_client.post(
+        "/api/admin/markets", json=forged, headers=headers
+    ).status_code == 400
+
+    # Even the status flip must go through the resolve action.
+    premature = {**market, "status": "resolved"}
+    assert admin_client.post(
+        "/api/admin/markets", json=premature, headers=headers
+    ).status_code == 400
+
+
+def test_market_create_rejects_duplicate_id(admin_client: TestClient) -> None:
+    headers = _auth(admin_client)
+    market = _market_payload("duplicate-market")
+
+    assert admin_client.post(
+        "/api/admin/markets", json=market, headers=headers
+    ).status_code == 200
+    assert admin_client.post(
+        "/api/admin/markets", json=market, headers=headers
+    ).status_code == 409
+
+
+def test_market_create_stamps_listing_time(admin_client: TestClient) -> None:
+    headers = _auth(admin_client)
+    market = _market_payload("created-market")
+
+    assert admin_client.post(
+        "/api/admin/markets", json=market, headers=headers
+    ).status_code == 200
+
+    detail = make_public().get("/api/markets/created-market")
+    assert detail.status_code == 200
+    assert detail.json()["created"]
+
+
 def test_settings_edit_reflected_public(admin_client: TestClient) -> None:
     headers = _auth(admin_client)
     new_hero = {

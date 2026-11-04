@@ -89,7 +89,7 @@ to `origin/main`. That file contained **live** credentials:
 | `SUPABASE_SERVICE_ROLE_KEY` | bypasses Row Level Security — full read/write on wallets, payments, users |
 | `KETSA_RESEND_API_KEY` | send mail as the verified sending domain |
 | `KETSA_AUTH0_CLIENT_SECRET` | OAuth client secret |
-| `KETSA_ADMIN_PASSWORD` | the single key to `/admin` (settles real money) |
+| `KETSA_ADMIN_PASSWORD` | break-glass owner key to `/admin` (settles real money); staff use per-account credentials |
 
 The file is now **untracked** (`git rm --cached backend/.env`), but it is still
 in git **history** and remote clones. Untracking alone does not un-leak it.

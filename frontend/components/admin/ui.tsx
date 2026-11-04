@@ -27,11 +27,13 @@ export function TextInput({
   onChange,
   placeholder,
   type = 'text',
+  disabled = false,
 }: {
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
   type?: string;
+  disabled?: boolean;
 }) {
   return (
     <input
@@ -40,6 +42,7 @@ export function TextInput({
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
+      disabled={disabled}
     />
   );
 }

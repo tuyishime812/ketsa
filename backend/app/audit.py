@@ -53,6 +53,17 @@ class Actions:
     ADMIN_PASSWORD_CHANGED = "admin.password.changed"
     ADMIN_CONTENT_RESET = "admin.content.reset"
     ADMIN_CONFIG_CHANGED = "admin.config.changed"
+    ADMIN_ACCESS_DENIED = "admin.access.denied"
+
+    # Per-staff admin accounts
+    STAFF_LOGIN_OK = "admin.staff.login.ok"
+    STAFF_LOGIN_FAILED = "admin.staff.login.failed"
+    STAFF_LOGIN_LOCKED = "admin.staff.login.locked"
+    STAFF_LOGOUT = "admin.staff.logout"
+    STAFF_CREDENTIALS_INVITED = "admin.staff.credentials_invited"
+    STAFF_PASSWORD_RESET_SENT = "admin.staff.password_reset_sent"
+    STAFF_PASSWORD_SET = "admin.staff.password_set"
+    STAFF_PASSWORD_CHANGED = "admin.staff.password_changed"
 
     # User administration
     USER_PASSWORD_RESET = "admin.user.password_reset"

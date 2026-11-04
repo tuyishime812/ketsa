@@ -31,7 +31,7 @@ function parseRoles(text: string): string[] {
   return out;
 }
 
-export default function SettingsEditor() {
+export default function SettingsEditor({ isMaster = false }: { isMaster?: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -189,95 +189,100 @@ export default function SettingsEditor() {
         )}
       </Card>
 
-      <Card title="Security">
-        <p className="admin-muted">
-          Admin login brute-force lockout and the shared admin password.
-        </p>
-        {security && (
-          <>
-            <div className="admin-grid admin-grid--2" style={{ marginTop: 14 }}>
-              <Field
-                label="Max failed logins"
-                hint="Failures from one IP before lockout"
-              >
-                <NumberInput
-                  value={security.admin_max_failures}
-                  onChange={(v) => setSecurity({ ...security, admin_max_failures: v })}
-                  min={1}
-                  max={1000}
-                />
-              </Field>
-              <Field label="Lockout duration (seconds)" hint="How long the IP is fenced">
-                <NumberInput
-                  value={security.admin_lockout_seconds}
-                  onChange={(v) =>
-                    setSecurity({ ...security, admin_lockout_seconds: v })
-                  }
-                  min={30}
-                  max={86400}
-                />
-              </Field>
-            </div>
-            <SaveButton onSave={saveSecurity} label="Save security" />
-          </>
-        )}
+      {isMaster && (
+        <Card title="Security">
+          <p className="admin-muted">
+            Admin login brute-force lockout and the shared admin password. These
+            controls are owner-only so a staff session cannot weaken its own guard.
+          </p>
+          {security && (
+            <>
+              <div className="admin-grid admin-grid--2" style={{ marginTop: 14 }}>
+                <Field
+                  label="Max failed logins"
+                  hint="Failures from one IP before lockout"
+                >
+                  <NumberInput
+                    value={security.admin_max_failures}
+                    onChange={(v) => setSecurity({ ...security, admin_max_failures: v })}
+                    min={1}
+                    max={1000}
+                  />
+                </Field>
+                <Field label="Lockout duration (seconds)" hint="How long the IP is fenced">
+                  <NumberInput
+                    value={security.admin_lockout_seconds}
+                    onChange={(v) =>
+                      setSecurity({ ...security, admin_lockout_seconds: v })
+                    }
+                    min={30}
+                    max={86400}
+                  />
+                </Field>
+              </div>
+              <SaveButton onSave={saveSecurity} label="Save security" />
+            </>
+          )}
 
-        <hr className="admin-hr" />
+          <hr className="admin-hr" />
 
-        <p className="admin-muted">
-          Change the admin password. It is hashed and stored in the backend and
-          takes effect immediately, replacing the environment value.
-        </p>
-        <div className="admin-grid admin-grid--2" style={{ marginTop: 14 }}>
-          <Field label="Current password">
-            <TextInput
-              type="password"
-              value={current}
-              onChange={setCurrent}
-              placeholder="••••••••"
-            />
-          </Field>
-          <div className="admin-field" />
-          <Field label="New password" hint="At least 8 characters">
-            <TextInput
-              type="password"
-              value={next}
-              onChange={setNext}
-              placeholder="••••••••"
-            />
-          </Field>
-          <Field label="Confirm new password">
-            <TextInput
-              type="password"
-              value={confirm}
-              onChange={setConfirm}
-              placeholder="••••••••"
-            />
-          </Field>
-        </div>
-        <div className="admin-form-actions">
-          <button
-            type="button"
-            className="admin-btn admin-btn--primary"
-            onClick={() => void changePassword()}
-          >
-            Change password
-          </button>
-        </div>
-      </Card>
+          <p className="admin-muted">
+            Change the master admin password. It is hashed and stored in the
+            backend and takes effect immediately, replacing the environment value.
+          </p>
+          <div className="admin-grid admin-grid--2" style={{ marginTop: 14 }}>
+            <Field label="Current password">
+              <TextInput
+                type="password"
+                value={current}
+                onChange={setCurrent}
+                placeholder="••••••••"
+              />
+            </Field>
+            <div className="admin-field" />
+            <Field label="New password" hint="At least 8 characters">
+              <TextInput
+                type="password"
+                value={next}
+                onChange={setNext}
+                placeholder="••••••••"
+              />
+            </Field>
+            <Field label="Confirm new password">
+              <TextInput
+                type="password"
+                value={confirm}
+                onChange={setConfirm}
+                placeholder="••••••••"
+              />
+            </Field>
+          </div>
+          <div className="admin-form-actions">
+            <button
+              type="button"
+              className="admin-btn admin-btn--primary"
+              onClick={() => void changePassword()}
+            >
+              Change password
+            </button>
+          </div>
+        </Card>
+      )}
 
-      <Card title="Staff roles">
-        <p className="admin-muted">
-          The roles available in the Staff directory and shown on the public team
-          page. One role per line (or comma-separated). Lowercase letters, digits,
-          <code> - </code> or <code>_</code>. Existing staff keep their role even
-          if it is removed here.
-        </p>
-        <div style={{ marginTop: 12 }}>
-          <TextArea value={rolesText} onChange={setRolesText} rows={6} />
-        </div>
-        <SaveButton onSave={saveRoles} label="Save roles" />
-      </Card>
+      {isMaster && (
+        <Card title="Staff roles">
+          <p className="admin-muted">
+            The roles available in the Staff directory and shown on the public team
+            page. One role per line (or comma-separated). Lowercase letters, digits,
+            <code> - </code> or <code>_</code>. Existing staff keep their role even
+            if it is removed here.
+          </p>
+          <div style={{ marginTop: 12 }}>
+            <TextArea value={rolesText} onChange={setRolesText} rows={6} />
+          </div>
+          <SaveButton onSave={saveRoles} label="Save roles" />
+        </Card>
+      )}
 
       <Card title="Market resolution">
         <p className="admin-muted">

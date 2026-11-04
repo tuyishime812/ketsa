@@ -42,7 +42,7 @@ Pick one host (Railway, Render, or Fly). All run the same FastAPI app.
    | `KETSA_RATE_LIMIT_PER_MIN` | `120` (or `0` if the provider's proxy handles throttling) |
 | `KETSA_PROXY_SECRET` | **recommended** — same random value as the frontend; the runtime proxy HMAC-signs the real client IP so these per-IP limits and the admin lockout see the visitor, not the proxy. Generate: `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
 | `KETSA_TRUSTED_PROXIES` | optional, only for a known reverse proxy directly in front of the API (alternative to the secret); never `0.0.0.0/0` |
-   | `KETSA_ADMIN_PASSWORD` | **required** — a strong, unique password for the `/admin` panel (see Step 2b) |
+   | `KETSA_ADMIN_PASSWORD` | **required** — a strong, unique **break-glass owner** password for `/admin` (staff sign in with their own emailed credentials; see Step 2b) |
    | `KETSA_DB_BACKEND` | `supabase` if you want admin edits to persist across redeploys (and — required for payments — wallet balances + ledger). Defaults to `memory`, which resets on every restart. |
    | `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` | (**Supabase only** — see Step 2b) the project URL and secret service-role key |
    | `PAYCHANGU_SECRET_KEY` | (**payments** — see Step 2b) PayChangu secret API key for MWK deposits/withdrawals; inject via secret manager, never in code. Absent ⇒ payments `503` |
@@ -131,10 +131,19 @@ protected `/api/admin/*` through the same-origin `/api` path.
      Then set `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` in the backend env.
      > **Local dev:** the backend loads `backend/.env` (gitignored) at startup.
      > The repo-root `.env` is a documented mirror only — nothing reads it.
-2. **Set the password.** `KETSA_ADMIN_PASSWORD` must be a strong, unique
-   value. It is the only key to the whole site. The backend reads it from the
-   environment and **never** falls back to a committed secret. In production it
-   does **not** default to `ketsa-admin` — leave it unset only for local dev.
+2. **Set the break-glass password.** `KETSA_ADMIN_PASSWORD` must be a strong,
+   unique value. It is the **owner** login for `/admin` (bootstrap + recovery);
+   day-to-day operators use per-staff email + password accounts created in the
+   Staff tab. The backend reads it from the environment and **never** falls back
+   to a committed secret. In production it does **not** default to
+   `ketsa-admin` — leave it unset only for local dev. Also set
+   `KETSA_PUBLIC_URL` to the public frontend origin (fallback:
+   `KETSA_FRONTEND_URL`) so staff invite/reset-password emails link to the real
+   site; links expire after `KETSA_STAFF_INVITE_TTL_SECONDS` (default 24h).
+   Bootstrap the first `owner` account (or recover one when email delivery is
+   unavailable) from `backend/` with
+   `python scripts/set_staff_password.py --email <owner-email> --role owner`.
+   It prompts for the password and writes only its PBKDF2 hash.
 3. **Enable payments (optional).** To let users fund their wallet with real
    money (MWK) and withdraw to mobile money, set **`PAYCHANGU_SECRET_KEY`**
    (from the PayChangu dashboard) via your host's secret manager — never in

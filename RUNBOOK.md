@@ -117,7 +117,7 @@ host's env UI. Full descriptions are in `.env.production.example`.
 | Var | Required? | Value |
 |-----|-----------|-------|
 | `KETSA_ALLOWED_ORIGINS` | yes | `$FRONTEND_ORIGIN` (comma-separate extras; no trailing slash) |
-| `KETSA_ADMIN_PASSWORD` | **yes** | strong, unique — the only key to `/admin` |
+| `KETSA_ADMIN_PASSWORD` | **yes** | strong, unique — break-glass owner key to `/admin` (staff use their own credentials) |
 | `KETSA_EXPOSE_DOCS` | yes | `0` |
 | `KETSA_PROXY_SECRET` | **yes (with frontend)** | same random value as the frontend's `KETSA_PROXY_SECRET`; lets the proxy sign the real client IP so per-IP limits/lockout work behind it |
 | `KETSA_TRUSTED_PROXIES` | optional | only if a known reverse proxy hits the API directly (alternative to the secret); never `0.0.0.0/0` |
@@ -300,7 +300,7 @@ so they are always reachable.
 | 1 | Frontend health via proxy | `curl -s "$FRONTEND_ORIGIN/api/health"` | `{"status":"ok"}` (was 404) |
 | 2 | Live data, no bundled fallback | open `$FRONTEND_ORIGIN/` | real markets; **no** "bundled data" copy |
 | 3 | robots + sitemap on real domain | `curl -s "$FRONTEND_ORIGIN/robots.txt"` | `Host: $FRONTEND_ORIGIN` |
-| 4 | Admin login | open `$FRONTEND_ORIGIN/admin` | wrong password rejected; `KETSA_ADMIN_PASSWORD` accepted |
+| 4 | Admin login | open `$FRONTEND_ORIGIN/admin` | wrong password rejected; break-glass `KETSA_ADMIN_PASSWORD` accepted; a staff invite link sets a password and that email+password signs in |
 | 5 | Edit persists | change a market/hero, restart backend, reload | edit survives (proves Supabase) |
 | 6 | Email signup | register an email account | account + wallet created immediately (no code) |
 | 7 | Social login | "Continue with Google" (if Auth0 set) | returns to `$FRONTEND_ORIGIN/auth/callback`, logged in |

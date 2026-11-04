@@ -87,6 +87,70 @@
   margin: 0 0 24px;
 }
 
+/* Login type switcher (staff account vs break-glass owner). */
+.admin-auth-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  margin-bottom: 20px;
+  background: #f1f3f7;
+  border-radius: 10px;
+}
+
+.admin-auth-tab {
+  flex: 1;
+  border: none;
+  background: transparent;
+  border-radius: 7px;
+  padding: 9px 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #6b7688;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.admin-auth-tab:hover {
+  color: #0c1526;
+}
+
+.admin-auth-tab.is-active {
+  background: #ffffff;
+  color: #0c1526;
+  box-shadow: 0 1px 2px rgba(12, 21, 38, 0.08);
+}
+
+.admin-auth-help {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid #eef1f5;
+}
+
+.admin-auth-help-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.admin-form--compact {
+  gap: 8px;
+}
+
+.admin-link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: #1447e6;
+  cursor: pointer;
+  text-align: left;
+}
+
+.admin-link-btn:hover {
+  text-decoration: underline;
+}
+
 /* ---------------------------------------------------------------------------
    Shell / layout
    ------------------------------------------------------------------------- */
@@ -467,6 +531,7 @@
    ------------------------------------------------------------------------- */
 .admin-table-wrap {
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .admin-table {
@@ -693,6 +758,34 @@
   color: #6b7688;
 }
 
+.admin-pill--warn {
+  background: #fdf3e2;
+  color: #a7680a;
+}
+
+.admin-identity {
+  padding: 4px 12px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  margin-bottom: 6px;
+}
+
+.admin-identity-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-identity-role {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #8a93a3;
+  margin-top: 2px;
+}
+
 .admin-upload-result {
   border: 1px solid #e4e7ec;
   background: #f8f9fb;
@@ -713,4 +806,145 @@
 
 .admin-upload-errors li {
   margin-top: 2px;
+}
+
+/* ---------------------------------------------------------------------------
+   Mobile / tablet layout
+   ------------------------------------------------------------------------- */
+
+/* The menu button and backdrop only exist for the off-canvas nav below the
+   desktop breakpoint; on desktop the sidebar is always visible. */
+.admin-menu-btn {
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  width: 40px;
+  height: 40px;
+  padding: 0 9px;
+  flex: none;
+  border: 1px solid #d7dce4;
+  border-radius: 9px;
+  background: #fff;
+}
+
+.admin-menu-btn span {
+  display: block;
+  width: 100%;
+  height: 2px;
+  border-radius: 2px;
+  background: #0c1526;
+}
+
+.admin-nav-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  border: 0;
+  background: rgba(12, 21, 38, 0.45);
+}
+
+@media (max-width: 900px) {
+  .admin-shell {
+    display: block;
+  }
+
+  .admin-menu-btn {
+    display: inline-flex;
+  }
+
+  .admin-nav-backdrop {
+    display: block;
+  }
+
+  .admin-sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    right: auto;
+    width: min(280px, 84vw);
+    height: 100vh;
+    height: 100dvh;
+    z-index: 60;
+    padding: 18px 14px;
+    overflow-y: auto;
+    visibility: hidden;
+    transform: translateX(-105%);
+    transition: transform 0.2s ease, visibility 0.2s ease;
+    box-shadow: 0 20px 50px rgba(12, 21, 38, 0.28);
+  }
+
+  .admin-sidebar.is-open {
+    visibility: visible;
+    transform: translateX(0);
+  }
+
+  .admin-main {
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
+
+  .admin-topbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+  }
+
+  .admin-page-title {
+    font-size: 20px;
+  }
+
+  .admin-content {
+    max-width: none;
+    padding: 16px 12px 48px;
+  }
+
+  .admin-card {
+    padding: 16px;
+    border-radius: 12px;
+  }
+
+  .admin-form-actions,
+  .admin-save-row {
+    flex-wrap: wrap;
+  }
+
+  .admin-actions {
+    white-space: normal;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .admin-auth {
+    padding: 16px;
+  }
+
+  .admin-auth-card {
+    padding: 28px 20px;
+  }
+}
+
+@media (max-width: 480px) {
+  .admin-topbar {
+    padding: 10px 12px;
+  }
+
+  .admin-content {
+    padding: 12px 8px 40px;
+  }
+
+  .admin-card {
+    padding: 14px 12px;
+  }
+
+  .admin-btn {
+    padding: 9px 12px;
+  }
+
+  .admin-auth-card {
+    padding: 24px 16px;
+  }
 }

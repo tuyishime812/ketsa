@@ -174,6 +174,52 @@ def public_view(member: dict) -> dict:
     }
 
 
+def admin_view(member: dict) -> dict:
+    """The admin-facing staff record: contact details, but **no credentials**.
+
+    Staff rows now carry password hashes and invite-token digests. Those must
+    never leave the backend (not in the admin list, not in the websocket event,
+    not in an audit row), so every admin route projects the raw record through
+    here instead of serialising it directly. ``login_enabled`` / ``invite_pending``
+    give the UI enough state to render the credential controls without exposing
+    the secrets behind them.
+    """
+    now = _now()
+    invite_expires = member.get("invite_expires")
+    try:
+        invite_pending = bool(
+            invite_expires
+            and float(invite_expires) > now
+            and member.get("invite_token_hash")
+        )
+    except (TypeError, ValueError):
+        invite_pending = False
+    return {
+        "id": member.get("id"),
+        "name": member.get("name"),
+        "email": member.get("email"),
+        "phone": member.get("phone"),
+        "role": member.get("role"),
+        "active": bool(member.get("active", True)),
+        "created": member.get("created", 0.0),
+        "updated": member.get("updated", 0.0),
+        "invited_ts": member.get("invited_ts"),
+        "login_enabled": bool(member.get("password_hash")),
+        "invite_pending": invite_pending,
+        "last_login_ts": member.get("last_login_ts"),
+    }
+
+
+def emit_update(member: dict) -> None:
+    """Broadcast a public-safe ``update`` event for a credential change.
+
+    The websocket is unauthenticated, so only the public projection travels on
+    it (see :func:`public_view`); admin clients re-fetch the full list.
+    """
+    _emit("update", member)
+
+
+
 def list_public() -> list[dict]:
     return [
         {"id": s["id"], "name": s["name"], "role": s["role"]}

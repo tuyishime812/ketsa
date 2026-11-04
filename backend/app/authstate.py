@@ -37,6 +37,7 @@ NS_OTP = "otp"
 NS_TICKET = "ticket"
 NS_THROTTLE = "throttle"
 NS_ADMIN_SESSION = "admin_session"
+NS_STAFF_SESSION = "staff_session"
 
 
 def _b() -> Any:
@@ -114,6 +115,62 @@ def touch_admin_session(digest: str, expires: float) -> None:
 
 def delete_admin_session(digest: str) -> None:
     _b().auth_delete(f"{NS_ADMIN_SESSION}:{digest}")
+
+
+# --- staff admin sessions ----------------------------------------------------
+# Per-staff admin sessions are a separate namespace from the shared master
+# password session so either can be revoked without touching the other. The row
+# carries the staff id in ``user_id`` (which makes "revoke every session for
+# this staff member" one indexed delete) and a small display payload. The
+# *authoritative* role is re-read from the staff record on every request, so a
+# role change or deactivation takes effect immediately instead of waiting for
+# the session to expire.
+
+
+def put_staff_session(
+    digest: str,
+    staff_id: str,
+    *,
+    expires: float,
+    role: str = "",
+    name: str = "",
+    email: str = "",
+) -> None:
+    _b().auth_put(
+        f"{NS_STAFF_SESSION}:{digest}",
+        NS_STAFF_SESSION,
+        user_id=staff_id,
+        payload={"role": role, "name": name, "email": email},
+        issued=time.time(),
+        expires=expires,
+    )
+
+
+def get_staff_session(digest: str) -> dict | None:
+    row = _b().auth_get(f"{NS_STAFF_SESSION}:{digest}")
+    if row is None:
+        return None
+    payload = row.get("payload") or {}
+    return {
+        "expires": float(row["expires"]),
+        "staff_id": str(row.get("user_id") or ""),
+        "role": str(payload.get("role") or ""),
+        "name": str(payload.get("name") or ""),
+        "email": str(payload.get("email") or ""),
+    }
+
+
+def touch_staff_session(digest: str, expires: float) -> None:
+    _b().auth_update(f"{NS_STAFF_SESSION}:{digest}", {"expires": float(expires)})
+
+
+def delete_staff_session(digest: str) -> None:
+    _b().auth_delete(f"{NS_STAFF_SESSION}:{digest}")
+
+
+def delete_staff_sessions(staff_id: str) -> int:
+    """Revoke every live admin session for one staff member."""
+    return _b().auth_delete_for_user(NS_STAFF_SESSION, staff_id)
 
 
 # --- Auth0 SSO tickets -------------------------------------------------------

@@ -6,9 +6,10 @@ Next.js frontend consumes. Keep field names/types in sync with
 """
 
 import math
+import re
 from typing import List, Literal, Optional, Tuple
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 Category = Literal['politics', 'crypto', 'sports', 'culture', 'tech', 'climate']
 Trend = Literal['up', 'down']
@@ -38,6 +39,58 @@ class Market(BaseModel):
     resolved_outcome: Optional[Outcome] = None  # winning outcome ('yes'/'no')
     resolved_price: Optional[int] = None        # final price of the winning outcome
     resolved_ts: Optional[float] = None         # unix time of resolution
+
+
+class MarketInput(Market):
+    """Validated admin create/update payload for a market.
+
+    `Market` is also the public read model, where stricter checks could reject
+    historical rows. This subclass constrains what an admin may *write*: the id
+    is a URL-safe slug, prices are cents that sum to 100, and the sparkline has
+    enough finite points for the detail chart to render.
+    """
+
+    id: str = Field(min_length=1, max_length=80)
+    tag: str = Field(min_length=1, max_length=40)
+    q: str = Field(min_length=1, max_length=300)
+    yes: int = Field(ge=0, le=100)
+    no: int = Field(ge=0, le=100)
+    pts: List[int] = Field(max_length=200)
+    description: str = Field(default='', max_length=4000)
+    volume: float = Field(default=0.0, ge=0)
+    liquidity: float = Field(default=0.0, ge=0)
+
+    @field_validator('id')
+    @classmethod
+    def _valid_slug(cls, value: str) -> str:
+        if not re.fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)*', value):
+            raise ValueError(
+                'id must be a lowercase slug: letters, digits and single hyphens'
+            )
+        return value
+
+    @field_validator('tag', 'q')
+    @classmethod
+    def _non_empty(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError('must not be empty')
+        return value
+
+    @field_validator('pts')
+    @classmethod
+    def _valid_points(cls, value: List[int]) -> List[int]:
+        if len(value) < 2:
+            raise ValueError('provide at least two sparkline points')
+        if any(point < 0 or point > 100 for point in value):
+            raise ValueError('sparkline points must be between 0 and 100')
+        return value
+
+    @model_validator(mode='after')
+    def _prices_sum_to_100(self) -> 'MarketInput':
+        if self.yes + self.no != 100:
+            raise ValueError('yes + no must equal 100')
+        return self
 
 
 class ResolveMarketRequest(BaseModel):
@@ -189,7 +242,12 @@ class StaffUpload(BaseModel):
 
 
 class StaffMember(BaseModel):
-    """Full staff record — the admin view, including contact details."""
+    """Full staff record — the admin view, including contact details.
+
+    Credential material (password hash, invite-token digest) is never part of
+    this model; ``staff.admin_view`` projects it away and adds these status
+    fields instead.
+    """
     id: str
     name: str
     email: str
@@ -199,6 +257,27 @@ class StaffMember(BaseModel):
     created: float
     updated: float
     invited_ts: Optional[float] = None
+    login_enabled: bool = False
+    invite_pending: bool = False
+    last_login_ts: Optional[float] = None
+
+
+class StaffAcceptInvite(BaseModel):
+    """Set-password payload for a single-use invite/reset link."""
+    token: str = Field(max_length=128)
+    password: str = Field(max_length=256)
+
+
+class StaffForgotPassword(BaseModel):
+    """Self-service reset request. Always answered generically."""
+    email: str = Field(max_length=200)
+
+
+class StaffChangePassword(BaseModel):
+    """Password change for an already-authenticated staff session."""
+    current: str = Field(max_length=256)
+    new: str = Field(max_length=256)
+
 
 
 class StaffPublic(BaseModel):

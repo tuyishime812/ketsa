@@ -1059,14 +1059,15 @@ class Marketplace:
         # paying wallets that exist in both places.
         settled = 0
         total_payout = 0.0
-        wallet_ids = set(self._wallets) | {w["id"] for w in store.list_wallets()}
+        # `list_wallets()` already returns the full rows. Re-fetching each one
+        # turned settlement into an N+1 query storm (and could time out the
+        # resolve request as the user base grows).
+        persisted_wallets = {w["id"]: w for w in store.list_wallets()}
+        wallet_ids = set(self._wallets) | set(persisted_wallets)
         for wallet_id in sorted(wallet_ids):
-            wallet = self._wallets.get(wallet_id)
+            wallet = self._wallets.get(wallet_id) or persisted_wallets.get(wallet_id)
             if wallet is None:
-                persisted = store.get_wallet(wallet_id)
-                if persisted is None:
-                    continue
-                wallet = persisted
+                continue
             is_live = wallet_id in self._wallets
             if (wallet.get("positions") or {}).get(market_id) is None:
                 continue

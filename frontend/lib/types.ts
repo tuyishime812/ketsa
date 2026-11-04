@@ -380,6 +380,11 @@ export interface StaffMember {
   created: number;
   updated: number;
   invited_ts?: number | null;
+  /** True once a password has been set (never the hash itself). */
+  login_enabled: boolean;
+  /** True while a set/reset-password link is still valid. */
+  invite_pending: boolean;
+  last_login_ts?: number | null;
 }
 
 export interface StaffUploadResult {
@@ -393,6 +398,20 @@ export interface StaffInviteResult {
   ok: boolean;
   delivered: boolean;
   detail: string;
+}
+
+// --- Admin session / capabilities -------------------------------------------
+// Returned by GET /api/admin/session. The server enforces every capability;
+// the UI only uses this list to hide controls the signed-in operator cannot use.
+
+export interface AdminPrincipal {
+  authenticated: boolean;
+  kind: 'master' | 'staff';
+  id: string;
+  role: string;
+  name: string;
+  email: string;
+  capabilities: string[];
 }
 
 /**
