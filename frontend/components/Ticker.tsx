@@ -1,6 +1,8 @@
 import type { TickerItem } from '@/lib/types';
 
 export default function Ticker({ items }: { items: TickerItem[] }) {
+  if (items.length === 0) return null;
+
   const doubled = [...items, ...items];
   const arrow = (d: TickerItem['d']) => (d === 'up' ? '▲' : '▼');
 

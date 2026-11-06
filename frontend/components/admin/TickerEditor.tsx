@@ -87,6 +87,16 @@ export default function TickerEditor({
               </tr>
             </thead>
             <tbody>
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={5}>
+                    <span className="admin-muted">
+                      No ticker items yet. Add items to fill the marquee, or leave this empty to
+                      hide the ticker on the public site.
+                    </span>
+                  </td>
+                </tr>
+              )}
               {rows.map((r, i) => (
                 <tr key={r.key}>
                   <td>
@@ -126,7 +136,11 @@ export default function TickerEditor({
         <SaveButton onSave={save} dirty={changed} />
       </Card>
 
-      <p className="admin-hint">The ticker is duplicated for a seamless scrolling loop — keep at least 4 items.</p>
+      <p className="admin-hint">
+        {rows.length === 0
+          ? 'An empty list hides the scrolling ticker on the public site.'
+          : 'The ticker is duplicated for a seamless scrolling loop — keep at least 4 items.'}
+      </p>
     </div>
   );
 }

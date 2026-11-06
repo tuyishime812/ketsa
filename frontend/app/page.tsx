@@ -41,7 +41,7 @@ export default async function HomePage() {
       <Nav />
       <main id="top">
         <Hero watch={data.watch} proof={data.proof} copy={settings.hero} />
-        <Ticker items={data.ticker} />
+        {data.ticker.length > 0 && <Ticker items={data.ticker} />}
         <MarketFeedProvider initial={data.markets.all}>
           <Markets markets={data.markets.all} copy={settings.markets_section} />
         </MarketFeedProvider>

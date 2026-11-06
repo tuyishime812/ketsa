@@ -26,12 +26,13 @@ export default function ManageEditor() {
 
       <Card title="Danger zone">
         <p className="admin-muted">
-          Reset every market, watch, ticker, dashboard series, stats, proof and
-          site setting back to the default content held by the backend. Your
-          stored admin password is kept.
+          Restore the built-in demo content: every market, watch, ticker,
+          dashboard series, stats, proof and site setting goes back to the
+          sample values shipped with the backend. Any markets you added or
+          removed will be replaced. Your stored admin password is kept.
         </p>
         <div className="admin-form-actions">
-          <DangerButton onConfirm={resetContent} label="Reset content to defaults" />
+          <DangerButton onConfirm={resetContent} label="Restore demo content" />
         </div>
       </Card>
 

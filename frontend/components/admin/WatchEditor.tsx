@@ -103,6 +103,16 @@ export default function WatchEditor({
               </tr>
             </thead>
             <tbody>
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={5}>
+                    <span className="admin-muted">
+                      No watch items yet. Add items to fill the hero panel, or leave this empty to
+                      hide the panel on the public site.
+                    </span>
+                  </td>
+                </tr>
+              )}
               {rows.map((r, i) => (
                 <tr key={r.key}>
                   <td>
@@ -139,7 +149,11 @@ export default function WatchEditor({
         <SaveButton onSave={save} dirty={changed} />
       </Card>
 
-      <p className="admin-hint">Keep at least 3 items for a full-looking panel.</p>
+      <p className="admin-hint">
+        {rows.length === 0
+          ? 'An empty list hides the hero panel on the public site.'
+          : 'Keep at least 3 items for a full-looking panel.'}
+      </p>
     </div>
   );
 }

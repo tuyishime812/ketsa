@@ -14,9 +14,13 @@ export default function Hero({
   proof: Proof;
   copy: HeroContent;
 }) {
+  const hasWatch = watch.length > 0;
+  const hasProof =
+    proof.traders_k > 0 || proof.live_markets > 0 || proof.total_volume_m > 0;
+
   return (
     <section className="border-b border-line pb-16 pt-16">
-      <div className="wrap grid items-center gap-12 lg:grid-cols-[1fr_.95fr]">
+      <div className={`wrap grid items-center gap-12 ${hasWatch ? 'lg:grid-cols-[1fr_.95fr]' : ''}`}>
         <div>
           <Reveal delay={40}>
             <span className="mb-6 inline-flex items-center gap-[8px] rounded-full border border-line bg-white px-[12px] py-[6px] font-mono text-xs font-semibold tracking-[.03em] text-ink-2 shadow-[0_1px_2px_rgba(12,21,38,.04)]">
@@ -56,18 +60,22 @@ export default function Hero({
             </p>
           </Reveal>
 
-          <Reveal delay={360}>
-            <div className="mt-10 flex flex-wrap gap-x-8 gap-y-4 border-t border-line pt-[24px]">
-              <ProofStat num={proof.traders_k} suffix="K" label="Traders onboard" />
-              <ProofStat num={proof.live_markets} label="Live markets" />
-              <ProofStat num={proof.total_volume_m} suffix="M" label="Total volume" decimals={1} />
-            </div>
-          </Reveal>
+          {hasProof && (
+            <Reveal delay={360}>
+              <div className="mt-10 flex flex-wrap gap-x-8 gap-y-4 border-t border-line pt-[24px]">
+                <ProofStat num={proof.traders_k} suffix="K" label="Traders onboard" />
+                <ProofStat num={proof.live_markets} label="Live markets" />
+                <ProofStat num={proof.total_volume_m} suffix="M" label="Total volume" decimals={1} />
+              </div>
+            </Reveal>
+          )}
         </div>
 
-        <Reveal delay={220}>
-          <WatchPanel items={watch} />
-        </Reveal>
+        {hasWatch && (
+          <Reveal delay={220}>
+            <WatchPanel items={watch} />
+          </Reveal>
+        )}
       </div>
     </section>
   );

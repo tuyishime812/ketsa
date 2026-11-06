@@ -76,6 +76,13 @@ export default function Markets({
             <RevealCard key={m.id} market={m} index={i} />
           ))}
         </div>
+        {filtered.length === 0 && (
+          <div className="rounded-m border border-line bg-white p-8 text-center text-[14px] text-ink-3">
+            {markets.length === 0
+              ? 'No markets are live yet — check back soon.'
+              : 'No markets in this category yet.'}
+          </div>
+        )}
       </div>
     </section>
   );
