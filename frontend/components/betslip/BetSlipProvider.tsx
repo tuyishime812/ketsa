@@ -62,7 +62,6 @@ export function BetSlipProvider({ children }: { children: React.ReactNode }) {
     } catch {
       /* ignore */
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storageKey]);
 
   useEffect(() => {

@@ -48,7 +48,12 @@ from . import permissions
 from .auth import require_user, resolve_optional_user, router as auth_router
 from .config import load_env_file
 from .engine import engine
-from .storage import get_all_settings, init_db
+from .storage import (
+    get_all_settings,
+    init_db,
+    is_transient_storage_error,
+    ping_storage,
+)
 from .models import (
     DashboardData,
     DashboardSeries,
@@ -247,6 +252,41 @@ def _leaderboard(limit: int = 20) -> list[dict]:
     return rows[:limit]
 
 
+def _init_storage_with_retry(attempts: int = 3, delay: float = 1.0) -> None:
+    """Initialise the storage backend without turning a blip into a crash loop.
+
+    Startup used to call ``init_db()`` unguarded, so a temporary DNS/network
+    failure while reaching Supabase killed the process before it could serve
+    even ``/api/health``. Retry a couple of times, then start anyway: every
+    storage operation calls ``init()`` lazily and ``_initialized`` only flips
+    to True after a full successful seed, so the next request retries.
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            init_db()
+            return
+        except Exception as exc:
+            if not is_transient_storage_error(exc):
+                raise
+            if attempt == attempts:
+                logger.error(
+                    "Storage backend still unreachable after %d attempts (%s). "
+                    "Starting anyway; storage will retry on the next request.",
+                    attempts,
+                    type(exc).__name__,
+                )
+                return
+            logger.warning(
+                "Storage init attempt %d/%d failed (%s); retrying in %.0fs",
+                attempt,
+                attempts,
+                type(exc).__name__,
+                delay,
+            )
+            time.sleep(delay)
+            delay *= 2
+
+
 def create_app() -> "FastAPI":
     # Load backend/.env (gitignored) so local secrets resolve before the
     # storage backend is selected; real env vars always take precedence.
@@ -254,8 +294,9 @@ def create_app() -> "FastAPI":
     load_env_file(Path(__file__).resolve().parents[2] / ".env")
 
     # Ensure the active storage backend is initialised and seeded before
-    # serving requests.
-    init_db()
+    # serving requests. A transient Supabase/network outage must not prevent
+    # the process from starting (see _init_storage_with_retry).
+    _init_storage_with_retry()
 
     allowed_origins = (
         os.getenv("KETSA_ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
@@ -426,6 +467,7 @@ def create_app() -> "FastAPI":
             response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
         response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
@@ -466,9 +508,40 @@ def create_app() -> "FastAPI":
             messages.append(f"{loc}: {err.get('msg', 'invalid')}" if loc else str(err.get("msg", "invalid")))
         return JSONResponse(status_code=422, content={"detail": messages})
 
+    # `/health` is what most PaaS health checkers probe by default; keep it as
+    # an alias so they do not generate a steady stream of 404s.
+    #
+    # Liveness only: it answers "this process is running". Startup deliberately
+    # tolerates a transient storage outage, so a process with an unreachable
+    # database is still alive — use /api/ready to ask whether it can actually
+    # serve traffic.
     @app.get("/api/health")
+    @app.get("/health", include_in_schema=False)
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/api/ready")
+    @app.get("/ready", include_in_schema=False)
+    async def ready() -> JSONResponse:
+        """Readiness probe: 200 only when the storage backend answers.
+
+        Fail-closed (503) so a load balancer stops sending traffic to a
+        process that would render "temporarily unavailable" for every page.
+        The body is deliberately generic — it never names hosts, tables or
+        driver errors (CWE-209).
+        """
+        try:
+            ping_storage()
+        except Exception as exc:  # noqa: BLE001 - readiness must never raise
+            logger.error(
+                "Readiness check failed: storage unreachable (%s)",
+                type(exc).__name__,
+            )
+            return JSONResponse(
+                status_code=503,
+                content={"status": "unavailable", "storage": "unreachable"},
+            )
+        return JSONResponse(status_code=200, content={"status": "ok", "storage": "ok"})
 
     @app.get("/api/markets", response_model=MarketsGroup)
     async def markets() -> MarketsGroup:
@@ -1115,10 +1188,7 @@ def create_app() -> "FastAPI":
             except ValueError as e:
                 raise HTTPException(status_code=400, detail=str(e))
         await _pump_events(manager)
-        try:
-            return TradeResponse(**result)
-        except Exception:
-            return TradeResponse(**result)
+        return TradeResponse(**result)
 
     @app.post(
         "/api/admin/markets/{market_id}/resolve",
@@ -1161,7 +1231,10 @@ def create_app() -> "FastAPI":
                 "outcome": body.outcome,
                 "resolved_price": summary["resolved_price"],
                 "wallets_settled": summary["wallets_settled"],
+                "already_settled": summary.get("already_settled", 0),
                 "total_payout": summary["total_payout"],
+                "resumed": bool(summary.get("already_resolved") is False
+                                and summary.get("already_settled")),
             },
         )
         detail = (
@@ -1169,6 +1242,16 @@ def create_app() -> "FastAPI":
             f"{summary['resolved_price']}¢ · {summary['wallets_settled']} wallets"
             f" settled · ${summary['total_payout']:.2f} paid out"
         )
+        if summary.get("already_resolved"):
+            detail = (
+                f"{market_id} was already resolved to {body.outcome.upper()} — "
+                "no wallets were paid again"
+            )
+        elif summary.get("already_settled"):
+            detail += (
+                f" · {summary['already_settled']} wallet(s) had already been paid "
+                "by an earlier run and were skipped"
+            )
         return MessageResponse(detail=detail)
 
     @app.get("/api/leaderboard", response_model=list[LeaderboardEntry])

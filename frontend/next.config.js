@@ -19,6 +19,15 @@ const nextConfig = {
         headers: [
           { key: 'X-Frame-Options', value: 'DENY' },
           { key: 'X-Content-Type-Options', value: 'nosniff' },
+          // Forces HTTPS for two years, including subdomains. Browsers ignore
+          // HSTS received over plain HTTP, so local `http://localhost:3000`
+          // development is unaffected; production must be served over TLS.
+          // No `preload` directive: that is a one-way commitment to the
+          // browser preload list and should be a deliberate, separate decision.
+          {
+            key: 'Strict-Transport-Security',
+            value: 'max-age=63072000; includeSubDomains',
+          },
           { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
           {
             key: 'Permissions-Policy',

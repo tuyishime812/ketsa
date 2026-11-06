@@ -50,6 +50,41 @@ include live credentials or PII in the report. We aim to acknowledge within
 
 ---
 
+## Settlement integrity (market resolution)
+
+Resolving a market pays **real money** to every holder, so the payout loop is
+treated as a money-moving transaction, not a batch job.
+
+- **Two-phase, resumable.** Before any wallet is credited the market row is
+  written with `settlement.status = "in_progress"` (outcome + start time).
+  Trading is refused from that moment — the answer is already decided.
+- **Per-wallet payout markers.** Each wallet stores a
+  `settlements[<market_id>]` marker with the outcome and amount, written in the
+  **same durable wallet write** as the credit. A replayed or resumed run skips
+  wallets that already have a marker, so a wallet can never be paid twice.
+- **Completion is last.** `status = "resolved"` and `resolved_*` are only
+  written after every wallet has a marker. If the process dies mid-loop the
+  market stays `open` + `in_progress` and the admin Resolve action resumes it.
+- **Replay is inert.** Resolving an already-resolved market to the same outcome
+  is a successful no-op (`already_resolved: true`, zero payout). Resolving it to
+  a *different* outcome is a `400`.
+- **Content writes cannot forge it.** `markets:write` is rejected if the payload
+  contains any settlement field (`admin._SETTLEMENT_FIELDS`), and `market:resolve`
+  is a separate capability.
+- **The market row cannot be deleted out from under a payout.** `DELETE
+  /api/admin/markets/{id}` returns `409` while a settlement is in progress (its
+  per-wallet markers would be orphaned) and while an unresolved market still has
+  open positions (holders could never redeem them). Resolve first, then delete.
+- **Still single-process.** The whole settlement runs under the API's global
+  money lock, which serializes *within one process only*. The startup guard
+  (`app/replica.py`) must stay in place; see "Single-replica requirement".
+
+Tests: `backend/tests/test_settlement_integrity.py` (crash mid-loop, resume,
+replay, wrong-outcome resume, failed-write rollback, forged write, marker
+persistence, delete safety).
+
+---
+
 ## Privileged-action audit log
 
 `backend/app/audit.py` records every privileged or money-moving action to an

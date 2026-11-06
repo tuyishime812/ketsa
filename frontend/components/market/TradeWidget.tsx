@@ -109,6 +109,23 @@ export default function TradeWidget({
     wallet === undefined ||
     wallet.balance >= (estimate?.total ?? 0);
 
+  if (market.settlement?.status === 'in_progress') {
+    // The outcome is fixed and payouts are running; the backend refuses new
+    // orders during this window, so do not render a form that cannot submit.
+    return (
+      <div className="rounded-m border border-line bg-white p-6 text-center">
+        <div className="font-mono text-[10px] uppercase tracking-[.07em] text-ink-3">
+          Resolution in progress
+        </div>
+        <div className="mt-3 font-serif text-[24px] font-medium">Trading paused</div>
+        <p className="mx-auto mt-2 max-w-[280px] text-[13px] text-ink-2">
+          The outcome is decided and winning positions are being paid out.
+          Trading stays paused until every holder has been settled.
+        </p>
+      </div>
+    );
+  }
+
   if (market.status === 'resolved') {
     const winner = market.resolved_outcome ?? (market.yes > market.no ? 'yes' : 'no');
     const winPrice = market.resolved_price ?? (winner === 'yes' ? market.yes : market.no);

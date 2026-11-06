@@ -34,6 +34,18 @@ export interface Market {
   resolved_outcome?: Outcome | null; // winning outcome once resolved
   resolved_price?: number | null; // final price of the YES side (100 or 0)
   resolved_ts?: number | null; // unix time of resolution
+  // Resolution bookkeeping. `in_progress` means the outcome is fixed and the
+  // payout is still running: trading is paused, and a retry resumes it safely.
+  settlement?: {
+    status: 'in_progress' | 'complete';
+    outcome: Outcome;
+    started_ts?: number;
+    completed_ts?: number;
+    wallets_settled?: number;
+    already_settled?: number;
+    total_payout?: number;
+    version?: number;
+  } | null;
 }
 
 export interface OrderLevel {

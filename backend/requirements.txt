@@ -2,6 +2,11 @@ fastapi==0.141.1
 uvicorn[standard]==0.52.4
 pydantic==2.13.5
 supabase==2.31.0
+# Imported directly by app/storage.py (transient-error detection + the
+# PostgREST timeout), not only transitively via supabase. Pinned so a future
+# supabase release cannot silently change the transport semantics the retry
+# and readiness paths rely on.
+httpx==0.28.1
 psycopg[binary]==3.2.9  # enables KETSA_DB_URL row locking for multi-process safety
 
 # supabase-auth 2.31.0 (pulled in by supabase==2.31.0) declares

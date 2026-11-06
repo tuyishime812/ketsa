@@ -67,6 +67,12 @@ def _trading_block_reason(market: dict | None) -> str | None:
         return "This market has resolved — trading is closed"
     if market.get("status") == "closed":
         return "This market is closed — trading has stopped"
+    # A resolution that started but has not finished (mid-payout crash, or a
+    # resume in progress) must not accept new orders: the outcome is already
+    # decided even though the market row is not marked resolved yet.
+    settlement = market.get("settlement")
+    if isinstance(settlement, dict) and settlement.get("status") == "in_progress":
+        return "This market is being resolved — trading is paused"
     end_date = market.get("end_date")
     if not end_date:
         return None
@@ -1023,25 +1029,104 @@ class Marketplace:
             wallet["positions"] = {}
         return payout
 
+    def has_open_positions(self, market_id: str) -> bool:
+        """True if any wallet — live or persisted-only — holds this market.
+
+        Used to refuse deleting a market that still owes money: a position is
+        only redeemable by ``resolve_market``, so deleting the row first would
+        strand every holder's shares with nothing to settle them against.
+        """
+        for wallet in self._wallets.values():
+            if (wallet.get("positions") or {}).get(market_id) is not None:
+                return True
+        for wallet in store.list_wallets():
+            if (wallet.get("positions") or {}).get(market_id) is not None:
+                return True
+        return False
+
+    @staticmethod
+    def _settlement_marker(wallet: dict, market_id: str) -> dict | None:
+        """Return this wallet's proof-of-payout for a market, if any.
+
+        The marker is written in the *same* durable wallet write as the payout,
+        which is what makes settlement crash-safe: a replayed run sees it and
+        skips the wallet instead of crediting it a second time.
+        """
+        settlements = wallet.get("settlements")
+        if not isinstance(settlements, dict):
+            return None
+        entry = settlements.get(market_id)
+        return entry if isinstance(entry, dict) else None
+
+    @staticmethod
+    def _record_settlement(
+        wallet: dict, market_id: str, outcome: str, payout: float, ts: float
+    ) -> None:
+        """Attach the per-market payout marker to the wallet (before persisting)."""
+        settlements = wallet.get("settlements")
+        if not isinstance(settlements, dict):
+            settlements = {}
+            wallet["settlements"] = settlements
+        settlements[market_id] = {
+            "outcome": outcome,
+            "payout": _round2(payout),
+            "ts": ts,
+        }
+
     def resolve_market(self, market_id: str, outcome: str) -> dict:
         """Resolve a market to YES/NO, settle every holder, and lock trading.
 
         Winning shares pay $1 each (realizing the entire payout as profit);
         losing shares expire to zero. The resolved outcome + price are persisted
         on the market so the state survives restarts and shows everywhere.
+
+        Settlement is **idempotent and resumable** (CWE-362 / CWE-667). The
+        market is marked ``settlement.status = "in_progress"`` *before* any
+        wallet is credited — which blocks new orders — and each wallet records
+        a payout marker in the same durable write that credits it. If the
+        process dies mid-loop, or the admin request times out and is retried,
+        the next run resumes and pays only the wallets without a marker. A
+        wallet can therefore never be paid twice.
         """
         if outcome not in ("yes", "no"):
             raise ValueError("outcome must be 'yes' or 'no'")
         market = store.get_market(market_id)
         if market is None:
             raise ValueError("Unknown market")
-        if market.get("status") == "resolved":
-            raise ValueError("Market is already resolved")
         question = market["q"] or market_id
-
         winning_price = 100 if outcome == "yes" else 0
 
-        # Freeze the live book at the final answer.
+        if market.get("status") == "resolved":
+            previous = market.get("resolved_outcome")
+            if previous == outcome:
+                # Replay of a completed resolution: a safe no-op, not an error.
+                return {
+                    "market_id": market_id,
+                    "outcome": outcome,
+                    "resolved_price": winning_price,
+                    "wallets_settled": 0,
+                    "already_settled": 0,
+                    "total_payout": 0.0,
+                    "already_resolved": True,
+                }
+            raise ValueError(
+                "Market is already resolved to "
+                f"{(previous or 'another outcome').upper()}"
+            )
+
+        previous_settlement = market.get("settlement")
+        if not isinstance(previous_settlement, dict):
+            previous_settlement = {}
+        if (
+            previous_settlement.get("status") == "in_progress"
+            and previous_settlement.get("outcome") != outcome
+        ):
+            raise ValueError(
+                "An interrupted settlement for this market can only be resumed "
+                "with its original outcome"
+            )
+
+        # Freeze the live book at the final answer. Idempotent on resume.
         book = self._ensure(market_id)
         if book is not None:
             book["yes"] = winning_price
@@ -1054,10 +1139,24 @@ class Marketplace:
             book["trend"] = "up"
             book["resolved"] = True
 
+        # Durable in-progress marker BEFORE crediting anyone. If we crash after
+        # this write, trading is still refused and the resolve action can be
+        # retried to finish the remaining wallets.
+        started_ts = previous_settlement.get("started_ts") or time.time()
+        stored = dict(market)
+        stored["settlement"] = {
+            "status": "in_progress",
+            "outcome": outcome,
+            "started_ts": started_ts,
+            "version": 1,
+        }
+        store.upsert_market(stored)
+
         # Settle every wallet that holds a position in this market — both the
         # live in-memory wallets and any persisted-only copies, without double
         # paying wallets that exist in both places.
         settled = 0
+        already_settled = 0
         total_payout = 0.0
         # `list_wallets()` already returns the full rows. Re-fetching each one
         # turned settlement into an N+1 query storm (and could time out the
@@ -1068,27 +1167,56 @@ class Marketplace:
             wallet = self._wallets.get(wallet_id) or persisted_wallets.get(wallet_id)
             if wallet is None:
                 continue
+            if self._settlement_marker(wallet, market_id) is not None:
+                # Paid by an earlier (interrupted) run — never pay twice.
+                already_settled += 1
+                continue
             is_live = wallet_id in self._wallets
             if (wallet.get("positions") or {}).get(market_id) is None:
                 continue
-            payout = self._settle_wallet(wallet, market_id, outcome, question)
+            # `_settle_wallet` pops the position before crediting and notifying,
+            # and persisting can fail on a transient storage error. Without a
+            # rollback either failure would leave the live wallet mutated but
+            # undurable: the marker is absent, the position is gone, and the
+            # retry would skip the wallet — silently erasing a winning payout.
+            # Restore the exact pre-settlement state and re-raise so the resolve
+            # action fails loudly and a retry starts from a consistent basis.
+            snapshot = copy.deepcopy(wallet) if is_live else None
+            try:
+                payout = self._settle_wallet(wallet, market_id, outcome, question)
+                self._record_settlement(wallet, market_id, outcome, payout, time.time())
+                if is_live:
+                    self._persist(wallet_id)
+                else:
+                    store.upsert_wallet(wallet)
+            except BaseException:
+                if snapshot is not None:
+                    wallet.clear()
+                    wallet.update(snapshot)
+                raise
             total_payout += payout
             settled += 1
-            if is_live:
-                self._persist(wallet_id)
-            else:
-                store.upsert_wallet(wallet)
 
-        stored = dict(market)
+        completed_ts = time.time()
+        stored = dict(stored)
         stored["status"] = "resolved"
         stored["resolved_outcome"] = outcome
         stored["resolved_price"] = winning_price
-        stored["resolved_ts"] = time.time()
+        stored["resolved_ts"] = completed_ts
+        stored["settlement"] = {
+            **stored["settlement"],
+            "status": "complete",
+            "completed_ts": completed_ts,
+            "wallets_settled": settled,
+            "already_settled": already_settled,
+            "total_payout": _round2(total_payout),
+        }
         store.upsert_market(stored)
 
         self._emit_market(market_id)
         self._emit({"type": "resolution", "market_id": market_id, "outcome": outcome,
                     "resolved_price": winning_price, "wallets_settled": settled,
+                    "already_settled": already_settled,
                     "total_payout": _round2(total_payout)})
         self._emit({"type": "leaderboard"})
         return {
@@ -1096,7 +1224,9 @@ class Marketplace:
             "outcome": outcome,
             "resolved_price": winning_price,
             "wallets_settled": settled,
+            "already_settled": already_settled,
             "total_payout": _round2(total_payout),
+            "already_resolved": False,
         }
 
     def reseed_market(self, market_id: str) -> None:
@@ -1124,7 +1254,10 @@ class Marketplace:
         picks = random.sample(markets, k=min(2, len(markets)))
         for market in picks:
             book = self._ensure(market["id"])
-            if book is None or market.get("status") == "resolved":
+            if book is None or _trading_block_reason(market):
+                # A resolved (or mid-settlement) market must not tick: the
+                # answer is fixed, and moving the price would contradict the
+                # payout that was just made.
                 continue
             delta = random.choice((-3, -2, -1, 0, 1, 1, 2))
             new_yes = _clamp(book["yes"] + delta, 5, 95)

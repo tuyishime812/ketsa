@@ -22,7 +22,7 @@ import time
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import authstate, mailer, netutil, social, store
 from . import audit
@@ -266,44 +266,47 @@ def verify_password(password: str, stored: str) -> bool:
 
 
 class RegisterRequest(BaseModel):
-    name: str
-    identifier: str  # email address OR Malawian phone number
-    password: str
+    name: str = Field(max_length=100)
+    identifier: str = Field(max_length=320)  # email address OR Malawian phone number
+    # Upper bound matters: PBKDF2 cost scales with input length, so an
+    # unbounded password is a cheap CPU-exhaustion vector on a public endpoint
+    # (CWE-400). 256 chars is far beyond any real password.
+    password: str = Field(max_length=256)
 
 
 class ForgotPasswordRequest(BaseModel):
-    identifier: str  # email address OR Malawian phone number
+    identifier: str = Field(max_length=320)  # email address OR Malawian phone number
 
 
 class ResetPasswordRequest(BaseModel):
-    email: str
-    otp: str
-    new_password: str
+    email: str = Field(max_length=320)
+    otp: str = Field(max_length=16)
+    new_password: str = Field(max_length=256)
 
 
 class LoginRequest(BaseModel):
-    identifier: str  # email address OR Malawian phone number
-    password: str
+    identifier: str = Field(max_length=320)  # email address OR Malawian phone number
+    password: str = Field(max_length=256)
 
 
 class LoginCodeRequest(BaseModel):
     """Ask for a sign-in code to be emailed. Email addresses only."""
 
-    identifier: str
+    identifier: str = Field(max_length=320)
 
 
 class VerifyLoginCodeRequest(BaseModel):
-    email: str
-    otp: str
+    email: str = Field(max_length=320)
+    otp: str = Field(max_length=16)
 
 
 class ChangePasswordRequest(BaseModel):
-    current: str
-    new: str
+    current: str = Field(max_length=256)
+    new: str = Field(max_length=256)
 
 
 class SocialSessionRequest(BaseModel):
-    ticket: str
+    ticket: str = Field(max_length=256)
 
 
 class AuthResponse(BaseModel):

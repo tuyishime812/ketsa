@@ -39,6 +39,11 @@ class Market(BaseModel):
     resolved_outcome: Optional[Outcome] = None  # winning outcome ('yes'/'no')
     resolved_price: Optional[int] = None        # final price of the winning outcome
     resolved_ts: Optional[float] = None         # unix time of resolution
+    # Resolution bookkeeping: {"status": "in_progress"|"complete", "outcome",
+    # "started_ts", ...}. Declared so it round-trips through admin edits instead
+    # of being silently dropped, and so a content writer cannot inject it
+    # (admin._SETTLEMENT_FIELDS rejects it on the write path).
+    settlement: Optional[dict] = None
 
 
 class MarketInput(Market):
@@ -95,7 +100,7 @@ class MarketInput(Market):
 
 class ResolveMarketRequest(BaseModel):
     outcome: Outcome
-    reason: Optional[str] = None
+    reason: Optional[str] = Field(default=None, max_length=500)
 
 
 class OrderLevel(BaseModel):
@@ -167,8 +172,8 @@ class Wallet(BaseModel):
 
 
 class WalletConnectRequest(BaseModel):
-    id: Optional[str] = None
-    name: str = 'Trader'
+    id: Optional[str] = Field(default=None, max_length=128)
+    name: str = Field(default="Trader", max_length=80)
 
 
 class User(BaseModel):
@@ -181,8 +186,8 @@ class User(BaseModel):
 
 
 class ChangePasswordRequest(BaseModel):
-    current: str
-    new: str
+    current: str = Field(max_length=256)
+    new: str = Field(max_length=256)
 
 
 class AdminUserView(BaseModel):

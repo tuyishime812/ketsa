@@ -308,10 +308,13 @@ The `/api/*` HTTP calls go through the frontend's runtime proxy regardless.
 # Backend
 cd backend
 .venv\Scripts\python.exe -m pytest
-# 307 tests: endpoints, models/seed consistency, 404/405, CORS,
+# 374 tests: endpoints, models/seed consistency, 404/405, CORS,
 # security headers, OpenAPI gating, rate limiting, admin auth + CRUD + user
 # management, admin login brute-force throttling, the matching engine
-# (wallets, books, execution, WS feed), account auth (register/login,
+# (wallets, books, execution, WS feed), settlement integrity (idempotent
+# replay, crash mid-payout + resume, failed-write rollback, per-wallet payout
+# markers, forge rejection), market-delete safety (open positions / in-flight
+# settlement), readiness vs. liveness, account auth (register/login,
 # sessions, throttling, change password, wallet-binding on writes),
 # leaderboard + notifications, PayChangu payments (deposits, withdrawals,
 # idempotent crediting, refunds, webhook + reconciler, transaction + daily caps), the
@@ -514,6 +517,16 @@ timestamp window) and the backend verifies it before using it. Alternative:
 neither configured, the direct peer is used — the safe default for a locally
 exposed backend. `backend/app/netutil.py` holds the resolver and
 `backend/tests/test_netutil.py` pins the contract.
+
+**Health vs. readiness.** `GET /api/health` is a **liveness** probe: it answers
+`200` while the process is running, and deliberately keeps doing so during a
+brief storage outage (startup tolerates a transient Supabase/DNS failure so a
+blip cannot crash-loop the service). `GET /api/ready` is the **readiness**
+probe: it performs one trivial storage read and returns `503` when the backend
+is unreachable, so an orchestrator stops routing traffic to a container that
+would render "temporarily unavailable" for every page. Point PaaS/Docker health
+checks at `/api/ready` (the backend image's `HEALTHCHECK` and `docker-compose.yml`
+already do).
 
 **OpenAPI docs are off by default** (`KETSA_EXPOSE_DOCS=0`) to avoid leaking
 the API schema publicly. Turn them on only for debugging.

@@ -619,7 +619,7 @@ _EDITABLE_MARKET_FIELDS = frozenset(
     }
 )
 _SETTLEMENT_FIELDS = frozenset(
-    {"last_price", "resolved_outcome", "resolved_price", "resolved_ts"}
+    {"last_price", "resolved_outcome", "resolved_price", "resolved_ts", "settlement"}
 )
 
 
@@ -728,6 +728,26 @@ async def admin_markets_delete(
 ) -> MessageResponse:
     if market_id in RESERVED_KV_KEYS:
         raise HTTPException(status_code=400, detail="That market id is reserved")
+    market = store.get_market(market_id)
+    if market is not None:
+        settlement = market.get("settlement")
+        if isinstance(settlement, dict) and settlement.get("status") == "in_progress":
+            # Payouts are in flight (or half-finished). The resolve action is
+            # resumable; deleting the row would orphan its per-wallet markers.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "A settlement is in progress for this market — finish it "
+                    "with the Resolve action before deleting"
+                ),
+            )
+        if market.get("status") != "resolved" and engine.has_open_positions(market_id):
+            # Deleting would erase the only object the positions can settle
+            # against, silently destroying holders' funds. Resolve it first.
+            raise HTTPException(
+                status_code=409,
+                detail="This market has open positions — resolve it before deleting",
+            )
     deleted = store.delete_market(market_id)
     engine.remove_market(market_id)
     _record_admin(

@@ -184,6 +184,7 @@ def _ticker_dict(t) -> dict:
 
 class StoreBackend(Protocol):
     def init(self) -> None: ...
+    def ping(self) -> None: ...
     def list_markets(self) -> list[dict]: ...
     def get_market(self, market_id: str) -> dict | None: ...
     def upsert_market(self, m: dict) -> None: ...
@@ -318,6 +319,10 @@ class MemoryBackend:
             "total_volume_m": PROOF.total_volume_m,
         }
         self._initialized = True
+
+    def ping(self) -> None:
+        """Cheap liveness check for the readiness probe (always up in-process)."""
+        self.init()
 
     def force_reseed(self) -> None:
         """Drop everything and re-seed (admin "reset content")."""
@@ -718,6 +723,22 @@ def _as_json(value: Any) -> Any:
     return json.loads(json.dumps(value, default=str))
 
 
+def is_transient_storage_error(exc: BaseException) -> bool:
+    """True for DNS/connection/timeout failures that are safe to retry.
+
+    Supabase talks to PostgREST over httpx, so a brief network or DNS blip
+    surfaces as ``httpx.TransportError`` (ConnectError, ReadError, timeout,
+    …). Configuration and schema errors are *not* transient and must still
+    fail fast so a misdeployment is obvious instead of silently degraded.
+    """
+    try:
+        import httpx
+    except ImportError:  # pragma: no cover - httpx ships with supabase
+        return False
+    return isinstance(exc, httpx.TransportError)
+
+
+
 class SupabaseBackend:
     """Persistent storage in a Supabase Postgres database.
 
@@ -776,11 +797,58 @@ class SupabaseBackend:
                 "KETSA_DB_BACKEND=supabase requires SUPABASE_URL and "
                 "SUPABASE_SERVICE_ROLE_KEY to be set"
             )
-        return create_client(url, key)
+        # The supabase default PostgREST timeout is two minutes, so a dead
+        # network path can hold a request (and startup) for far longer than a
+        # user will wait. Cap connect/read so failures surface quickly and the
+        # retry paths above can do their job. Version-tolerant: older
+        # supabase-py releases expose ClientOptions from the same module but
+        # do not accept every newer field.
+        try:
+            import httpx
+            from supabase.client import ClientOptions  # type: ignore
+
+            options = ClientOptions(
+                postgrest_client_timeout=httpx.Timeout(20.0, connect=5.0)
+            )
+        except Exception:  # pragma: no cover - optional/version-specific API
+            options = None
+        if options is None:
+            return create_client(url, key)
+        return create_client(url, key, options=options)
 
     # --- generic PostgREST helpers ------------------------------------------
+    def ping(self) -> None:
+        """Verify the database answers a trivial query.
+
+        Used by ``/api/ready``: startup deliberately tolerates a transient
+        outage (see ``main._init_storage_with_retry``), so liveness alone would
+        report a storage-less process as healthy forever (fail-open
+        monitoring). This raises when storage is genuinely unreachable.
+        """
+        self._read(
+            lambda: self.client.table(KV_TABLE).select("id").limit(1)
+        )
+
+    def _read(self, build: Any) -> Any:
+        """Execute a SELECT, retrying once on a transient transport failure.
+
+        A stale keep-alive socket or a brief DNS failure must not turn a page
+        load into a 500. Only reads go through here: retrying a write blindly
+        could duplicate a non-idempotent INSERT. On retry the cached client is
+        dropped so a fresh connection pool is used.
+        """
+        try:
+            return build().execute()
+        except Exception as exc:
+            if not is_transient_storage_error(exc):
+                raise
+            self._client = None
+            return build().execute()
+
     def _get_row(self, table: str, row_id: str) -> dict | None:
-        data = self.client.table(table).select("*").eq("id", row_id).limit(1).execute().data
+        data = self._read(
+            lambda: self.client.table(table).select("*").eq("id", row_id).limit(1)
+        ).data
         if not data:
             return None
         return _as_json(data[0].get("value"))
@@ -799,16 +867,13 @@ class SupabaseBackend:
         page_size = 1000
         start = 0
         while True:
-            data = (
-                self.client.table(table)
+            data = self._read(
+                lambda: self.client.table(table)
                 .select("*")
                 # Stable order is required for correct offset pagination.
                 .order("id")
                 .range(start, start + page_size - 1)
-                .execute()
-                .data
-                or []
-            )
+            ).data or []
             rows.extend(data)
             if len(data) < page_size:
                 break
@@ -816,7 +881,11 @@ class SupabaseBackend:
         return [_as_json(r.get("value")) for r in rows]
 
     def _count_kind(self, kind: str) -> int:
-        res = self.client.table(KV_TABLE).select("id", count="exact").eq("kind", kind).execute()
+        res = self._read(
+            lambda: self.client.table(KV_TABLE)
+            .select("id", count="exact")
+            .eq("kind", kind)
+        )
         return int(res.count or 0)
 
     def _list_kind(self, kind: str) -> list[dict]:
@@ -827,17 +896,14 @@ class SupabaseBackend:
         page_size = 1000
         start = 0
         while True:
-            data = (
-                self.client.table(KV_TABLE)
+            data = self._read(
+                lambda: self.client.table(KV_TABLE)
                 .select("*")
                 .eq("kind", kind)
                 # Stable order is required for correct offset pagination.
                 .order("id")
                 .range(start, start + page_size - 1)
-                .execute()
-                .data
-                or []
-            )
+            ).data or []
             rows.extend(data)
             if len(data) < page_size:
                 break
@@ -893,15 +959,13 @@ class SupabaseBackend:
         return self._list_kind("market")
 
     def _get_market_row(self, market_id: str) -> dict | None:
-        data = (
-            self.client.table(KV_TABLE)
+        data = self._read(
+            lambda: self.client.table(KV_TABLE)
             .select("*")
             .eq("id", market_id)
             .eq("kind", "market")
             .limit(1)
-            .execute()
-            .data
-        )
+        ).data
         if not data:
             return None
         return _as_json(data[0].get("value"))
@@ -1422,6 +1486,11 @@ def reset_backend() -> None:
 def init_db() -> None:
     """Initialise and seed the active backend."""
     get_backend().init()
+
+
+def ping_storage() -> None:
+    """Raise if the active backend cannot answer a trivial read (readiness)."""
+    get_backend().ping()
 
 
 def reset_db() -> None:
