@@ -195,18 +195,26 @@ export interface Payment {
   kind: PaymentKind;
   amount: number;
   number: string;
-  correspondent: string; // "AIRTEL" | "TNM" (legacy *_MWI aliases accepted)
+  correspondent: string; // "AIRTEL" | "TNM" (legacy *_MWI aliases accepted) | "USDT"
   status: PaymentStatus;
   credited: boolean;
   rolled_back: boolean;
   provider_charge_id: string | null; // stable idempotency key / webhook correlation id
-  wande_id: string | null; // legacy alias of provider_charge_id, kept for old records
   message: string | null;
+  provider?: string | null;
+  invoice_id?: string | null;
+  invoice_url?: string | null;
+  qr_code?: string | null;
+  deposit_address?: string | null;
+  crypto_amount?: number | null;
+  crypto_currency?: string | null;
+  crypto_network?: string | null;
+  expires_at?: number | null;
   created: number;
   updated: number;
 }
 
-export type Correspondent = 'AIRTEL_MWI' | 'TNM_MWI';
+export type Correspondent = 'AIRTEL_MWI' | 'TNM_MWI' | 'USDT';
 
 export interface TradeLeg {
   market_id: string;

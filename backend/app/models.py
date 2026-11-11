@@ -1,4 +1,4 @@
-"""Pydantic response models for the Ketsa prediction-market API.
+﻿"""Pydantic response models for the Ketsa prediction-market API.
 
 These models are the single source of truth for the wire format that the
 Next.js frontend consumes. Keep field names/types in sync with
@@ -159,7 +159,7 @@ class Wallet(BaseModel):
     id: str
     name: str
     balance: float
-    # Real money paid in via PayChangu — the ceiling on a withdrawal. Absent on
+    # Real money paid in via PayChangu â€” the ceiling on a withdrawal. Absent on
     # wallets persisted before the field existed, so default to 0.0 (a legacy
     # free seed stays play money and is never cashable).
     withdrawable: float = 0.0
@@ -200,7 +200,7 @@ class AdminUserView(BaseModel):
     created: float
     wallet_equity: Optional[float] = None
     wallet_balance: Optional[float] = None
-    # Real money paid in through mobile money — the only cashable-out pool.
+    # Real money paid in through mobile money â€” the only cashable-out pool.
     wallet_withdrawable: Optional[float] = None
     wallet_currency: str = "MWK"
     positions: int = 0
@@ -215,7 +215,7 @@ class AdminUserView(BaseModel):
 
 # --- Staff directory --------------------------------------------------------
 #
-# A staff member is an operator of the platform (support, finance, …), distinct
+# A staff member is an operator of the platform (support, finance, â€¦), distinct
 # from a trader account. Roles are an allowlist, not free text: the value is
 # rendered in the admin UI and interpolated into the invite email, so an
 # unbounded string would be a stored-injection vector.
@@ -247,7 +247,7 @@ class StaffUpload(BaseModel):
 
 
 class StaffMember(BaseModel):
-    """Full staff record — the admin view, including contact details.
+    """Full staff record â€” the admin view, including contact details.
 
     Credential material (password hash, invite-token digest) is never part of
     this model; ``staff.admin_view`` projects it away and adds these status
@@ -286,7 +286,7 @@ class StaffChangePassword(BaseModel):
 
 
 class StaffPublic(BaseModel):
-    """Public view — deliberately WITHOUT email/phone (PII)."""
+    """Public view â€” deliberately WITHOUT email/phone (PII)."""
     id: str
     name: str
     role: str
@@ -349,8 +349,8 @@ class TradeRequest(BaseModel):
     market_id: Optional[str] = None
     outcome: Optional[Outcome] = None
     side: Side = 'buy'
-    amount: Optional[float] = None  # dollars — required for buys
-    shares: Optional[float] = None  # shares — required for sells
+    amount: Optional[float] = None  # dollars â€” required for buys
+    shares: Optional[float] = None  # shares â€” required for sells
     legs: Optional[List[TradeLeg]] = None
     slip: Optional[List[TradeLeg]] = None
     bets: Optional[List[TradeLeg]] = None
@@ -477,14 +477,23 @@ class Payment(BaseModel):
     number: str
     correspondent: str
     status: str  # pending | completed | failed
-    credited: bool = False  # deposits only — idempotency guard
-    rolled_back: bool = False  # withdrawals only — refund guard if the payout fails
+    credited: bool = False  # deposits only - idempotency guard
+    rolled_back: bool = False  # withdrawals only - refund guard if the payout fails
     # The provider's charge id. We generate it ourselves (the payment id) so it
     # is stable across retries and webhooks can be matched idempotently.
     provider_charge_id: str | None = None
     # Legacy field name kept on the wire so older clients/records still parse.
     wande_id: str | None = None
     message: str | None = None
+    provider: str | None = None  # e.g. paychangu, binance_pay
+    invoice_id: str | None = None
+    invoice_url: str | None = None
+    qr_code: str | None = None
+    deposit_address: str | None = None
+    crypto_amount: float | None = None
+    crypto_currency: str | None = None
+    crypto_network: str | None = None
+    expires_at: float | None = None
     created: float
     updated: float
 

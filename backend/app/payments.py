@@ -49,11 +49,15 @@ _DEFAULT_OPERATOR_REFS = {
 
 # Short codes accepted by the API, plus the legacy `_MWI` values the frontend
 # has always sent. Everything is normalised to AIRTEL / TNM before use.
+# USDT is supported as a crypto deposit rail (non-PayChangu).
 _OPERATOR_ALIASES = {
     "AIRTEL": "AIRTEL",
     "AIRTEL_MWI": "AIRTEL",
     "TNM": "TNM",
     "TNM_MWI": "TNM",
+    "USDT": "USDT",
+    "CRYPTO": "USDT",
+    "CRYPTO_USDT": "USDT",
 }
 CORRESPONDENTS = tuple(_OPERATOR_ALIASES)
 
@@ -169,6 +173,23 @@ def normalize_number(number: str) -> str:
     return f"+265{digits}"
 
 
+def normalize_payment_contact(number: str, correspondent: str) -> str:
+    """Return a normalized contact reference for the selected rail.
+
+    Mobile money rails require a valid Malawian MSISDN. Crypto rails accept a
+    wallet address / transaction reference string (kept opaque, length-bounded).
+    """
+    canonical = normalize_correspondent(correspondent)
+    if canonical == "USDT":
+        ref = (number or "").strip()
+        if not ref:
+            return "USDT"
+        if len(ref) > 128:
+            raise PayChanguError("Crypto reference is too long")
+        return ref
+    return normalize_number(number)
+
+
 # --- Status parsing ------------------------------------------------------------
 
 
@@ -179,7 +200,13 @@ def charge_status(payload: dict[str, Any]) -> tuple[str, str | None]:
     inconsistent between endpoints (``status: "successful"`` at the top level
     vs ``data.status: "success"``), so both are inspected.
     """
-    data = payload.get("data") or {}
+    if not isinstance(payload, dict):
+        return "pending", None
+    data = payload.get("data")
+    # `/mobile-money` returns a list here; charge endpoints return an object.
+    # Anything else must degrade to "pending", never raise on the poll path.
+    if not isinstance(data, dict):
+        data = {}
     top = str(payload.get("status") or "").strip().lower()
     inner = str(data.get("status") or "").strip().lower()
     message = payload.get("message") or data.get("message")

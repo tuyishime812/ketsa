@@ -36,6 +36,7 @@ from . import mailer
 from . import netutil
 from . import replica
 from . import payments as paychangu
+from . import binance_pay
 from . import siteconfig
 from . import staff
 from . import store
@@ -681,7 +682,7 @@ def create_app() -> "FastAPI":
             raise HTTPException(status_code=400, detail=str(e))
 
     def _provider_ref(rec: dict) -> str | None:
-        return rec.get("provider_charge_id") or rec.get("wande_id")
+        return rec.get("provider_charge_id")
 
     def _apply_payment_state(rec: dict, state: str, message: str | None) -> bool:
         """Apply a *verified* provider state to a pending payment.
@@ -745,10 +746,20 @@ def create_app() -> "FastAPI":
     def _provider_status(rec: dict) -> dict:
         ref = _provider_ref(rec)
         if not ref:
+            if (rec.get("provider") == "binance_pay") or rec.get("correspondent") == "USDT":
+                raise binance_pay.BinancePayError("Payment has no provider reference")
             raise paychangu.PayChanguError("Payment has no provider reference")
+        if (rec.get("provider") == "binance_pay") or rec.get("correspondent") == "USDT":
+            query_id = rec.get("invoice_id") or rec.get("provider_charge_id") or ref
+            return binance_pay.query_deposit(str(query_id))
         if rec["kind"] == "deposit":
             return paychangu.deposit_status(ref)
         return paychangu.withdrawal_status(ref)
+
+    def _provider_charge_state(rec: dict, payload: dict) -> tuple[str, str | None]:
+        if (rec.get("provider") == "binance_pay") or rec.get("correspondent") == "USDT":
+            return binance_pay.payment_state(payload)
+        return paychangu.charge_status(payload)
 
     def _payment_payload(rec: dict) -> dict:
         return Payment(**rec).model_dump()
@@ -767,11 +778,11 @@ def create_app() -> "FastAPI":
         user = require_user(authorization)
         _require_wallet(body.wallet_id)
         _require_own_wallet(user, body.wallet_id)
+        correspondent = _correspondent(body.correspondent)
         try:
-            number = paychangu.normalize_number(body.number)
+            number = paychangu.normalize_payment_contact(body.number, correspondent)
         except paychangu.PayChanguError as e:
             raise HTTPException(status_code=400, detail=str(e))
-        correspondent = _correspondent(body.correspondent)
         if body.amount < paychangu.MIN_AMOUNT_MWK:
             raise HTTPException(status_code=400, detail=f"Minimum deposit is {int(paychangu.MIN_AMOUNT_MWK)} MWK")
         if not round(float(body.amount), 2) == float(body.amount):
@@ -798,13 +809,21 @@ def create_app() -> "FastAPI":
             "credited": False,
             "rolled_back": False,
             "provider_charge_id": payment_id,
-            "wande_id": payment_id,
             "message": None,
+            "provider": "binance_pay" if correspondent == "USDT" else "paychangu",
             "last_checked": 0.0,
             "created": now,
             "updated": now,
         }
         store.upsert_payment(record)
+
+        # Crypto (USDT) deposits: coming soon (to be enabled later).
+        if correspondent == "USDT":
+            async with _engine_lock:
+                fresh = store.get_payment(payment_id) or dict(record)
+                _apply_payment_state(fresh, "failed", "Crypto deposits are coming soon.")
+                await _pump_events(manager)
+            raise HTTPException(status_code=400, detail="Crypto deposits are coming soon.")
 
         try:
             payload = await asyncio.to_thread(
@@ -835,7 +854,6 @@ def create_app() -> "FastAPI":
             rec = store.get_payment(payment_id) or dict(record)
             if ref:
                 rec["provider_charge_id"] = ref
-                rec["wande_id"] = ref
             rec["message"] = message
             # A terminal state on the init response is authoritative (a payout
             # may settle immediately). Anything else stays pending and is
@@ -892,10 +910,10 @@ def create_app() -> "FastAPI":
         # stall trading; the state transition is applied under the lock below.
         try:
             payload = await asyncio.to_thread(_provider_status, rec)
-        except paychangu.PayChanguError as e:
+        except (paychangu.PayChanguError, binance_pay.BinancePayError) as e:
             raise HTTPException(status_code=502, detail=str(e))
 
-        state, message = paychangu.charge_status(payload)
+        state, message = _provider_charge_state(rec, payload)
         async with _engine_lock:
             rec = store.get_payment(payment_id)
             if rec is None:
@@ -915,6 +933,60 @@ def create_app() -> "FastAPI":
         """
         if not paychangu.webhook_configured():
             raise HTTPException(status_code=503, detail="Payment webhooks are not configured")
+
+    @app.post("/api/payments/webhook/binance")
+    async def payments_webhook_binance(request: Request) -> dict:
+        """Binance Pay webhook: verify, re-query, then settle exactly once."""
+        if not binance_pay.webhook_configured():
+            raise HTTPException(status_code=503, detail="Binance Pay webhooks are not configured")
+        limit = _max_webhook_bytes
+        declared = request.headers.get("content-length")
+        if declared and declared.isdigit() and int(declared) > limit:
+            raise HTTPException(status_code=413, detail="Webhook payload too large")
+        chunks: list[bytes] = []
+        total = 0
+        async for chunk in request.stream():
+            total += len(chunk)
+            if total > limit:
+                raise HTTPException(status_code=413, detail="Webhook payload too large")
+            chunks.append(chunk)
+        raw = b"".join(chunks)
+        if not binance_pay.verify_webhook(raw, {k: v for k, v in request.headers.items()}):
+            raise HTTPException(status_code=401, detail="Invalid webhook signature")
+        try:
+            payload = json.loads(raw.decode("utf-8") or "{}")
+        except (ValueError, UnicodeDecodeError):
+            raise HTTPException(status_code=400, detail="Invalid webhook body")
+
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        candidate_ids = [
+            data.get("merchantTradeNo"), data.get("prepayId"), payload.get("merchantTradeNo"), payload.get("prepayId")
+        ]
+        rec = None
+        for cid in candidate_ids:
+            if not cid:
+                continue
+            cid = str(cid)
+            rec = store.find_payment_by_provider_id(cid) or store.get_payment(cid)
+            if rec:
+                break
+        if rec is None:
+            return {"ok": True, "ignored": "unknown invoice"}
+        if (rec.get("provider") != "binance_pay") and rec.get("correspondent") != "USDT":
+            return {"ok": True, "ignored": "provider mismatch"}
+
+        try:
+            verified = await asyncio.to_thread(_provider_status, rec)
+        except (paychangu.PayChanguError, binance_pay.BinancePayError) as e:
+            raise HTTPException(status_code=502, detail=f"Could not verify payment: {e}")
+
+        state, message = _provider_charge_state(rec, verified)
+        async with _engine_lock:
+            fresh = store.get_payment(rec["id"])
+            if fresh and fresh["status"] == "pending":
+                _apply_payment_state(fresh, state, message)
+                await _pump_events(manager)
+        return {"ok": True}
         # The body must be read to verify HMAC, so bound it first: an
         # unauthenticated caller must not be able to force a large allocation.
         limit = _max_webhook_bytes
@@ -952,11 +1024,11 @@ def create_app() -> "FastAPI":
 
         try:
             verified = await asyncio.to_thread(_provider_status, rec)
-        except paychangu.PayChanguError as e:
+        except (paychangu.PayChanguError, binance_pay.BinancePayError) as e:
             # 502 makes PayChangu retry; the reconciler is the backstop.
             raise HTTPException(status_code=502, detail=f"Could not verify payment: {e}")
 
-        state, message = paychangu.charge_status(verified)
+        state, message = _provider_charge_state(rec, verified)
         async with _engine_lock:
             fresh = store.get_payment(rec["id"])
             if fresh and fresh["status"] == "pending":
@@ -969,10 +1041,10 @@ def create_app() -> "FastAPI":
         interval = max(15, int(os.getenv("KETSA_PAYMENT_RECONCILE_SECONDS", "60")))
         while True:
             await asyncio.sleep(interval)
-            if not paychangu.configured():
+            if not (paychangu.configured() or binance_pay.configured()):
                 continue
             try:
-                pending = [p for p in store.list_payments() if p.get("status") == "pending"]
+                pending = store.list_payments(status="pending")
             except Exception:
                 logger.exception("payment reconciliation: could not list payments")
                 continue
@@ -990,15 +1062,15 @@ def create_app() -> "FastAPI":
                         continue
                     try:
                         payload = await asyncio.to_thread(_provider_status, rec)
-                    except paychangu.PayChanguError as e:
-                        # A lookup that says "no such charge" long after
-                        # initiation means the request never reached PayChangu
-                        # (PayChangu creates the record synchronously). Fail
-                        # and refund instead of leaving money in limbo forever.
-                        # PayChangu answers 400 (often `{}`) for an unknown
-                        # charge, and 404 from some proxies.
+                    except (paychangu.PayChanguError, binance_pay.BinancePayError) as e:
+                        is_crypto = (rec.get("provider") == "binance_pay") or rec.get("correspondent") == "USDT"
+                        # A lookup that says "no such charge" long after initiation
+                        # means the request never reached the provider. For mobile
+                        # money we can fail/refund stale unknowns; for crypto
+                        # invoices we keep pending (invoice may still be unpaid).
                         if (
-                            e.status_code in (400, 404)
+                            not is_crypto
+                            and getattr(e, "status_code", None) in (400, 404)
                             and now - float(rec.get("created") or now) > _stale_init
                         ):
                             async with _engine_lock:
@@ -1015,7 +1087,7 @@ def create_app() -> "FastAPI":
                                 "payment %s reconcile failed: %s", rec.get("id"), e
                             )
                         continue
-                    state, message = paychangu.charge_status(payload)
+                    state, message = _provider_charge_state(rec, payload)
                     async with _engine_lock:
                         fresh = store.get_payment(rec["id"])
                         if fresh and fresh["status"] == "pending":
@@ -1046,11 +1118,13 @@ def create_app() -> "FastAPI":
         user = require_user(authorization)  # guests can no longer move money out (F-03)
         _require_wallet(body.wallet_id)
         _require_own_wallet(user, body.wallet_id)
+        correspondent = _correspondent(body.correspondent)
+        if correspondent == "USDT":
+            raise HTTPException(status_code=400, detail="Crypto withdrawals are coming soon.")
         try:
-            number = paychangu.normalize_number(body.number)
+            number = paychangu.normalize_payment_contact(body.number, correspondent)
         except paychangu.PayChanguError as e:
             raise HTTPException(status_code=400, detail=str(e))
-        correspondent = _correspondent(body.correspondent)
         if body.amount < paychangu.MIN_AMOUNT_MWK:
             raise HTTPException(status_code=400, detail=f"Minimum withdrawal is {int(paychangu.MIN_AMOUNT_MWK)} MWK")
         if body.amount > cfg["max_withdrawal_mwk"]:
@@ -1074,7 +1148,6 @@ def create_app() -> "FastAPI":
             "credited": False,
             "rolled_back": False,
             "provider_charge_id": payment_id,
-            "wande_id": payment_id,
             "message": None,
             "last_checked": 0.0,
             "created": now,
@@ -1146,7 +1219,6 @@ def create_app() -> "FastAPI":
             rec = store.get_payment(payment_id) or dict(record)
             if ref:
                 rec["provider_charge_id"] = ref
-                rec["wande_id"] = ref
             rec["message"] = message
             # A terminal state on the init response is authoritative (a payout
             # may settle immediately). Anything else stays pending and is
