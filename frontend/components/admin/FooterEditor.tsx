@@ -50,6 +50,7 @@ export default function FooterEditor({
       setDirty((m) => ({ ...m, [key]: false }));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed');
+      throw err;
     }
   }
 

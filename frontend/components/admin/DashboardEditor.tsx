@@ -42,6 +42,7 @@ export default function DashboardEditor({
       setChartDirty(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed');
+      throw err;
     }
   }
 
@@ -53,6 +54,7 @@ export default function DashboardEditor({
       setStatsDirty(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed');
+      throw err;
     }
   }
 

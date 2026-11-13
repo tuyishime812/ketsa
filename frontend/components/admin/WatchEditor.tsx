@@ -73,6 +73,7 @@ export default function WatchEditor({
       setChanged(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed');
+      throw err;
     }
   }
 

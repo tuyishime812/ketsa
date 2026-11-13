@@ -156,6 +156,10 @@ export function SaveButton({
       await onSave();
       setSaved(true);
       window.setTimeout(() => setSaved(false), 2000);
+    } catch {
+      // onSave is responsible for surfacing its own error (toast/inline). We
+      // swallow here to avoid an unhandled rejection from the click handler and
+      // to ensure the "Saved" indicator only appears on success.
     } finally {
       setSaving(false);
     }

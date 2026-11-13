@@ -60,6 +60,7 @@ export default function TickerEditor({
       setChanged(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed');
+      throw err;
     }
   }
 

@@ -22,29 +22,37 @@ export default function HeroEditor({
   const [hero, setHero] = useState(settings.hero);
   const [proofDraft, setProofDraft] = useState<Proof | null>(proof);
   const [error, setError] = useState<string | null>(null);
-  const [changed, setChanged] = useState(false);
+  const [heroDirty, setHeroDirty] = useState(false);
+  const [proofDirty, setProofDirty] = useState(false);
 
   useEffect(() => {
     setHero(settings.hero);
+    setHeroDirty(false);
   }, [settings]);
+
+  useEffect(() => {
+    setProofDraft(proof);
+    setProofDirty(false);
+  }, [proof]);
 
   function patch(p: Partial<SiteSettings['hero']>) {
     setHero((h) => ({ ...h, ...p }));
-    setChanged(true);
+    setHeroDirty(true);
   }
 
   function patchProof(p: Partial<Proof>) {
     setProofDraft((prev) => (prev ? { ...prev, ...p } : prev));
-    setChanged(true);
+    setProofDirty(true);
   }
 
   async function saveHero() {
     setError(null);
     try {
       await adminPut('/settings/hero', hero);
-      setChanged(false);
+      setHeroDirty(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed');
+      throw err;
     }
   }
 
@@ -53,9 +61,10 @@ export default function HeroEditor({
     setError(null);
     try {
       await adminPut('/proof', proofDraft);
-      setChanged(false);
+      setProofDirty(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed');
+      throw err;
     }
   }
 
@@ -85,7 +94,7 @@ export default function HeroEditor({
         <Field label="Description paragraph">
           <TextArea value={hero.description} onChange={(v) => patch({ description: v })} rows={4} />
         </Field>
-        <SaveButton onSave={saveHero} dirty={changed} />
+        <SaveButton onSave={saveHero} dirty={heroDirty} />
       </Card>
 
       {proofDraft && (
@@ -101,7 +110,7 @@ export default function HeroEditor({
               <NumberInput value={proofDraft.total_volume_m} onChange={(v) => patchProof({ total_volume_m: v })} />
             </Field>
           </div>
-          <SaveButton onSave={saveProof} dirty={changed} />
+          <SaveButton onSave={saveProof} dirty={proofDirty} />
         </Card>
       )}
 

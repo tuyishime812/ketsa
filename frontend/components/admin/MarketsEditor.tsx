@@ -110,37 +110,37 @@ export default function MarketsEditor({
       setError(
         'Market ID must be a lowercase slug: letters, numbers and single hyphens (e.g. btc-120k).',
       );
-      return;
+      throw new Error('validation');
     }
     if (!editing.q.trim()) {
       setError('Question is required.');
-      return;
+      throw new Error('validation');
     }
     if (!editing.tag.trim()) {
       setError('Tag is required.');
-      return;
+      throw new Error('validation');
     }
 
     const no = editing.isNew ? computeNo(editing.yes) : editing.no;
     if (!Number.isInteger(editing.yes) || !Number.isInteger(no)) {
       setError('YES and NO prices must be whole cents.');
-      return;
+      throw new Error('validation');
     }
     if (editing.yes + no !== 100) {
       setError('YES and NO prices must add up to 100.');
-      return;
+      throw new Error('validation');
     }
     if (editing.pts.length < 2) {
       setError('Add at least two sparkline points.');
-      return;
+      throw new Error('validation');
     }
     if (editing.pts.some((point) => !Number.isInteger(point))) {
       setError('Sparkline points must be whole numbers.');
-      return;
+      throw new Error('validation');
     }
     if (editing.pts.some((point) => point < 0 || point > 100)) {
       setError('Sparkline points must be between 0 and 100.');
-      return;
+      throw new Error('validation');
     }
 
     let endDate: string | null = null;
@@ -148,7 +148,7 @@ export default function MarketsEditor({
       const parsed = new Date(editing.end_date);
       if (Number.isNaN(parsed.getTime())) {
         setError('End date is invalid.');
-        return;
+        throw new Error('validation');
       }
       endDate = parsed.toISOString();
     }
@@ -157,7 +157,7 @@ export default function MarketsEditor({
     const liquidity = Number(editing.liquidity ?? 0);
     if (!Number.isFinite(volume) || volume < 0 || !Number.isFinite(liquidity) || liquidity < 0) {
       setError('Volume and liquidity must be zero or positive.');
-      return;
+      throw new Error('validation');
     }
 
     const payload: Market = {
@@ -185,7 +185,7 @@ export default function MarketsEditor({
       await save('/markets', payload);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed');
-      return;
+      throw err instanceof Error ? err : new Error('Save failed');
     }
 
     setList((prev) => {
