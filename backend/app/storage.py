@@ -211,6 +211,7 @@ class StoreBackend(Protocol):
     def get_user_by_phone(self, phone: str) -> dict | None: ...
     def get_user_by_auth0_sub(self, sub: str) -> dict | None: ...
     def get_user_by_wallet_id(self, wallet_id: str) -> dict | None: ...
+    def get_user_by_referral_code(self, code: str) -> dict | None: ...
     def upsert_user(self, user: dict) -> None: ...
     def list_users(self) -> list[dict]: ...
     def delete_user(self, user_id: str) -> bool: ...
@@ -483,6 +484,16 @@ class MemoryBackend:
             return None
         for u in self._users.values():
             if u.get("wallet_id") == wallet_id:
+                return copy.deepcopy(u)
+        return None
+
+    def get_user_by_referral_code(self, code: str) -> dict | None:
+        self.init()
+        if not code:
+            return None
+        needle = code.strip().upper()
+        for u in self._users.values():
+            if str(u.get("referral_code") or "").upper() == needle:
                 return copy.deepcopy(u)
         return None
 
@@ -1163,6 +1174,13 @@ class SupabaseBackend:
         # Hot path — wallet ids are always server-minted in canonical form, so
         # there is nothing to normalise and no reason to widen the match.
         return self._user_by_json_field("wallet_id", wallet_id)
+
+    def get_user_by_referral_code(self, code: str) -> dict | None:
+        self.init()
+        if not code:
+            return None
+        needle = str(code).strip().upper()
+        return self._user_by_json_field("referral_code", needle)
 
     def upsert_user(self, user: dict) -> None:
         self.init()

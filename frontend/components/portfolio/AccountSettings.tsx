@@ -1,8 +1,9 @@
 'use client';
 
-import { FormEvent, useState } from 'react';
+import { FormEvent, useMemo, useState } from 'react';
 import { useWallet } from '@/components/wallet/WalletProvider';
 import { changePasswordSession } from '@/lib/api';
+import { fmtBalance } from '@/lib/utils';
 
 export default function AccountSettings() {
   const { user, applySession } = useWallet();
@@ -12,8 +13,26 @@ export default function AccountSettings() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const referralLink = useMemo(() => {
+    if (!user?.referral_code) return '';
+    if (typeof window === 'undefined') return user.referral_code;
+    return `${window.location.origin}/?ref=${encodeURIComponent(user.referral_code)}`;
+  }, [user?.referral_code]);
 
   if (!user) return null;
+
+  async function copyReferral() {
+    if (!referralLink) return;
+    try {
+      await navigator.clipboard.writeText(referralLink);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setCopied(false);
+    }
+  }
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -43,77 +62,135 @@ export default function AccountSettings() {
   }
 
   return (
-    <div className="rounded-m border border-line bg-white p-5">
-      <h3 className="mb-3 font-serif text-[17px] font-medium">Account</h3>
-      <p className="mb-4 text-[12.5px] leading-snug text-ink-2">
-        Signed in as <span className="font-medium text-ink">{user.email || user.phone}</span>
-      </p>
+    <div className="flex flex-col gap-6">
+      <div className="rounded-m border border-line bg-white p-5">
+        <h3 className="mb-3 font-serif text-[17px] font-medium">Referrals</h3>
+        <p className="mb-4 text-[12.5px] leading-snug text-ink-2">
+          Share your invite link. When someone joins with it and makes a losing
+          trade (a position that resolves against them), you earn{' '}
+          <span className="font-medium text-ink">20% of their lost stake</span>{' '}
+          as bonus balance.
+        </p>
 
-      <form className="flex flex-col gap-3" onSubmit={(e) => void submit(e)}>
-        <label className="flex flex-col gap-[5px]">
-          <span className="font-mono text-[10px] uppercase tracking-[.06em] text-ink-3">
-            Current password
-          </span>
-          <input
-            type="password"
-            required
-            value={current}
-            onChange={(e) => setCurrent(e.target.value)}
-            className="input"
-            autoComplete="current-password"
-          />
-        </label>
+        <div className="space-y-3">
+          <label className="flex flex-col gap-[5px]">
+            <span className="font-mono text-[10px] uppercase tracking-[.06em] text-ink-3">
+              Your referral code
+            </span>
+            <div className="rounded-[9px] border border-line bg-paper-alt px-3 py-[10px] font-mono text-sm font-semibold tracking-[.08em] text-ink">
+              {user.referral_code || '—'}
+            </div>
+          </label>
 
-        <label className="flex flex-col gap-[5px]">
-          <span className="font-mono text-[10px] uppercase tracking-[.06em] text-ink-3">
-            New password
-          </span>
-          <input
-            type="password"
-            required
-            minLength={8}
-            value={next}
-            onChange={(e) => setNext(e.target.value)}
-            className="input"
-            autoComplete="new-password"
-          />
-        </label>
+          <label className="flex flex-col gap-[5px]">
+            <span className="font-mono text-[10px] uppercase tracking-[.06em] text-ink-3">
+              Your referral link
+            </span>
+            <input
+              readOnly
+              value={referralLink}
+              className="input text-[12.5px]"
+              onFocus={(e) => e.currentTarget.select()}
+            />
+          </label>
 
-        <label className="flex flex-col gap-[5px]">
-          <span className="font-mono text-[10px] uppercase tracking-[.06em] text-ink-3">
-            Confirm new password
-          </span>
-          <input
-            type="password"
-            required
-            minLength={8}
-            value={confirm}
-            onChange={(e) => setConfirm(e.target.value)}
-            className="input"
-            autoComplete="new-password"
-          />
-        </label>
+          <button type="button" className="btn btn--brand w-full" onClick={() => void copyReferral()}>
+            {copied ? 'Link copied' : 'Copy referral link'}
+          </button>
 
-        {error && (
-          <p className="rounded bg-neg/10 px-3 py-2 text-[12px] font-medium text-neg">
-            {error}
-          </p>
-        )}
+          <div className="grid grid-cols-2 gap-3 pt-1">
+            <div className="rounded-[9px] border border-line bg-paper-alt px-3 py-2">
+              <div className="font-mono text-[10px] uppercase tracking-[.06em] text-ink-3">
+                Invited users
+              </div>
+              <div className="mt-1 font-mono text-[16px] font-semibold text-ink">
+                {user.referral_count ?? 0}
+              </div>
+            </div>
+            <div className="rounded-[9px] border border-line bg-paper-alt px-3 py-2">
+              <div className="font-mono text-[10px] uppercase tracking-[.06em] text-ink-3">
+                Earned
+              </div>
+              <div className="mt-1 font-mono text-[16px] font-semibold text-pos">
+                {fmtBalance(user.referral_earnings ?? 0, 'MWK')}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
 
-        {done && (
-          <p className="rounded bg-pos/10 px-3 py-2 text-[12px] font-medium text-pos">
-            Password changed successfully. You&apos;ll stay signed in with the same account.
-          </p>
-        )}
+      <div className="rounded-m border border-line bg-white p-5">
+        <h3 className="mb-3 font-serif text-[17px] font-medium">Account</h3>
+        <p className="mb-4 text-[12.5px] leading-snug text-ink-2">
+          Signed in as <span className="font-medium text-ink">{user.email || user.phone}</span>
+        </p>
 
-        <button
-          type="submit"
-          disabled={busy}
-          className="btn btn--brand mt-1 w-full"
-        >
-          {busy ? 'Changing…' : 'Change password'}
-        </button>
-      </form>
+        <form className="flex flex-col gap-3" onSubmit={(e) => void submit(e)}>
+          <label className="flex flex-col gap-[5px]">
+            <span className="font-mono text-[10px] uppercase tracking-[.06em] text-ink-3">
+              Current password
+            </span>
+            <input
+              type="password"
+              required
+              value={current}
+              onChange={(e) => setCurrent(e.target.value)}
+              className="input"
+              autoComplete="current-password"
+            />
+          </label>
+
+          <label className="flex flex-col gap-[5px]">
+            <span className="font-mono text-[10px] uppercase tracking-[.06em] text-ink-3">
+              New password
+            </span>
+            <input
+              type="password"
+              required
+              minLength={8}
+              value={next}
+              onChange={(e) => setNext(e.target.value)}
+              className="input"
+              autoComplete="new-password"
+            />
+          </label>
+
+          <label className="flex flex-col gap-[5px]">
+            <span className="font-mono text-[10px] uppercase tracking-[.06em] text-ink-3">
+              Confirm new password
+            </span>
+            <input
+              type="password"
+              required
+              minLength={8}
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+              className="input"
+              autoComplete="new-password"
+            />
+          </label>
+
+          {error && (
+            <p className="rounded bg-neg/10 px-3 py-2 text-[12px] font-medium text-neg">
+              {error}
+            </p>
+          )}
+
+          {done && (
+            <p className="rounded bg-pos/10 px-3 py-2 text-[12px] font-medium text-pos">
+              Password changed successfully. You&apos;ll stay signed in with the same account.
+            </p>
+          )}
+
+          <button
+            type="submit"
+            disabled={busy}
+            className="btn btn--brand mt-1 w-full"
+          >
+            {busy ? 'Changing…' : 'Change password'}
+          </button>
+        </form>
+      </div>
     </div>
   );
 }

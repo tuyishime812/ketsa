@@ -27,6 +27,7 @@ interface AuthModalProps {
     name: string,
     identifier: string,
     password: string,
+    referralCode?: string,
   ) => Promise<void>;
   /** Request a password-reset code; resolves true when the request was sent. */
   onForgot: (identifier: string) => Promise<boolean>;
@@ -187,8 +188,20 @@ export default function AuthModal({
   const [idKind, setIdKind] = useState<IdKind>('email');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
+  const [referralCode, setReferralCode] = useState('');
   const [showPw, setShowPw] = useState(false);
   const [localErrors, setLocalErrors] = useState<Record<string, string>>({});
+
+  // Prefill referral code from the invite link (?ref=CODE) once on open.
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const ref = (params.get('ref') || params.get('referral') || '').trim();
+      if (ref) setReferralCode(ref.toUpperCase());
+    } catch {
+      /* ignore */
+    }
+  }, []);
   // Forgot-password step
   const [otp, setOtp] = useState('');
   const [forgotId, setForgotId] = useState('');
@@ -281,7 +294,7 @@ export default function AuthModal({
     if (busy || !validate()) return;
     setResetDone(false);
     if (mode === 'login') onLogin(identifier.trim(), password);
-    else await onRegister(name.trim(), identifier.trim(), password);
+    else await onRegister(name.trim(), identifier.trim(), password, referralCode.trim());
   }
 
   function backToForm() {
@@ -628,15 +641,27 @@ export default function AuthModal({
                   )}
                 </div>
                 {mode === 'register' && (
-                  <Field
-                    label="Confirm password"
-                    type="password"
-                    value={confirm}
-                    onChange={setConfirm}
-                    placeholder="••••••••"
-                    autoComplete="new-password"
-                    error={localErrors.confirm}
-                  />
+                  <>
+                    <Field
+                      label="Confirm password"
+                      type="password"
+                      value={confirm}
+                      onChange={setConfirm}
+                      placeholder="••••••••"
+                      autoComplete="new-password"
+                      error={localErrors.confirm}
+                    />
+                    <Field
+                      label="Referral code (optional)"
+                      value={referralCode}
+                      onChange={(v) => setReferralCode(v.toUpperCase())}
+                      placeholder="e.g. A1B2C3D4"
+                      autoComplete="off"
+                    />
+                    <p className="-mt-2 text-[11.5px] leading-snug text-ink-3">
+                      If someone invited you, enter their code to link your account.
+                    </p>
+                  </>
                 )}
 
                 {resetDone && (

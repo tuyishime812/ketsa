@@ -112,6 +112,10 @@ def get_user_by_wallet_id(wallet_id: str) -> dict | None:
     return get_backend().get_user_by_wallet_id(wallet_id)
 
 
+def get_user_by_referral_code(code: str) -> dict | None:
+    return get_backend().get_user_by_referral_code(code)
+
+
 def upsert_user(user: dict) -> None:
     get_backend().upsert_user(user)
 

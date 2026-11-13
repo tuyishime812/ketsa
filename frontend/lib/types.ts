@@ -121,6 +121,10 @@ export interface User {
   phone?: string | null;
   name: string;
   wallet_id: string;
+  referral_code?: string;
+  referred_by?: string | null;
+  referral_earnings?: number;
+  referral_count?: number;
   created: number;
 }
 
@@ -139,6 +143,7 @@ export interface RegisterCredentials {
   name: string;
   identifier: string; // email address OR Malawian phone number
   password: string;
+  referral_code?: string;
 }
 
 export interface LeaderboardEntry {

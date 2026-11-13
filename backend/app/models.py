@@ -182,6 +182,10 @@ class User(BaseModel):
     phone: Optional[str] = None
     name: str
     wallet_id: str
+    referral_code: str = ""
+    referred_by: Optional[str] = None
+    referral_earnings: float = 0.0
+    referral_count: int = 0
     created: float
 
 

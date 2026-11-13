@@ -61,7 +61,12 @@ interface WalletContextValue {
    * Register. Email and phone signups both complete immediately: the session
    * (and wallet) is live as soon as this resolves.
    */
-  register: (name: string, identifier: string, password: string) => Promise<void>;
+  register: (
+    name: string,
+    identifier: string,
+    password: string,
+    referralCode?: string,
+  ) => Promise<void>;
   /** Request a password-reset code; always succeeds (uniform 200). */
   forgotPassword: (identifier: string) => Promise<boolean>;
   /** Set a new password with the emailed code; true on success. */
@@ -262,11 +267,22 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   );
 
   const register = useCallback(
-    async (name: string, identifier: string, password: string): Promise<void> => {
+    async (
+      name: string,
+      identifier: string,
+      password: string,
+      referralCode?: string,
+    ): Promise<void> => {
       setAuthBusy(true);
       setAuthError(null);
       try {
-        const session = await registerSession({ name, identifier, password });
+        const code = referralCode?.trim();
+        const session = await registerSession({
+          name,
+          identifier,
+          password,
+          ...(code ? { referral_code: code } : {}),
+        });
         finishAuth(session);
         setAuthOpen(false);
       } catch (err) {
@@ -382,8 +398,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           }}
           onRequestLoginCode={(identifier) => requestLoginCode(identifier)}
           onLoginWithCode={(email, otp) => loginWithCode(email, otp)}
-          onRegister={(name, identifier, password) =>
-            register(name, identifier, password)
+          onRegister={(name, identifier, password, referralCode) =>
+            register(name, identifier, password, referralCode)
           }
           onForgot={(identifier) => forgotPassword(identifier)}
           onReset={(email, otp, newPassword) =>

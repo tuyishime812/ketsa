@@ -65,6 +65,12 @@ create unique index if not exists ketsa_users_auth0_sub_idx
   on public.ketsa_users ((value ->> 'auth0_sub'))
   where value ->> 'auth0_sub' is not null;
 
+-- Referral codes are unique, user-facing invite keys. Existing accounts are
+-- backfilled on first access, so the index is created when present.
+create unique index if not exists ketsa_users_referral_code_idx
+  on public.ketsa_users ((value ->> 'referral_code'))
+  where nullif(value ->> 'referral_code', '') is not null;
+
 -- An empty string is NOT a phone number. Email-only accounts have no phone;
 -- older builds stored that as `""`, which still occupies a unique-index slot
 -- and made the *second* email signup fail with 23505 on this index (the first

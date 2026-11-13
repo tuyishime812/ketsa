@@ -828,21 +828,46 @@ class Marketplace:
         in-memory/single-process case the original asyncio.Lock in main.py plus
         the per-process wallet dict is sufficient.
         """
+        self._credit(wallet_id, amount, withdrawable=True)
+
+    def credit_bonus(self, wallet_id: str, amount: float) -> None:
+        """Credit non-cashable bonus funds (e.g. referral commission).
+
+        Bonus money is spendable on markets but never withdrawable: it increases
+        ``balance`` only and leaves ``deposited`` untouched, so it cannot be paid
+        out as real money the house did not receive.
+        """
+        self._credit(wallet_id, amount, withdrawable=False)
+
+    def _credit(self, wallet_id: str, amount: float, *, withdrawable: bool) -> None:
+        if amount <= 0:
+            return
         if dblock.configured():
             with dblock.wallet_txn(wallet_id) as wallet:
-                wallet["balance"] = _round2(wallet.get("balance", 0.0) + amount)
-                wallet["deposited"] = _round2(wallet.get("deposited", 0.0) + amount)
+                wallet["balance"] = _round2(float(wallet.get("balance", 0.0)) + amount)
+                if withdrawable:
+                    wallet["deposited"] = _round2(float(wallet.get("deposited", 0.0)) + amount)
             # Keep the in-process view in sync if we have it (read-only cache).
             if wallet_id in self._wallets:
                 live = self._wallets[wallet_id]
-                live["balance"] = _round2(live.get("balance", 0.0) + amount)
-                live["deposited"] = _round2(live.get("deposited", 0.0) + amount)
+                live["balance"] = _round2(float(live.get("balance", 0.0)) + amount)
+                if withdrawable:
+                    live["deposited"] = _round2(float(live.get("deposited", 0.0)) + amount)
             return
         wallet = self._wallets.get(wallet_id)
         if wallet is None:
-            raise ValueError("Unknown wallet")
-        wallet["balance"] = _round2(wallet["balance"] + amount)
-        wallet["deposited"] = _round2(wallet.get("deposited", 0.0) + amount)
+            # Fall back to a persisted-only wallet (e.g. referrer not in memory).
+            persisted = store.get_wallet(wallet_id)
+            if persisted is None:
+                raise ValueError("Unknown wallet")
+            persisted["balance"] = _round2(float(persisted.get("balance", 0.0)) + amount)
+            if withdrawable:
+                persisted["deposited"] = _round2(float(persisted.get("deposited", 0.0)) + amount)
+            store.upsert_wallet(persisted)
+            return
+        wallet["balance"] = _round2(float(wallet.get("balance", 0.0)) + amount)
+        if withdrawable:
+            wallet["deposited"] = _round2(float(wallet.get("deposited", 0.0)) + amount)
         self._persist(wallet_id)
 
     def debit_balance(self, wallet_id: str, amount: float) -> None:
@@ -980,6 +1005,11 @@ class Marketplace:
 
         Winners get $1 per share credited to cash (all of it realized profit);
         loser positions simply expire to zero. Returns the payout credited.
+
+        Referral commission: if this wallet's owner was referred, their referrer
+        earns 20% of each losing position's stake (cost basis) as a spendable
+        bonus. Commission is credited per-losing-outcome so a crash/retry cannot
+        double-pay (tracked on the wallet's settlement marker).
         """
         sides = wallet.get("positions") or {}
         market_pos = sides.pop(market_id, None)
@@ -1002,6 +1032,8 @@ class Marketplace:
                 final_price = 100
             else:
                 final_price = 0
+                lost_stake = _round2(shares * avg / 100.0)
+                self._credit_referral_commission(wallet, market_id, outcome, lost_stake, question)
             wallet.setdefault("history", []).append(
                 {
                     "ts": ts,
@@ -1028,6 +1060,68 @@ class Marketplace:
         if not sides:
             wallet["positions"] = {}
         return payout
+
+    def _credit_referral_commission(
+        self, loser_wallet: dict, market_id: str, outcome: str, lost_stake: float, question: str
+    ) -> float:
+        """Credit 20% of a losing position's stake to the referrer, once.
+
+        A per-(market,outcome) marker on the loser's settlement record prevents
+        double-credit if a resolution is retried after a partial failure. The
+        referrer receives spendable bonus funds (not withdrawable real money).
+        """
+        if lost_stake <= _EPS:
+            return 0.0
+        # Idempotency: never pay commission twice for the same losing leg.
+        settlements = loser_wallet.get("settlements")
+        if isinstance(settlements, dict):
+            marker = settlements.get(market_id)
+            if isinstance(marker, dict):
+                paid = marker.get("referral_paid") or {}
+                if isinstance(paid, dict) and outcome in paid:
+                    return 0.0
+        owner = store.get_user_by_wallet_id(loser_wallet.get("id", ""))
+        if not owner:
+            return 0.0
+        referrer_id = owner.get("referred_by")
+        if not referrer_id:
+            return 0.0
+        referrer = store.get_user(referrer_id)
+        if not referrer or referrer.get("id") == owner.get("id"):
+            return 0.0
+        commission = _round2(lost_stake * 0.20)
+        if commission <= 0:
+            return 0.0
+        try:
+            self.credit_bonus(referrer["wallet_id"], commission)
+        except Exception:
+            # Do not abort settlement if the referrer wallet cannot be credited;
+            # the loser's marker is not written so a retry can attempt again.
+            return 0.0
+        referrer["referral_earnings"] = _round2(float(referrer.get("referral_earnings") or 0.0) + commission)
+        store.upsert_user(referrer)
+        # Record on the loser's marker (written durably with the wallet save) so
+        # retries stay idempotent.
+        settlements = loser_wallet.get("settlements")
+        if not isinstance(settlements, dict):
+            settlements = {}
+            loser_wallet["settlements"] = settlements
+        marker = settlements.get(market_id)
+        if not isinstance(marker, dict):
+            marker = {}
+            settlements[market_id] = marker
+        paid = marker.get("referral_paid")
+        if not isinstance(paid, dict):
+            paid = {}
+            marker["referral_paid"] = paid
+        paid[outcome] = commission
+        self.notify(
+            referrer["wallet_id"],
+            "system",
+            "Referral commission",
+            f"You earned {commission:,.2f} MWK (20% of stake lost) from a referred trader's losing {outcome.upper()} position on \"{question}\".",
+        )
+        return commission
 
     def has_open_positions(self, market_id: str) -> bool:
         """True if any wallet — live or persisted-only — holds this market.
@@ -1062,16 +1156,24 @@ class Marketplace:
     def _record_settlement(
         wallet: dict, market_id: str, outcome: str, payout: float, ts: float
     ) -> None:
-        """Attach the per-market payout marker to the wallet (before persisting)."""
+        """Attach the per-market payout marker to the wallet (before persisting).
+
+        Preserves any `referral_paid` map recorded while settling losing
+        positions so commission credits remain idempotent across retries.
+        """
         settlements = wallet.get("settlements")
         if not isinstance(settlements, dict):
             settlements = {}
             wallet["settlements"] = settlements
-        settlements[market_id] = {
+        existing = settlements.get(market_id) if isinstance(settlements.get(market_id), dict) else {}
+        marker = {
             "outcome": outcome,
             "payout": _round2(payout),
             "ts": ts,
         }
+        if isinstance(existing, dict) and existing.get("referral_paid"):
+            marker["referral_paid"] = existing["referral_paid"]
+        settlements[market_id] = marker
 
     def resolve_market(self, market_id: str, outcome: str) -> dict:
         """Resolve a market to YES/NO, settle every holder, and lock trading.

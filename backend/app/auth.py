@@ -272,6 +272,9 @@ class RegisterRequest(BaseModel):
     # unbounded password is a cheap CPU-exhaustion vector on a public endpoint
     # (CWE-400). 256 chars is far beyond any real password.
     password: str = Field(max_length=256)
+    # Optional referral code of the inviting user. Accepted at registration only;
+    # a user cannot change who referred them later.
+    referral_code: str | None = Field(default=None, max_length=32)
 
 
 class ForgotPasswordRequest(BaseModel):
@@ -322,6 +325,7 @@ def _create_account(
     phone: str | None,
     name: str,
     password_hash: str,
+    referred_by: str | None = None,
 ) -> dict:
     """Create the account record + wallet and send the welcome notification.
 
@@ -342,8 +346,25 @@ def _create_account(
         "password": password_hash,
         "wallet_id": wallet["id"],
         "created": time.time(),
+        "referred_by": referred_by,
+        "referral_earnings": 0.0,
+        "referral_count": 0,
     }
+    ensure_referral_code(user)
     store.upsert_user(user)
+
+    if referred_by:
+        referrer = store.get_user(referred_by)
+        if referrer is not None:
+            referrer["referral_count"] = int(referrer.get("referral_count") or 0) + 1
+            store.upsert_user(referrer)
+            engine.notify(
+                referrer.get("wallet_id", ""),
+                "system",
+                "New referral",
+                f"{name} joined with your referral link. You'll earn 20% of their losing trade stake when markets they bet on resolve against them.",
+            )
+
     engine.notify(
         wallet["id"],
         "system",
@@ -399,14 +420,47 @@ def revoke_user_sessions(user_id: str) -> None:
     authstate.delete_sessions_for_user(user_id)
 
 
+def _generate_referral_code() -> str:
+    # Short, human-friendly, uppercase code. 8 chars from a 32-char alphabet.
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    return "".join(secrets.choice(alphabet) for _ in range(8))
+
+
+def ensure_referral_code(user: dict) -> str:
+    """Return the user's referral code, minting and persisting one if missing.
+
+    Existing accounts created before referrals were introduced get a code on
+    first access so every user can share an invite link.
+    """
+    code = str(user.get("referral_code") or "").strip().upper()
+    if code:
+        user["referral_code"] = code
+        return code
+    for _ in range(20):
+        candidate = _generate_referral_code()
+        if store.get_user_by_referral_code(candidate) is None:
+            user["referral_code"] = candidate
+            store.upsert_user(user)
+            return candidate
+    # Extremely unlikely collision storm; fall back to a longer random code.
+    candidate = secrets.token_hex(6).upper()
+    user["referral_code"] = candidate
+    store.upsert_user(user)
+    return candidate
+
+
 def _user_public(user: dict) -> User:
     return User(
         id=user["id"],
-        email=user["email"],
+        email=user.get("email", ""),
         phone=user.get("phone") or None,
-        name=user["name"],
+        name=user.get("name", "Trader"),
         wallet_id=user["wallet_id"],
-        created=user["created"],
+        referral_code=ensure_referral_code(user),
+        referred_by=user.get("referred_by") or None,
+        referral_earnings=float(user.get("referral_earnings") or 0.0),
+        referral_count=int(user.get("referral_count") or 0),
+        created=float(user.get("created") or 0.0),
     )
 
 
@@ -480,6 +534,15 @@ def register(body: RegisterRequest) -> AuthResponse:
     if len(body.password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
 
+    referred_by: str | None = None
+    if body.referral_code:
+        ref_code = body.referral_code.strip().upper()
+        if ref_code:
+            referrer = store.get_user_by_referral_code(ref_code)
+            if referrer is not None and referrer.get("id") != identifier:
+                referred_by = referrer.get("id")
+            # Unknown/self codes are ignored rather than blocking registration.
+
     if kind == "email":
         email, phone = identifier, None
         if store.get_user_by_email(email):
@@ -495,6 +558,7 @@ def register(body: RegisterRequest) -> AuthResponse:
         phone=phone,
         name=name,
         password_hash=_hash_password(body.password),
+        referred_by=referred_by,
     )
     token = _issue_session(user["id"])
     return AuthResponse(token=token, user=_user_public(user), wallet=_wallet_for_user(user))
