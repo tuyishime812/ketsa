@@ -1,4 +1,4 @@
-"""Ketsa backend — FastAPI application.
+﻿"""Ketsa backend â€” FastAPI application.
 
 Serves the prediction-market data consumed by the Next.js frontend.
 
@@ -91,7 +91,7 @@ logger = logging.getLogger("ketsa.main")
 def _market_due(market: dict | None) -> bool:
     """True when a market has no end date, or its end date has already passed.
 
-    Used by the optional resolution guard (Settings → Market resolution): when
+    Used by the optional resolution guard (Settings â†’ Market resolution): when
     enabled, a market may only be resolved once it is actually due, so an
     operator can't settle a question ahead of its published close time.
     """
@@ -101,7 +101,7 @@ def _market_due(market: dict | None) -> bool:
     try:
         due = datetime.fromisoformat(str(end_date).replace("Z", "+00:00"))
     except ValueError:
-        return True  # unparseable date — don't block; treat as due
+        return True  # unparseable date â€” don't block; treat as due
     if due.tzinfo is None:
         due = due.replace(tzinfo=timezone.utc)
     return datetime.now(timezone.utc) >= due
@@ -112,7 +112,7 @@ class ConnectionManager:
 
     Clients may (optionally) subscribe to a wallet to receive that wallet's
     private notices (fill/payment/system notifications) on the same socket.
-    Public events — market ticks, trades, resolutions, leaderboard changes —
+    Public events â€” market ticks, trades, resolutions, leaderboard changes â€”
     are always broadcast to every connection.
     """
 
@@ -312,7 +312,7 @@ def create_app() -> "FastAPI":
     write_rate_limit_per_min = int(os.getenv("KETSA_WRITE_RATE_LIMIT_PER_MIN", "30"))
     write_limiter = _RateLimiter(write_rate_limit_per_min)
     # Money-movement caps (MWK) and deposit/withdrawal enables are now
-    # admin-configurable (Settings → Payments). They are read per request via
+    # admin-configurable (Settings â†’ Payments). They are read per request via
     # siteconfig so an admin change takes effect without a restart; the env vars
     # (KETSA_MAX_*_MWK) remain the defaults.
     # Hard ceiling on concurrent WebSocket clients, so the live feed can't be
@@ -325,7 +325,7 @@ def create_app() -> "FastAPI":
     # onto the loop and wake `_event_pump`, which broadcasts within a loop
     # iteration. Without this, an admin-side change (staff upload/remove, but
     # also payments) would sit in the queue until the next 12s `_tick_loop`
-    # flush — visible lag, not "real time".
+    # flush â€” visible lag, not "real time".
     pump_signal = asyncio.Event()
     _loop_ref: dict[str, asyncio.AbstractEventLoop | None] = {"loop": None}
 
@@ -370,15 +370,15 @@ def create_app() -> "FastAPI":
         logger.info("storage backend=%s", backend_name)
         if dblock.configured():
             logger.info(
-                "wallet row locking=ON (KETSA_DB_URL set) — multi-process safe"
+                "wallet row locking=ON (KETSA_DB_URL set) â€” multi-process safe"
             )
         else:
             logger.info(
-                "wallet row locking=OFF — run a SINGLE process (see replica.py)"
+                "wallet row locking=OFF â€” run a SINGLE process (see replica.py)"
             )
         if backend_name == "MemoryBackend":
             logger.warning(
-                "Storage backend is IN-MEMORY — accounts, staff and content are "
+                "Storage backend is IN-MEMORY â€” accounts, staff and content are "
                 "not persisted and are lost on restart. Point KETSA_DB_BACKEND at "
                 "supabase (with db/schema.sql applied) for durable storage."
             )
@@ -396,14 +396,14 @@ def create_app() -> "FastAPI":
         )
         if status["delivery"] == "log":
             logger.warning(
-                "Email is in LOG mode — verification and reset codes are written "
+                "Email is in LOG mode â€” verification and reset codes are written "
                 "to this log and NOT sent. Set KETSA_RESEND_API_KEY (and a verified "
                 "KETSA_RESEND_FROM domain) or KETSA_EMAIL_DELIVERY=resend for real "
                 "delivery."
             )
         elif status["sandbox_sender"]:
             logger.warning(
-                "Email sender %s is Resend's sandbox — only the account owner's own "
+                "Email sender %s is Resend's sandbox â€” only the account owner's own "
                 "inbox receives mail, so other users cannot complete signup. Verify "
                 "a sending domain and set KETSA_RESEND_FROM.",
                 status["from"],
@@ -415,9 +415,9 @@ def create_app() -> "FastAPI":
         # time; surface it once, clearly, at boot instead.
         try:
             store.get_backend().auth_count(authstate.NS_OTP)
-        except Exception as exc:  # startup diagnostic — never fatal
+        except Exception as exc:  # startup diagnostic â€” never fatal
             logger.error(
-                "Auth state store is unavailable — logins, signups and password "
+                "Auth state store is unavailable â€” logins, signups and password "
                 "resets will fail with 500 until it exists. On Supabase, run "
                 "backend/db/schema.sql (creates public.ketsa_auth). Cause: %s",
                 exc,
@@ -485,7 +485,7 @@ def create_app() -> "FastAPI":
         """Sanitized 422s: never echo raw input values back.
 
         Raw echo is how NaN/Infinity (or hostile strings) leak into error
-        responses — Python's JSON encoder refuses NaN, so a rejection of
+        responses â€” Python's JSON encoder refuses NaN, so a rejection of
         ``{"amount": NaN}`` would otherwise crash the error path itself.
         """
         if not (request.url.path.endswith("/payments/deposits")
@@ -514,7 +514,7 @@ def create_app() -> "FastAPI":
     #
     # Liveness only: it answers "this process is running". Startup deliberately
     # tolerates a transient storage outage, so a process with an unreachable
-    # database is still alive — use /api/ready to ask whether it can actually
+    # database is still alive â€” use /api/ready to ask whether it can actually
     # serve traffic.
     @app.get("/api/health")
     @app.get("/health", include_in_schema=False)
@@ -528,7 +528,7 @@ def create_app() -> "FastAPI":
 
         Fail-closed (503) so a load balancer stops sending traffic to a
         process that would render "temporarily unavailable" for every page.
-        The body is deliberately generic — it never names hosts, tables or
+        The body is deliberately generic â€” it never names hosts, tables or
         driver errors (CWE-209).
         """
         try:
@@ -595,7 +595,7 @@ def create_app() -> "FastAPI":
             raise HTTPException(status_code=404, detail="Wallet not found")
         return Wallet(**w)
 
-    # --- Real-money payments (PayChangu — MWK) ------------------------------
+    # --- Real-money payments (PayChangu â€” MWK) ------------------------------
 
     # Serializes every balance-mutating operation (trades, deposits, credits,
     # withdrawal debits/refunds, resolution settlements) so concurrent requests
@@ -630,14 +630,14 @@ def create_app() -> "FastAPI":
         """Resolve whether a caller may use a wallet. ``None`` = allowed.
 
         Account-owned wallets are usable only by their owner. Guests (no
-        Authorization header) may keep using *unclaimed* simulated wallets —
+        Authorization header) may keep using *unclaimed* simulated wallets â€”
         ids are server-minted and unguessable, and with the zero seed they
         hold no real funds. An invalid token is 401; a valid token for a
         different account is 403, so account wallets can't be dumped, traded
         or drained by anyone who guesses/leaks an id.
 
         Returns ``(status_code, detail)`` when access is denied. This is the
-        single source of truth for wallet ownership — the HTTP routes raise on
+        single source of truth for wallet ownership â€” the HTTP routes raise on
         it and the WebSocket subscription path (which cannot raise) reads it
         directly, so the two can't drift apart.
 
@@ -657,7 +657,7 @@ def create_app() -> "FastAPI":
             return (e.status_code, str(e.detail))
         owner = store.get_user_by_wallet_id(wallet_id)
         if owner is None:
-            return None  # unclaimed sim wallet — open to whoever holds its id
+            return None  # unclaimed sim wallet â€” open to whoever holds its id
         if user is None:
             return (401, "This wallet belongs to an account. Please log in.")
         if user["wallet_id"] != wallet_id:
@@ -871,7 +871,7 @@ def create_app() -> "FastAPI":
         wallet_id: str | None = None,
         authorization: str | None = Header(default=None),
     ) -> list[Payment]:
-        # A user can only ever see their own wallet's money movement — the
+        # A user can only ever see their own wallet's money movement â€” the
         # unauthenticated cross-wallet ledger dump is closed (F-02).
         user = require_user(authorization)
         own = user["wallet_id"]
@@ -933,6 +933,54 @@ def create_app() -> "FastAPI":
         """
         if not paychangu.webhook_configured():
             raise HTTPException(status_code=503, detail="Payment webhooks are not configured")
+        # The body must be read to verify HMAC, so bound it first: an
+        # unauthenticated caller must not be able to force a large allocation.
+        limit = _max_webhook_bytes
+        declared = request.headers.get("content-length")
+        if declared and declared.isdigit() and int(declared) > limit:
+            raise HTTPException(status_code=413, detail="Webhook payload too large")
+        chunks: list[bytes] = []
+        total = 0
+        async for chunk in request.stream():
+            total += len(chunk)
+            if total > limit:
+                raise HTTPException(status_code=413, detail="Webhook payload too large")
+            chunks.append(chunk)
+        raw = b"".join(chunks)
+        signature = (
+            request.headers.get("Signature")
+            or request.headers.get("X-PayChangu-Signature")
+        )
+        if not paychangu.verify_webhook(raw, signature):
+            raise HTTPException(status_code=401, detail="Invalid webhook signature")
+        try:
+            payload = json.loads(raw.decode("utf-8") or "{}")
+        except (ValueError, UnicodeDecodeError):
+            raise HTTPException(status_code=400, detail="Invalid webhook body")
+
+        charge_id = str(payload.get("charge_id") or payload.get("chargeId") or "")
+        if not charge_id:
+            return {"ok": True, "ignored": "missing charge_id"}
+        if len(charge_id) > 128:
+            return {"ok": True, "ignored": "invalid charge_id"}
+        rec = store.find_payment_by_provider_id(charge_id) or store.get_payment(charge_id)
+        if rec is None:
+            logger.info("webhook for unknown charge_id=%s", charge_id)
+            return {"ok": True, "ignored": "unknown charge_id"}
+
+        try:
+            verified = await asyncio.to_thread(_provider_status, rec)
+        except (paychangu.PayChanguError, binance_pay.BinancePayError) as e:
+            # 502 makes PayChangu retry; the reconciler is the backstop.
+            raise HTTPException(status_code=502, detail=f"Could not verify payment: {e}")
+
+        state, message = _provider_charge_state(rec, verified)
+        async with _engine_lock:
+            fresh = store.get_payment(rec["id"])
+            if fresh and fresh["status"] == "pending":
+                _apply_payment_state(fresh, state, message)
+                await _pump_events(manager)
+        return {"ok": True}
 
     @app.post("/api/payments/webhook/binance")
     async def payments_webhook_binance(request: Request) -> dict:
@@ -978,54 +1026,6 @@ def create_app() -> "FastAPI":
         try:
             verified = await asyncio.to_thread(_provider_status, rec)
         except (paychangu.PayChanguError, binance_pay.BinancePayError) as e:
-            raise HTTPException(status_code=502, detail=f"Could not verify payment: {e}")
-
-        state, message = _provider_charge_state(rec, verified)
-        async with _engine_lock:
-            fresh = store.get_payment(rec["id"])
-            if fresh and fresh["status"] == "pending":
-                _apply_payment_state(fresh, state, message)
-                await _pump_events(manager)
-        return {"ok": True}
-        # The body must be read to verify HMAC, so bound it first: an
-        # unauthenticated caller must not be able to force a large allocation.
-        limit = _max_webhook_bytes
-        declared = request.headers.get("content-length")
-        if declared and declared.isdigit() and int(declared) > limit:
-            raise HTTPException(status_code=413, detail="Webhook payload too large")
-        chunks: list[bytes] = []
-        total = 0
-        async for chunk in request.stream():
-            total += len(chunk)
-            if total > limit:
-                raise HTTPException(status_code=413, detail="Webhook payload too large")
-            chunks.append(chunk)
-        raw = b"".join(chunks)
-        signature = (
-            request.headers.get("Signature")
-            or request.headers.get("X-PayChangu-Signature")
-        )
-        if not paychangu.verify_webhook(raw, signature):
-            raise HTTPException(status_code=401, detail="Invalid webhook signature")
-        try:
-            payload = json.loads(raw.decode("utf-8") or "{}")
-        except (ValueError, UnicodeDecodeError):
-            raise HTTPException(status_code=400, detail="Invalid webhook body")
-
-        charge_id = str(payload.get("charge_id") or payload.get("chargeId") or "")
-        if not charge_id:
-            return {"ok": True, "ignored": "missing charge_id"}
-        if len(charge_id) > 128:
-            return {"ok": True, "ignored": "invalid charge_id"}
-        rec = store.find_payment_by_provider_id(charge_id) or store.get_payment(charge_id)
-        if rec is None:
-            logger.info("webhook for unknown charge_id=%s", charge_id)
-            return {"ok": True, "ignored": "unknown charge_id"}
-
-        try:
-            verified = await asyncio.to_thread(_provider_status, rec)
-        except (paychangu.PayChanguError, binance_pay.BinancePayError) as e:
-            # 502 makes PayChangu retry; the reconciler is the backstop.
             raise HTTPException(status_code=502, detail=f"Could not verify payment: {e}")
 
         state, message = _provider_charge_state(rec, verified)
@@ -1310,18 +1310,18 @@ def create_app() -> "FastAPI":
             },
         )
         detail = (
-            f"Resolved {market_id} → {body.outcome.upper()} at "
-            f"{summary['resolved_price']}¢ · {summary['wallets_settled']} wallets"
-            f" settled · ${summary['total_payout']:.2f} paid out"
+            f"Resolved {market_id} â†’ {body.outcome.upper()} at "
+            f"{summary['resolved_price']}Â¢ Â· {summary['wallets_settled']} wallets"
+            f" settled Â· ${summary['total_payout']:.2f} paid out"
         )
         if summary.get("already_resolved"):
             detail = (
-                f"{market_id} was already resolved to {body.outcome.upper()} — "
+                f"{market_id} was already resolved to {body.outcome.upper()} â€” "
                 "no wallets were paid again"
             )
         elif summary.get("already_settled"):
             detail += (
-                f" · {summary['already_settled']} wallet(s) had already been paid "
+                f" Â· {summary['already_settled']} wallet(s) had already been paid "
                 "by an earlier run and were skipped"
             )
         return MessageResponse(detail=detail)

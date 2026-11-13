@@ -58,7 +58,7 @@ export default function PaymentsPanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [activeInvoice, setActiveInvoice] = useState<Payment | null>(null);
+  const [activeInvoice] = useState<Payment | null>(null);
 
   const widgetId = wallet?.id;
   const isCrypto = correspondent === 'USDT';
