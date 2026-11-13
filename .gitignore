@@ -38,3 +38,8 @@ Thumbs.db
 .idea/
 *.log
 npm-debug.log*
+
+# --- Markdown docs (kept locally, untracked) ---
+*.md
+!README.md
+
