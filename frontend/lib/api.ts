@@ -30,6 +30,11 @@ import type {
 } from './types';
 import { loadStoredSession } from './wallet';
 
+/**
+ * Base URL of the FastAPI service for server-side/runtime fetches.
+ * On Vercel services this is injected into the frontend via a service binding
+ * (`KETSA_BACKEND_URL`); locally it falls back to the dev server.
+ */
 const API_BASE = (process.env.KETSA_BACKEND_URL || 'http://127.0.0.1:8000').replace(/\/+$/, '');
 
 /** A failed API call. `status` is 0 when the request never got a response. */

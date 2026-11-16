@@ -1,22 +1,30 @@
 // Single source of truth for the live-feed WebSocket URL.
 //
-// The browser connects to the backend DIRECTLY for the feed: the Next runtime
-// proxy in `app/api/[...path]/route.ts` handles normal HTTP but does not proxy
-// WebSocket upgrades. That means the public API origin must be present in the
-// CLIENT bundle — and `NEXT_PUBLIC_*` values are inlined by Next at BUILD time.
-//
-// The trap this guards against: `KETSA_BACKEND_URL` is server-only, so a
-// production build that sets only that (and not
-// `NEXT_PUBLIC_KETSA_BACKEND_URL`) compiles the browser fallback —
-// ws://127.0.0.1:8000 — and the live market feed, notifications and leaderboard
-// silently stop updating in production. See `.env.production.example`.
+// The browser connects to the backend for the feed: the Next runtime proxy in
+// `app/api/[...path]/route.ts` handles normal HTTP but does not proxy WebSocket
+// upgrades. Resolution order:
+//   1. `NEXT_PUBLIC_KETSA_BACKEND_URL` (build-time, inlined) — explicit public
+//      backend origin for cross-origin deployments.
+//   2. Browser same-origin — on Vercel services `/api/*` is routed to the
+//      backend, so the socket can use the current origin (`wss://host/api/ws`).
+//   3. Local dev fallback — `http://127.0.0.1:8000` during SSR/build.
+
+function resolveBase(): string {
+  if (process.env.NEXT_PUBLIC_KETSA_BACKEND_URL) {
+    return process.env.NEXT_PUBLIC_KETSA_BACKEND_URL;
+  }
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return window.location.origin;
+  }
+  // SSR/build fallback for local development.
+  return process.env.KETSA_BACKEND_URL || 'http://127.0.0.1:8000';
+}
 
 function deriveWsUrl(): string {
-  const base =
-    process.env.NEXT_PUBLIC_KETSA_BACKEND_URL || 'http://127.0.0.1:8000';
+  const base = resolveBase().replace(/\/+$/, '');
   // https -> wss, http -> ws, so a TLS deployment keeps a secure socket
   // (a ws:// socket from an https page is blocked as mixed content).
-  return base.replace(/^http/, 'ws') + '/api/ws';
+  return base.replace(/^http/i, 'ws') + '/api/ws';
 }
 
 export const WS_URL = deriveWsUrl();
@@ -34,6 +42,6 @@ if (
 ) {
   console.warn(
     '[ketsa] Live feed is pointed at localhost in a production build. Set ' +
-      'NEXT_PUBLIC_KETSA_BACKEND_URL to the public API origin and rebuild.',
+      'NEXT_PUBLIC_KETSA_BACKEND_URL to the public API origin and rebuild, or use same-origin /api routing.',
   );
 }

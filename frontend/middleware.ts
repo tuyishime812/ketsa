@@ -26,13 +26,15 @@ function buildCsp(nonce: string): string {
   }
 
   // The browser talks to the backend directly only for the live WebSocket
-  // feed; HTTP API calls are same-origin through /api/*. Both origins must be
-  // in connect-src.
+  // feed; HTTP API calls are same-origin through /api/*. On Vercel services the
+  // feed may use same-origin /api/ws (routed to the backend), so 'self' covers
+  // it; an explicit public backend origin (if configured) is added for
+  // cross-origin deployments.
   const backend =
     process.env.NEXT_PUBLIC_KETSA_BACKEND_URL ||
     process.env.KETSA_BACKEND_URL ||
-    'http://127.0.0.1:8000';
-  const backendWs = backend.replace(/^http/, 'ws');
+    '';
+  const backendWs = backend ? backend.replace(/^http/i, 'ws') : '';
   const isDev = process.env.NODE_ENV !== 'production';
 
   const scriptSrc = [
@@ -50,7 +52,7 @@ function buildCsp(nonce: string): string {
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data:",
     "font-src 'self'",
-    `connect-src 'self' ${backend} ${backendWs}`,
+    `connect-src 'self'${backend ? ` ${backend}` : ''}${backendWs ? ` ${backendWs}` : ''}`,
     "base-uri 'self'",
     "form-action 'self'",
     "frame-ancestors 'none'",
