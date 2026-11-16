@@ -7,11 +7,19 @@
  * user as real, so an API outage would have rendered invented market data as
  * live. This fails closed instead.
  *
- * SECURITY: takes no error object and renders no upstream text. API/host/
- * connection detail stays in the server log (CWE-209 — "fetch failed",
- * ECONNREFUSED and the backend host are all leakable fingerprints).
+ * SECURITY: by default this takes no error object and renders no upstream text.
+ * API/host/connection detail stays in the server log (CWE-209). A dev-only hint
+ * may be shown to help local setup; never enable detailed hints in production.
  */
-export default function DataUnavailable({ what }: { what: string }) {
+export default function DataUnavailable({
+  what,
+  devHint,
+}: {
+  what: string;
+  /** Shown only in non-production builds to aid local troubleshooting. */
+  devHint?: string;
+}) {
+  const showHint = process.env.NODE_ENV !== 'production' && devHint;
   return (
     <div className="flex min-h-[52vh] flex-col items-center justify-center px-6 text-center">
       <div className="max-w-[440px]">
@@ -22,6 +30,11 @@ export default function DataUnavailable({ what }: { what: string }) {
           We couldn&rsquo;t load live {what} just now. Please try again in a
           moment.
         </p>
+        {showHint ? (
+          <p className="mt-3 rounded-[7px] border border-border bg-paper-alt px-3 py-2 text-left text-[12px] text-ink-3">
+            <strong className="font-medium text-ink-2">Dev:</strong> {devHint}
+          </p>
+        ) : null}
         {/* A plain anchor, not a client-side reset: this component renders on
             the server, so a full reload is what actually re-runs the fetch. */}
         <a

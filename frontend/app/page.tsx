@@ -28,7 +28,10 @@ export default async function HomePage() {
       <>
         <Nav />
         <main id="top">
-          <DataUnavailable what="market data" />
+          <DataUnavailable
+            what="market data"
+            devHint="The frontend cannot reach the Ketsa API. Start the backend (from the backend/ folder run: python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000) and ensure KETSA_BACKEND_URL points to it, then retry."
+          />
         </main>
       </>
     );
