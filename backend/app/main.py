@@ -1044,7 +1044,7 @@ def create_app() -> "FastAPI":
             if not (paychangu.configured() or binance_pay.configured()):
                 continue
             try:
-                pending = store.list_payments(status="pending")
+                pending = [p for p in store.list_payments() if p.get("status") == "pending"]
             except Exception:
                 logger.exception("payment reconciliation: could not list payments")
                 continue
