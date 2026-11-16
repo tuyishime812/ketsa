@@ -19,7 +19,6 @@ import {
   registerSession,
   requestLoginCode as requestLoginCodeRequest,
   resetPassword as resetPasswordRequest,
-  startSocialLogin,
   verifyLoginCode as verifyLoginCodeRequest,
 } from '@/lib/api';
 import type { User, Wallet } from '@/lib/types';
@@ -75,8 +74,6 @@ interface WalletContextValue {
     otp: string,
     newPassword: string,
   ) => Promise<boolean>;
-  /** Start Auth0 "Continue with Google"; the browser leaves for Auth0. */
-  googleLogin: () => Promise<void>;
   logout: () => Promise<void>;
   /** Persist a refreshed token + user + wallet (e.g. after a password change). */
   applySession: (session: { token: string; user: User; wallet: Wallet }) => void;
@@ -326,20 +323,6 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const googleLogin = useCallback(async () => {
-    setAuthBusy(true);
-    setAuthError(null);
-    try {
-      const { url } = await startSocialLogin();
-      // Full-page navigation: Auth0 -> backend callback -> /auth/callback.
-      // The auth modal stays mounted until the browser leaves.
-      window.location.assign(url);
-    } catch (err) {
-      setAuthError(err instanceof Error ? err.message : 'Google login unavailable');
-      setAuthBusy(false);
-    }
-  }, []);
-
   const logout = useCallback(async () => {
     const session = loadStoredSession();
     if (session?.token) {
@@ -373,7 +356,6 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         register,
         forgotPassword,
         resetPassword,
-        googleLogin,
         logout,
         applySession: finishAuth,
       }}
@@ -405,9 +387,6 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           onReset={(email, otp, newPassword) =>
             resetPassword(email, otp, newPassword)
           }
-          onGoogle={() => {
-            void googleLogin();
-          }}
           onClose={closeAuth}
           onGuest={() => {
             setAuthOpen(false);
