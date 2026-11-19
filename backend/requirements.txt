@@ -17,7 +17,6 @@ psycopg[binary]==3.2.9  # enables KETSA_DB_URL row locking for multi-process saf
 # any Railway/Render/Fly build). 2.13.0 is the version the test suite is green
 # on, so it is the floor we pin rather than chasing the newest release.
 #
-# The [crypto] extra is satisfied by the cryptography pin below; app.social
-# only ever verifies RS256 against the Auth0 JWKS, never a symmetric alg.
+# The [crypto] extra is satisfied by the cryptography pin below.
 PyJWT==2.13.0
 cryptography==44.0.1

@@ -33,6 +33,8 @@ MARKETS_WRITE = "markets:write"
 MARKETS_RESOLVE = "markets:resolve"
 USERS_READ = "users:read"
 USERS_WRITE = "users:write"
+WITHDRAWALS_READ = "withdrawals:read"
+WITHDRAWALS_MANAGE = "withdrawals:manage"
 STAFF_READ = "staff:read"
 STAFF_WRITE = "staff:write"
 CONFIG_READ = "config:read"
@@ -49,6 +51,8 @@ ALL_CAPABILITIES: FrozenSet[str] = frozenset(
         MARKETS_RESOLVE,
         USERS_READ,
         USERS_WRITE,
+        WITHDRAWALS_READ,
+        WITHDRAWALS_MANAGE,
         STAFF_READ,
         STAFF_WRITE,
         CONFIG_READ,
@@ -77,14 +81,17 @@ ROLE_CAPABILITIES: dict[str, FrozenSet[str]] = {
     "admin": frozenset(ALL_CAPABILITIES - {CONFIG_WRITE}),
     # Front-line support: look up users and read site/market data.
     "support": _SUPPORT,
-    # Money operations: read users and resolve markets (settlement), but no
-    # account deletion or content editing.
+    # Money operations: read users, resolve markets (settlement), and approve or
+    # reject withdrawal requests (real-money payouts), but no account deletion or
+    # content editing.
     "finance": frozenset(
         {
             CONTENT_READ,
             MARKETS_READ,
             MARKETS_RESOLVE,
             USERS_READ,
+            WITHDRAWALS_READ,
+            WITHDRAWALS_MANAGE,
         }
     ),
     # Content/marketing: edit site copy and markets content, read-only users.

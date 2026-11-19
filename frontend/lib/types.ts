@@ -192,7 +192,7 @@ export interface AdminUserView {
 }
 
 export type PaymentKind = 'deposit' | 'withdraw';
-export type PaymentStatus = 'pending' | 'completed' | 'failed';
+export type PaymentStatus = 'pending_approval' | 'pending' | 'completed' | 'failed' | 'rejected';
 
 export interface Payment {
   id: string;

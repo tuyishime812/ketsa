@@ -45,7 +45,6 @@ $Sensitive  = @(
   'PAYCHANGU_WEBHOOK_SECRET',
   'SUPABASE_SERVICE_ROLE_KEY',
   'KETSA_RESEND_API_KEY',
-  'KETSA_AUTH0_CLIENT_SECRET',
   'KETSA_ADMIN_PASSWORD'
 )
 $ScrubFile = Join-Path $Repo '.git-secrets-to-scrub.txt'   # gitignored

@@ -14,12 +14,12 @@
 --   ketsa_payments     — the mobile-money (PayChangu) payment ledger.
 --                        Idempotency flags live here, so this is also never
 --                        wiped by resets.
---   ketsa_users        — accounts (password + Auth0/Google sign-ins).
+--   ketsa_users        — registered user accounts.
 --   ketsa_notifications — per-wallet in-app notification feed.
 --   ketsa_staff        — the platform team directory (admin-managed). Not
 --                        wiped by "reset content".
 --   ketsa_auth         — ephemeral auth state: bearer sessions, pending OTPs,
---                        Auth0 SSO tickets and the login/code-request throttles.
+--                        SSO tickets and the login/code-request throttles.
 --                        Kept OUT of ketsa_kv so a content reset never logs
 --                        everyone out, and shared so it (a) survives a restart
 --                        or redeploy and (b) is the same across every backend
@@ -48,22 +48,13 @@ create table if not exists public.ketsa_users (
   value jsonb not null default '{}'::jsonb
 );
 
--- Auth0 social login: users created via "Continue with Google" carry their
--- Auth0 subject ("auth0_sub") inside the JSONB value. Index the lookup the
--- backend performs when a Google user returns (find-or-create by subject).
---
--- These three lookups are UNIQUE, not just indexed: the backend resolves an
--- account by each of these keys, so two rows sharing a value would make
--- "log in as this phone number" ambiguous (a takeover waiting to happen).
+-- Phone and wallet identifiers are UNIQUE, not just indexed: the backend
+-- resolves an account by each of these keys, so two rows sharing a value would
+-- make "log in as this phone number" ambiguous (a takeover waiting to happen).
 -- Uniqueness was previously only enforced in application code, which a
--- concurrent-registration race could slip past. A plain index could not
--- express the constraint, so it was cosmetic. Safe to re-run.
+-- concurrent-registration race could slip past. Safe to re-run.
 --
--- `null` values (accounts that don't use that identifier) are exempt, which
--- is what we want: most accounts have no auth0_sub, and most have no phone.
-create unique index if not exists ketsa_users_auth0_sub_idx
-  on public.ketsa_users ((value ->> 'auth0_sub'))
-  where value ->> 'auth0_sub' is not null;
+-- `null` values (accounts that don't use that identifier) are exempt.
 
 -- Referral codes are unique, user-facing invite keys. Existing accounts are
 -- backfilled on first access, so the index is created when present.

@@ -104,10 +104,6 @@ def get_user_by_phone(phone: str) -> dict | None:
     return get_backend().get_user_by_phone(phone)
 
 
-def get_user_by_auth0_sub(sub: str) -> dict | None:
-    return get_backend().get_user_by_auth0_sub(sub)
-
-
 def get_user_by_wallet_id(wallet_id: str) -> dict | None:
     return get_backend().get_user_by_wallet_id(wallet_id)
 

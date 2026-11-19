@@ -117,22 +117,28 @@ export default function QuickDeposit() {
         else setNotice('Deposit completed. Your balance has been updated.');
         await refreshWallet();
       } else {
-        setNotice('Withdrawal queued for payout.');
-        let last = created;
-        for (let i = 0; i < 30 && last.status === 'pending'; i++) {
-          await sleep(2000);
-          try {
-            last = await refreshPaymentSession(created.id);
-          } catch {
-            break;
-          }
-        }
-        if (last.status === 'completed') {
-          setNotice('Withdrawal completed.');
-        } else if (last.status === 'failed') {
-          setNotice(last.message || (last.rolled_back ? 'Failed — funds refunded.' : 'Payment failed.'));
+        if (created.status === 'pending_approval') {
+          setNotice('Withdrawal requested. It will be processed after administrator approval.');
         } else {
-          setNotice(`Still ${last.status} — check Portfolio for the latest status.`);
+          setNotice('Withdrawal queued for payout.');
+          let last = created;
+          for (let i = 0; i < 30 && last.status === 'pending'; i++) {
+            await sleep(2000);
+            try {
+              last = await refreshPaymentSession(created.id);
+            } catch {
+              break;
+            }
+          }
+          if (last.status === 'completed') {
+            setNotice('Withdrawal completed.');
+          } else if (last.status === 'failed' || last.status === 'rejected') {
+            setNotice(last.message || (last.rolled_back ? 'Failed — funds refunded.' : 'Payment failed.'));
+          } else if (last.status === 'pending_approval') {
+            setNotice('Withdrawal requested. It will be processed after administrator approval.');
+          } else {
+            setNotice(`Still ${last.status} — check Portfolio for the latest status.`);
+          }
         }
         await refreshWallet();
       }

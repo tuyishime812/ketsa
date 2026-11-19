@@ -464,18 +464,7 @@ export function logoutSession(token: string): Promise<{ ok: boolean }> {
   });
 }
 
-/** Start an Auth0 "Continue with Google" flow; returns the authorize URL. */
-export function startSocialLogin(): Promise<{ url: string }> {
-  return authRequest<{ url: string }>('/social/login', { method: 'POST' });
-}
 
-/** Exchange the single-use SSO ticket (from /auth/callback) for a session. */
-export function completeSocialLogin(ticket: string): Promise<AuthSession> {
-  return authRequest<AuthSession>('/social/session', {
-    method: 'POST',
-    body: JSON.stringify({ ticket }),
-  });
-}
 
 /** Validate a stored token and refresh the user + wallet. */
 export function fetchAuthMe(token: string): Promise<AuthSession> {
@@ -815,6 +804,33 @@ export function requestStaffPasswordReset(
   return adminPublicPost<{ ok: boolean; detail?: string }>('/staff/forgot', {
     email,
   });
+}
+
+// --- Withdrawals (admin approval) -------------------------------------------
+
+export function listAdminWithdrawals(
+  status = 'pending_approval',
+): Promise<Payment[]> {
+  return adminGet<Payment[]>(`/withdrawals?status=${encodeURIComponent(status)}`);
+}
+
+export function approveWithdrawal(
+  id: string,
+): Promise<{ ok: boolean; detail?: string; payment?: Payment }> {
+  return adminPost<{ ok: boolean; detail?: string; payment?: Payment }>(
+    `/withdrawals/${encodeURIComponent(id)}/approve`,
+    {},
+  );
+}
+
+export function rejectWithdrawal(
+  id: string,
+  reason?: string,
+): Promise<{ ok: boolean; detail?: string; payment?: Payment }> {
+  return adminPost<{ ok: boolean; detail?: string; payment?: Payment }>(
+    `/withdrawals/${encodeURIComponent(id)}/reject`,
+    reason ? { reason } : {},
+  );
 }
 
 // --- Admin config (Settings tab) ---------------------------------------------

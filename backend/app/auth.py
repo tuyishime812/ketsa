@@ -12,26 +12,20 @@ Auth is intentionally lightweight and mirrors the admin gate in `admin.py`:
     existing simulated-wallet experience and the account flow share one engine.
 """
 
-import asyncio
 import hashlib
-import logging
 import os
 import re
 import secrets
 import time
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
-from . import authstate, mailer, netutil, social, store
+from . import authstate, mailer, netutil, store
 from . import audit
 from .engine import engine
 from .models import User, Wallet
 
-# Security-relevant failures are logged with detail and returned to the client
-# as a generic message, so provider internals never reach the browser.
-logger = logging.getLogger("ketsa.auth")
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -43,27 +37,6 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 SESSION_TTL = 30 * 24 * 3600
 SESSION_SLIDE_INTERVAL = 3600
 
-# Auth0 social login: single-use, short-lived tickets that identify the user to
-# the frontend /auth/callback page. The ticket appears in a URL, so it must be
-# unguessable, single-use and short-lived (60s) — no session material ever
-# travels in a URL, and the ticket stores a user id, never a token.
-SSO_TICKET_TTL = 60
-# Redeemed tickets are popped, but a ticket whose callback is never completed
-# (closed tab, back button, dropped mobile connection) would otherwise sit here
-# forever: the TTL is only ever checked at redemption, never used to evict. On
-# a long-running process that is an unbounded leak reachable by anyone who can
-# call /social/login and simply never finish (CWE-401 / CWE-770). So entries
-# are swept on issue, and hard-capped so a burst inside one TTL cannot blow up.
-MAX_PENDING_TICKETS = 5_000
-
-
-def _prune_tickets(now: float) -> None:
-    """Evict expired tickets, then hard-cap the store if it is still too big."""
-    authstate.sweep(now)
-    pending = authstate.ticket_count()
-    if pending > MAX_PENDING_TICKETS:
-        for ticket in authstate.oldest_tickets(pending - MAX_PENDING_TICKETS):
-            authstate.delete_ticket(ticket)
 
 # Login throttling — per-identifier (email or phone) failed-attempt window
 # (env-tunable so tests can force short windows). Guards the (public,
@@ -308,9 +281,6 @@ class ChangePasswordRequest(BaseModel):
     new: str = Field(max_length=256)
 
 
-class SocialSessionRequest(BaseModel):
-    ticket: str = Field(max_length=256)
-
 
 class AuthResponse(BaseModel):
     token: str
@@ -401,14 +371,6 @@ def _issue_session(user_id: str) -> str:
     )
     return token
 
-
-def _issue_sso_ticket(user_id: str) -> str:
-    """Single-use ticket that lets the frontend claim a fresh session."""
-    now = time.time()
-    _prune_tickets(now)
-    ticket = secrets.token_urlsafe(32)
-    authstate.put_ticket(ticket, user_id, issued=now, expires=now + SSO_TICKET_TTL)
-    return ticket
 
 
 def _revoke_session(token: str) -> None:
@@ -779,150 +741,3 @@ def change_password(
 @router.get("/me", response_model=AuthResponse)
 def me(user: dict = Depends(require_user)) -> AuthResponse:
     return AuthResponse(token="", user=_user_public(user), wallet=_wallet_for_user(user))
-
-
-# --- Auth0 social login (Google) ---------------------------------------------
-
-def _realize_social_user(claims: dict) -> dict:
-    """Find or create the Ketsa user matching an Auth0 id-token payload.
-
-    Account linking rules (in order):
-      1. Auth0 subject (``sub``) matches an existing user -> reuse it.
-      2. Verified email matches a user that has NO Auth0 subject yet -> link
-         the login (Google proved ownership of that inbox). A user that
-         already carries a *different* Auth0 subject is rejected — never
-         silently re-link an email to a second provider account.
-      3. Otherwise create a fresh account (with a wallet).
-    """
-    sub = str(claims.get("sub") or "").strip()
-    if not sub:
-        raise HTTPException(status_code=400, detail="Auth0 id token has no subject")
-    email = str(claims.get("email") or "").strip().lower()
-    name = str(claims.get("name") or "").strip() or (email or sub).split("@")[0]
-    verified = claims.get("email_verified") is True
-
-    user = store.get_user_by_auth0_sub(sub)
-    if user is None and email and verified:
-        existing = store.get_user_by_email(email)
-        if existing is not None:
-            other = existing.get("auth0_sub")
-            if other and other != sub:
-                raise HTTPException(
-                    status_code=409,
-                    detail="This email is already linked to another Google account",
-                )
-            user = existing
-
-    if user is None:
-        # New account. Prefer the email as the record id, but NEVER let the
-        # id collide with an existing record: an unverified email claim (or any
-        # leftover collision) falls back to the Auth0 subject, otherwise a
-        # Google upsert could overwrite a password account's row (wiping its
-        # password hash and orphaning its wallet).
-        uid = email if (email and verified) else sub
-        if store.get_user(uid) is not None:
-            uid = sub
-        wallet = engine.connect_wallet(name=name)
-        user = {
-            "id": uid,
-            "email": email,
-            # NULL, not "": see _create_account — an empty string would claim
-            # the unique phone slot shared by every phone-less account.
-            "phone": None,
-            "name": name,
-            "password": None,  # Google-created accounts log in via Auth0 only
-            "wallet_id": wallet["id"],
-            "auth0_sub": sub,
-            "created": time.time(),
-        }
-        store.upsert_user(user)
-        engine.notify(
-            wallet["id"],
-            "system",
-            "Welcome to Ketsa",
-            f"Your account is live with wallet {wallet['id'][:8]}.",
-        )
-    else:
-        if not user.get("auth0_sub"):
-            user["auth0_sub"] = sub
-            store.upsert_user(user)
-        # Make sure the wallet is live in the engine after a restart.
-        engine.connect_wallet(user["wallet_id"], name=user.get("name") or name)
-    return user
-
-
-@router.post("/social/login", response_model=dict)
-def social_login_start() -> dict:
-    """Start an Auth0 Google login; returns the /authorize URL to follow."""
-    if not social.configured():
-        raise HTTPException(status_code=503, detail="Google login is not configured on this server")
-    return {"url": social.begin_login()}
-
-
-@router.get("/social/callback")
-async def social_login_callback(
-    code: str | None = None, state: str | None = None
-) -> RedirectResponse:
-    """Auth0 redirect target: validate state, exchange the code, verify the
-    id token, then hand the browser a single-use ticket for the frontend.
-
-    The Ketsa session token itself never appears in this redirect — only the
-    60-second, single-use ticket does.
-    """
-    if not social.configured():
-        raise HTTPException(status_code=503, detail="Google login is not configured on this server")
-    try:
-        nonce, code_verifier = social.take_state(state or "")
-    except social.SocialError as e:
-        # State failures are safe to show: they carry no provider detail.
-        raise HTTPException(status_code=400, detail=str(e))
-    if not code:
-        raise HTTPException(status_code=400, detail="Missing authorization code")
-    try:
-        # Auth0 exchange + JWKS fetch + verification are blocking network
-        # calls — run them off the event loop so one slow Google response
-        # can't stall every request on this process (F-08).
-        tokens = await asyncio.to_thread(social.exchange_code, code, code_verifier)
-    except social.SocialError as e:
-        # Auth0's error text can name internal hosts and describe the tenant's
-        # configuration, so it is logged rather than returned to the browser.
-        logger.warning("auth0 code exchange failed: %s", e)
-        raise HTTPException(
-            status_code=502, detail="Could not complete sign-in with Google. Please try again."
-        )
-    id_token = tokens.get("id_token")
-    if not id_token:
-        raise HTTPException(status_code=502, detail="Could not complete sign-in with Google. Please try again.")
-    try:
-        claims = await asyncio.to_thread(social.verify_id_token, id_token, nonce)
-    except social.SocialError as e:
-        # Same here: a rejected token can be a real attack (wrong connection,
-        # forged signature), and the reason belongs in the log, not the URL bar.
-        logger.warning("auth0 id token rejected: %s", e)
-        raise HTTPException(status_code=400, detail="Google sign-in could not be verified. Please try again.")
-
-    # _realize_social_user reads/writes users and _issue_sso_ticket writes the
-    # shared store: keep both off the event loop so Google's latency (already
-    # threaded above) is the only blocking this handler does.
-    user = await asyncio.to_thread(_realize_social_user, claims)
-    ticket = await asyncio.to_thread(_issue_sso_ticket, user["id"])
-    return RedirectResponse(
-        url=f"{social.frontend_url()}/auth/callback?ticket={ticket}",
-        status_code=302,
-    )
-
-
-@router.post("/social/session", response_model=AuthResponse)
-def social_session(body: SocialSessionRequest) -> AuthResponse:
-    """Exchange the single-use ticket for a fresh Ketsa session."""
-    _prune_tickets(time.time())
-    entry = authstate.take_ticket(body.ticket)
-    if entry is None:
-        raise HTTPException(status_code=400, detail="Invalid or expired login — please try again")
-    if entry["expires"] < time.time() or not entry.get("user_id"):
-        raise HTTPException(status_code=400, detail="Login expired — please try again")
-    user = store.get_user(str(entry["user_id"]))
-    if user is None:
-        raise HTTPException(status_code=400, detail="Login expired — please try again")
-    token = _issue_session(user["id"])
-    return AuthResponse(token=token, user=_user_public(user), wallet=_wallet_for_user(user))

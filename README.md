@@ -104,14 +104,8 @@ The admin "reset content" endpoint re-seeds both backends to the original data
 > ```
 >
 > `KETSA_API_PORT` and `KETSA_WEB_PORT` feed the `/api/*` proxy, the
-> WebSocket origin, **and** the backend's own `KETSA_PUBLIC_BASE_URL` /
-> `KETSA_FRONTEND_URL`. That last part matters for social login: Auth0
-> redirects the browser back to `<public base>/api/auth/social/callback`, so
-> if you move the API port you **must** add the new callback URL to the Auth0
-> application's *Allowed Callback URLs* or Google login fails on the last hop.
-> The launcher prints the exact URL it expects when the ports are non-default.
-> It does not print it for the defaults, where it is
-> `http://127.0.0.1:8000/api/auth/social/callback`.
+> WebSocket origin, and the backend's public/frontend origin settings used by
+> the dev launcher, so nothing else needs editing when you move ports.
 
 ### 1. Backend (FastAPI)
 
@@ -167,10 +161,12 @@ With both services running, log in at **`http://localhost:3000/admin`**:
   unique (the local dev default is a throwaway); it is the only session allowed
   to change the master password or the security configuration.
 - The dashboard has a sidebar with editors for **Markets, Hero, Ticker,
-  Watch, Dashboard, Content, Users, Staff, Broadcast, Settings**, and
+  Watch, Dashboard, Content, Users, Withdrawals, Staff, Broadcast, Settings**, and
   **Manage** (hero/CTA copy, steps, footer, section headings). The **Users**
   tab lists every account with live wallet equity and lets you reset a user's
-  password (revokes their sessions) or delete the account entirely.
+  password (revokes their sessions) or delete the account entirely. The
+  **Withdrawals** tab lets authorized operators review, approve, or reject
+  pending payout requests.
 - **Settings tab.** Operational controls that used to be env-only are editable
   here, live, without a restart:
   - **Payments** — deposit/withdrawal on-off switches and the per-transaction
@@ -272,7 +268,7 @@ With both services running you can trade each market for real on the site:
   chart, a live YES/NO order book, a trade widget and a recent-trades tape.
 - **Portfolio.** `/portfolio` tracks wallet balance, open positions, and realized
   + unrealized P&L against live prices, plus a **payments** panel for deposits
-  and withdrawals via PayChangu.
+  and withdrawal requests via PayChangu (paid out after administrator approval).
 - **Live updates.** A WebSocket feed (`ws://…/api/ws`) streams market ticks,
   fills, **resolutions** and **leaderboard changes** to all open pages; clients
   can subscribe a wallet on the same socket to receive that wallet's private
@@ -289,11 +285,14 @@ With both services running you can trade each market for real on the site:
   when real money is involved).
 - **Payments (PayChangu — MWK).** With `PAYCHANGU_SECRET_KEY` configured, the
   portfolio lets users top up their balance with real money via Airtel Money /
-  TNM Mpamba and payout back to mobile money. Payments settle through a signed
-  webhook, status polling, or a background reconciler, and are credited exactly
-  once (idempotent — never double-credited); failed payouts are refunded
-  automatically. Without a secret key the payment endpoints return 503 and the
-  site runs purely on play money.
+  TNM Mpamba and request payouts back to mobile money. Deposits settle through
+  a signed webhook, status polling, or a background reconciler and are credited
+  exactly once (idempotent — never double-credited). Withdrawal requests debit
+  and reserve funds immediately, then wait for administrator approval before a
+  payout is initiated; approved payouts settle through the same verification
+  path, rejected withdrawals are refunded automatically, and failed payouts are
+  refunded automatically. Without a secret key the payment endpoints return 503
+  and the site runs purely on play money.
 
 Note: when the backend is **not** reachable from the browser at the default
 `127.0.0.1:8000` (e.g. a Vercel frontend + hosted backend), set
@@ -319,9 +318,8 @@ cd backend
 # leaderboard + notifications, PayChangu payments (deposits, withdrawals,
 # idempotent crediting, refunds, webhook + reconciler, transaction + daily caps), the
 # withdrawable-balance rule (real money vs. play money, legacy seeds),
-# WebSocket subscription authorization + connection cap, Auth0 social login
-# (PKCE, state/nonce, connection binding, ticket + state store bounds, no
-# provider-detail leakage), OTP email delivery policy (no-enumeration on
+# WebSocket subscription authorization + connection cap, OTP email delivery
+# policy (no-enumeration on
 # account-discovery endpoints), passwordless
 # email-code sign-in (single-use, account-bound, expiry, per-IP relay
 # throttle), admin broadcast (admin-only, one job at a time, dedupe + cap,
@@ -371,11 +369,11 @@ and wired through `docker-compose.yml`.
 | `KETSA_ADMIN_LOCKOUT_SECONDS` | backend  | Default admin lockout window after too many failures (admin-overridable) | `900` |
 | `KETSA_BACKEND_URL`          | frontend  | Base URL of the FastAPI service (server-side fetch + the runtime `/api/*` proxy in `app/api/[...path]/route.ts`) | `http://127.0.0.1:8000` |
 | `NEXT_PUBLIC_KETSA_BACKEND_URL` | frontend | Public backend origin embedded in the client bundle (WebSocket feed) | `http://127.0.0.1:8000` |
-| `KETSA_API_PORT`             | dev only  | Port `npm run dev` gives the FastAPI backend; also pins the backend's `KETSA_PUBLIC_BASE_URL` | `8000` |
-| `KETSA_WEB_PORT`             | dev only  | Port `npm run dev` gives Next.js; also pins the backend's `KETSA_FRONTEND_URL` | `3000` |
+| `KETSA_API_PORT`             | dev only  | Port `npm run dev` gives the FastAPI backend | `8000` |
+| `KETSA_WEB_PORT`             | dev only  | Port `npm run dev` gives Next.js | `3000` |
 | `KETSA_CSP`                  | frontend  | Optional override for the nonce-based CSP emitted by `middleware.ts`. Use `{nonce}` to keep the per-request script nonce | built-in (nonce + `strict-dynamic`) |
 | `KETSA_ADMIN_PASSWORD`       | backend   | **Break-glass owner password** for `/admin` (staff sign in with their own email + password) | `ketsa-admin` |
-| `KETSA_PUBLIC_URL`           | backend   | Public frontend origin used to build staff set/reset-password links (falls back to `KETSA_FRONTEND_URL`) | `http://localhost:3000` |
+| `KETSA_PUBLIC_URL`           | backend   | Public frontend origin used to build staff set/reset-password links | `http://localhost:3000` |
 | `KETSA_STAFF_INVITE_TTL_SECONDS` | backend | Lifetime of a single-use staff set/reset-password link, clamped to 5 minutes – 7 days | `86400` |
 | `KETSA_DB_BACKEND`           | backend   | Storage backend: `memory` (default) or `supabase`   | `memory` |
 | `SUPABASE_URL`               | backend   | Supabase project URL (Supabase only)                | — |
@@ -385,12 +383,6 @@ and wired through `docker-compose.yml`.
 | `PAYCHANGU_BASE_URL`         | backend   | PayChangu API base URL                             | `https://api.paychangu.com` |
 | `KETSA_AUTH_MAX_FAILURES`    | backend   | Failed logins per email/phone before a temporary lockout  | `5` |
 | `KETSA_AUTH_LOCKOUT_SECONDS` | backend   | Lockout window after too many failed logins         | `900` |
-| `KETSA_AUTH0_DOMAIN`         | backend   | Auth0 tenant (e.g. `ketsa.us.auth0.com`) — enables "Continue with Google" | — (social off; button returns 503) |
-| `KETSA_AUTH0_CLIENT_ID`      | backend   | Auth0 regular-web-app client id                      | — |
-| `KETSA_AUTH0_CLIENT_SECRET`  | backend   | Auth0 client secret (secret; never commit)           | — |
-| `KETSA_AUTH0_CONNECTION`     | backend   | Auth0 connection accepted at the callback (guards against a token from any other connection in the tenant) | `google-oauth2` |
-| `KETSA_PUBLIC_BASE_URL`      | backend   | Public backend origin; Auth0 callback URI is `<this>/api/auth/social/callback` | `http://127.0.0.1:8000` |
-| `KETSA_FRONTEND_URL`         | backend   | Where the browser lands after Google login (`/auth/callback`) | `http://localhost:3000` |
 | `KETSA_RESEND_API_KEY`       | backend   | Resend API key — emails password-reset and sign-in OTPs, plus admin broadcasts (absent ⇒ no mail sent; codes logged for dev) | — (email OTP off) |
 | `KETSA_RESEND_FROM`          | backend   | "From" address for OTP + broadcast emails; must be on a domain verified in Resend (the default sandbox sender only accepts `delivered@resend.dev`) | `Ketsa <onboarding@resend.dev>` |
 | `KETSA_EMAIL_DELIVERY`       | backend   | Transport for OTP/broadcast email: `auto` (Resend when a key is set, else log), `resend` (always send; missing key is a hard 502), or `log` (never send; write the code to the server log — **local dev only**) | `auto` |
@@ -553,44 +545,10 @@ migration.
 request (resolving the caller by wallet id) uses a PostgREST
 `value->>wallet_id=eq.…` filter, not a full-table read, so
 `schema.sql`'s expression indexes are actually used. `schema.sql` now creates
-`ketsa_users_wallet_id_idx` for that path and makes the `phone` and
-`auth0_sub` indexes **unique** (they were plain indexes, so the uniqueness
-those comments claimed was enforced only in application code and a
-concurrent-registration race could slip past it). Re-run `schema.sql` once —
-it is idempotent and changes no data.
-
-**Auth0 social login (Google).** The whole Authorization Code flow runs
-server-side — no Auth0 JS SDK in the bundle, and the session token never
-travels in a URL. The browser only ever sees a 60-second, single-use ticket.
-Defences worth knowing about:
-
-- **PKCE (S256)** is used in addition to the client secret, so a stolen
-  authorization code is useless on its own.
-- **State and nonce** are server-minted, single-use, and bound to one login
-  attempt (login-CSRF / replay guard).
-- **The callback verifies the token's connection**, not just its signature.
-  Auth0 puts the issuing connection in the subject (`google-oauth2|<id>`) and
-  shares the issuer, audience and signing keys across every connection in the
-  tenant — so a valid signature only proves *some* connection signed it. Since
-  `/authorize` does not bind `state` to the connection, a caller holding a
-  valid state could authenticate against a different connection and complete
-  the callback. Those connections let the account holder assert their own
-  email, which would have silently linked the login to an existing Ketsa
-  account — wallet and balance included. The check is derived from
-  `KETSA_AUTH0_CONNECTION`, the same value `/authorize` sends, so the two
-  cannot disagree. **Enabling a second connection in the tenant is therefore
-  safe**, but it stays unusable here until you point that env var at it.
-- **Provider error text never reaches the browser.** Auth0's own
-  `error_description` can name internal hosts and describe the tenant's
-  configuration, so failures are logged server-side and returned as a generic
-  message.
-- The `/auth/callback` page sends `Referrer-Policy: no-referrer` so the
-  ticket in its query string cannot escape via a `Referer` header.
-
-Account linking is deliberately conservative: an existing password account is
-only linked when the token carries a **verified** email, and a record already
-bound to a *different* `auth0_sub` is rejected with a 409 rather than
-re-linked.
+`ketsa_users_wallet_id_idx` for that path and makes the `phone` index
+**unique** (a plain index could not express the uniqueness that application
+code assumed, so a concurrent-registration race could slip past it). Re-run
+`schema.sql` once — it is idempotent and changes no data.
 
 **Known dependency note (PostCSS).** `npm audit` reports a high/moderate
 finding for **postcss bundled inside `next@15.5.x`** (`GHSA-qx2v-qp2m-jg93`).

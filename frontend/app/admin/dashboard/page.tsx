@@ -20,6 +20,7 @@ import ManageEditor from '@/components/admin/ManageEditor';
 import UsersEditor from '@/components/admin/UsersEditor';
 import StaffEditor from '@/components/admin/StaffEditor';
 import BroadcastEditor from '@/components/admin/BroadcastEditor';
+import WithdrawalsEditor from '@/components/admin/WithdrawalsEditor';
 import SettingsEditor from '@/components/admin/SettingsEditor';
 
 type TabKey =
@@ -30,6 +31,7 @@ type TabKey =
   | 'dashboard'
   | 'content'
   | 'users'
+  | 'withdrawals'
   | 'staff'
   | 'broadcast'
   | 'settings'
@@ -53,6 +55,7 @@ const TABS: TabDef[] = [
   { key: 'dashboard', label: 'Dashboard', capability: 'content:write' },
   { key: 'content', label: 'Content', capability: 'content:write' },
   { key: 'users', label: 'Users', capability: 'users:read' },
+  { key: 'withdrawals', label: 'Withdrawals', capability: 'withdrawals:read' },
   { key: 'staff', label: 'Staff', capability: 'staff:read' },
   { key: 'broadcast', label: 'Broadcast', capability: 'broadcast:write' },
   { key: 'settings', label: 'Settings', capability: 'config:write' },
@@ -229,6 +232,9 @@ export default function AdminDashboard() {
             <FooterEditor settings={settings} />
           )}
           {!loading && activeTab === 'users' && <UsersEditor />}
+          {!loading && activeTab === 'withdrawals' && (
+            <WithdrawalsEditor canManage={can('withdrawals:manage')} />
+          )}
           {!loading && activeTab === 'staff' && <StaffEditor canWrite={can('staff:write')} />}
           {!loading && activeTab === 'broadcast' && <BroadcastEditor />}
           {!loading && activeTab === 'settings' && (

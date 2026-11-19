@@ -1,9 +1,10 @@
 """Tests for the PayChangu (MWK) payments layer.
 
-Covers deposits, withdrawals, idempotent crediting, refund-on-terminal-failure,
-authentication/ownership gating (F-01…F-03), transaction + daily caps (F-05),
-non-finite amount rejection (F-06), the write-path rate limiter (F-07) and the
-webhook (signature verification + replay safety).
+Covers deposits, withdrawals (with admin approval), idempotent crediting,
+refund-on-terminal-failure, authentication/ownership gating (F-01…F-03),
+transaction + daily caps (F-05), non-finite amount rejection (F-06), the
+write-path rate limiter (F-07) and the webhook (signature verification +
+replay safety).
 
 Network calls are stubbed by replacing `app.payments._http`; no real funds ever
 move during tests. The fake mirrors the *documented* PayChangu payload shapes:
@@ -99,6 +100,7 @@ def _fresh(bank: FakePayChangu | None = None, env: dict | None = None) -> TestCl
         "PAYCHANGU_WEBHOOK_SECRET": WEBHOOK_SECRET,
         # Tests poll immediately; disable the anti-hammer throttle.
         "KETSA_PAYMENT_POLL_SECONDS": "0",
+        "KETSA_ADMIN_PASSWORD": os.getenv("KETSA_ADMIN_PASSWORD", "ketsa-admin"),
     }
     if env:
         extra = {**extra, **env}
@@ -127,6 +129,16 @@ def _bank(client: TestClient) -> FakePayChangu:
     return client._paychangu_fixture  # type: ignore[attr-defined]
 
 
+def _admin_headers(client: TestClient) -> dict:
+    res = client.post(
+        "/api/admin/login",
+        json={"password": os.getenv("KETSA_ADMIN_PASSWORD", "ketsa-admin")},
+    )
+    assert res.status_code == 200, res.text
+    token = res.json()["token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
 def _account(client: TestClient, identifier: str = "alice@ketsa.io") -> dict:
     return register_user(client, identifier=identifier, name="Alice Trader")
 
@@ -150,6 +162,22 @@ def _withdraw(client: TestClient, token: str, wallet_id: str, amount=300.0,
         "/api/payments/withdrawals",
         json={"wallet_id": wallet_id, "amount": amount, "number": number, "correspondent": correspondent},
         headers=_headers(token),
+    )
+
+
+def _approve_withdrawal(client: TestClient, payment_id: str):
+    return client.post(
+        f"/api/admin/withdrawals/{payment_id}/approve",
+        headers=_admin_headers(client),
+    )
+
+
+def _reject_withdrawal(client: TestClient, payment_id: str, reason: str | None = None):
+    body = {"reason": reason} if reason else {}
+    return client.post(
+        f"/api/admin/withdrawals/{payment_id}/reject",
+        json=body,
+        headers=_admin_headers(client),
     )
 
 
@@ -338,7 +366,7 @@ def test_unknown_wallet_rejected(client: TestClient) -> None:
     assert bank.calls == []
 
 
-# --- Withdrawals ------------------------------------------------------------
+# --- Withdrawals (admin approval required) ----------------------------------
 
 
 def test_withdrawal_flow_uses_payout_endpoints(client: TestClient) -> None:
@@ -351,15 +379,21 @@ def test_withdrawal_flow_uses_payout_endpoints(client: TestClient) -> None:
     assert res.status_code == 200
     rec = res.json()
     assert rec["kind"] == "withdraw"
-    assert rec["status"] == "pending"
+    assert rec["status"] == "pending_approval"
     assert rec["provider_charge_id"] == rec["id"]
     assert rec["correspondent"] == "TNM"
+    assert _balance(client, token, wallet_id) == 700.0
+    assert bank.calls == []
+
+    appr = _approve_withdrawal(client, rec["id"])
+    assert appr.status_code == 200
+    rec = appr.json()
+    assert rec["status"] == "pending"
 
     method, path, sent = bank.calls[0]
     assert (method, path) == ("POST", "/mobile-money/payouts/initialize")
     assert sent["charge_id"] == rec["id"]
     assert sent["mobile_money_operator_ref_id"] == TNM_REF
-    assert _balance(client, token, wallet_id) == 700.0
 
     bank.withdrawal_status = "success"
     body = client.get(f"/api/payments/{rec['id']}", headers=_headers(token)).json()
@@ -377,6 +411,8 @@ def test_withdrawal_failed_refunds_balance(client: TestClient) -> None:
     _fund(client, token, wallet_id, amount=1000.0)
 
     rec = _withdraw(client, token, wallet_id, amount=200.0).json()
+    assert rec["status"] == "pending_approval"
+    rec = _approve_withdrawal(client, rec["id"]).json()
     bank.withdrawal_status = "failed"
     body = client.get(f"/api/payments/{rec['id']}", headers=_headers(token)).json()
     assert body["status"] == "failed"
@@ -394,26 +430,49 @@ def test_withdrawal_failed_at_init_refunds_immediately(client: TestClient) -> No
     token, wallet_id = account["token"], account["wallet"]["id"]
     _fund(client, token, wallet_id, amount=1000.0)
 
+    rec = _withdraw(client, token, wallet_id, amount=200.0).json()
     bank.withdrawal_init_status = "failed"
-    body = _withdraw(client, token, wallet_id, amount=200.0).json()
+    body = _approve_withdrawal(client, rec["id"]).json()
     assert body["status"] == "failed"
     assert body["rolled_back"] is True
     assert _balance(client, token, wallet_id) == 1000.0
 
 
-def test_withdrawal_rejected_by_provider_refunds_and_returns_502(client: TestClient) -> None:
+def test_withdrawal_rejected_by_provider_refunds_and_returns_failed_state(client: TestClient) -> None:
     bank = _bank(client)
     account = _account(client)
     token, wallet_id = account["token"], account["wallet"]["id"]
     _fund(client, token, wallet_id, amount=1000.0)
 
+    rec = _withdraw(client, token, wallet_id, amount=200.0).json()
     bank.withdrawal_init_error = 400
-    res = _withdraw(client, token, wallet_id, amount=200.0)
-    assert res.status_code == 502
+    res = _approve_withdrawal(client, rec["id"])
+    assert res.status_code == 200
+    body = res.json()
+    assert body["status"] == "failed"
+    assert body["rolled_back"] is True
     assert _balance(client, token, wallet_id) == 1000.0
     items = client.get("/api/payments", headers=_headers(token)).json()
     failed = [p for p in items if p["kind"] == "withdraw" and p["status"] == "failed"]
     assert failed and failed[0]["rolled_back"] is True
+
+
+def test_admin_can_reject_withdrawal(client: TestClient) -> None:
+    account = _account(client)
+    token, wallet_id = account["token"], account["wallet"]["id"]
+    _fund(client, token, wallet_id, amount=1000.0)
+
+    rec = _withdraw(client, token, wallet_id, amount=200.0).json()
+    assert rec["status"] == "pending_approval"
+    assert _balance(client, token, wallet_id) == 800.0
+
+    res = _reject_withdrawal(client, rec["id"], "KYC required")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["status"] == "rejected"
+    assert body["rolled_back"] is True
+    assert "KYC required" in (body.get("message") or "")
+    assert _balance(client, token, wallet_id) == 1000.0
 
 
 def test_withdrawal_insufficient_balance(client: TestClient) -> None:
@@ -445,7 +504,10 @@ def test_per_transaction_caps() -> None:
         assert _deposit(client2, token, wallet_id, amount=600.0).status_code == 400
         _fund(client2, token, wallet_id, amount=400.0)
         assert _withdraw(client2, token, wallet_id, amount=500.0).status_code == 400
-        assert _withdraw(client2, token, wallet_id, amount=300.0).status_code == 200
+        rec = _withdraw(client2, token, wallet_id, amount=300.0).json()
+        assert rec["status"] == "pending_approval"
+        assert len(bank.calls) == 0
+        _approve_withdrawal(client2, rec["id"])
         assert len(bank.calls) == 1
     finally:
         _stop(client2)
@@ -460,10 +522,10 @@ def test_daily_withdrawal_limit_ignores_failed_withdrawals() -> None:
         _fund(client2, token, wallet_id, amount=1000.0)
 
         first = _withdraw(client2, token, wallet_id, amount=250.0).json()
+        # pending_approval still consumes the daily cap
         assert _withdraw(client2, token, wallet_id, amount=200.0).status_code == 400
-        # A failed withdrawal is refunded and must not keep consuming the cap.
-        bank.withdrawal_status = "failed"
-        client2.get(f"/api/payments/{first['id']}", headers=_headers(token))
+        # Reject/refund the first withdrawal; it must not keep consuming the cap.
+        _reject_withdrawal(client2, first["id"])
         assert _withdraw(client2, token, wallet_id, amount=250.0).status_code == 200
     finally:
         _stop(client2)
@@ -486,7 +548,7 @@ def test_payment_history_lists_own_records(client: TestClient) -> None:
     ids = [p["id"] for p in items]
     assert d["id"] in ids and c["id"] in ids
     by_id = {p["id"]: p for p in items}
-    assert by_id[c["id"]]["status"] == "pending"
+    assert by_id[c["id"]]["status"] == "pending_approval"
     assert store.get_payment(d["id"])["credited"] is True
 
     bob = _account(client, "bob@ketsa.io")

@@ -480,9 +480,9 @@ class Payment(BaseModel):
     amount: float
     number: str
     correspondent: str
-    status: str  # pending | completed | failed
+    status: str  # pending_approval | pending | completed | failed | rejected
     credited: bool = False  # deposits only - idempotency guard
-    rolled_back: bool = False  # withdrawals only - refund guard if the payout fails
+    rolled_back: bool = False  # withdrawals only - refund guard if the payout fails/is rejected
     # The provider's charge id. We generate it ourselves (the payment id) so it
     # is stable across retries and webhooks can be matched idempotently.
     provider_charge_id: str | None = None

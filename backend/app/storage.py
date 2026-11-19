@@ -209,7 +209,6 @@ class StoreBackend(Protocol):
     def get_user(self, user_id: str) -> dict | None: ...
     def get_user_by_email(self, email: str) -> dict | None: ...
     def get_user_by_phone(self, phone: str) -> dict | None: ...
-    def get_user_by_auth0_sub(self, sub: str) -> dict | None: ...
     def get_user_by_wallet_id(self, wallet_id: str) -> dict | None: ...
     def get_user_by_referral_code(self, code: str) -> dict | None: ...
     def upsert_user(self, user: dict) -> None: ...
@@ -454,15 +453,6 @@ class MemoryBackend:
         self.init()
         for u in self._users.values():
             if u.get("email", "").lower() == (email or "").lower():
-                return copy.deepcopy(u)
-        return None
-
-    def get_user_by_auth0_sub(self, sub: str) -> dict | None:
-        self.init()
-        if not sub:
-            return None
-        for u in self._users.values():
-            if u.get("auth0_sub") == sub:
                 return copy.deepcopy(u)
         return None
 
@@ -1153,12 +1143,6 @@ class SupabaseBackend:
         return self._user_by_json_field(
             "email", needle, match=lambda u: (u.get("email") or "").lower() == needle
         )
-
-    def get_user_by_auth0_sub(self, sub: str) -> dict | None:
-        self.init()
-        if not sub:
-            return None
-        return self._user_by_json_field("auth0_sub", sub)
 
     def get_user_by_phone(self, phone: str) -> dict | None:
         self.init()

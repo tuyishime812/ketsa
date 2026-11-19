@@ -44,8 +44,15 @@ function UsdtLogo() {
 
 function statusTone(status: Payment['status']) {
   if (status === 'completed') return 'bg-pos/10 text-pos';
-  if (status === 'failed') return 'bg-neg/10 text-neg';
+  if (status === 'failed' || status === 'rejected') return 'bg-neg/10 text-neg';
+  if (status === 'pending_approval') return 'bg-[#f59e0b]/10 text-[#b45309]';
   return 'bg-paper-alt text-ink-2';
+}
+
+function statusLabel(status: Payment['status']) {
+  if (status === 'pending_approval') return 'awaiting approval';
+  if (status === 'rejected') return 'rejected';
+  return status;
 }
 
 export default function PaymentsPanel() {
@@ -146,22 +153,28 @@ export default function PaymentsPanel() {
         if (last.status === 'failed') setNotice(last.message || 'The deposit failed — nothing was charged.');
         else setNotice('Deposit completed. Your balance has been updated.');
       } else {
-        setNotice('Withdrawal queued for payout to your mobile money.');
-        let last = created;
-        for (let i = 0; i < 30 && last.status === 'pending'; i++) {
-          await sleep(2000);
-          try {
-            last = await refreshPaymentSession(created.id);
-          } catch {
-            break;
-          }
-        }
-        if (last.status === 'completed') {
-          setNotice('Withdrawal completed.');
-        } else if (last.status === 'failed') {
-          setNotice(last.message || 'The withdrawal failed — funds were refunded to your balance.');
+        if (created.status === 'pending_approval') {
+          setNotice('Withdrawal requested. It will be processed after administrator approval.');
         } else {
-          setNotice(`Still ${last.status}. You can check the status below — this may take a minute.`);
+          setNotice('Withdrawal queued for payout to your mobile money.');
+          let last = created;
+          for (let i = 0; i < 30 && last.status === 'pending'; i++) {
+            await sleep(2000);
+            try {
+              last = await refreshPaymentSession(created.id);
+            } catch {
+              break;
+            }
+          }
+          if (last.status === 'completed') {
+            setNotice('Withdrawal completed.');
+          } else if (last.status === 'failed' || last.status === 'rejected') {
+            setNotice(last.message || 'The withdrawal failed — funds were refunded to your balance.');
+          } else if (last.status === 'pending_approval') {
+            setNotice('Withdrawal requested. It will be processed after administrator approval.');
+          } else {
+            setNotice(`Still ${statusLabel(last.status)}. You can check the status below — this may take a minute.`);
+          }
         }
       }
 
@@ -199,7 +212,7 @@ export default function PaymentsPanel() {
       <p className="mb-4 text-[12.5px] text-ink-2">
         {mode === 'deposit'
           ? 'Top up your balance with real money via Airtel Money, TNM Mpamba, or USDT.'
-          : 'Payout real money you deposited back to your mobile money (min 100 MWK). Play balance and trading winnings are not cashable out.'}
+          : 'Payout real money you deposited back to your mobile money (min 100 MWK).'}
       </p>
 
       <div className="grid gap-4 sm:grid-cols-2">
@@ -326,8 +339,9 @@ export default function PaymentsPanel() {
                 </span>
                 <span
                   className={`rounded-[4px] px-[6px] py-[2px] text-[10px] font-semibold uppercase ${statusTone(p.status)}`}
+                  title={p.message || undefined}
                 >
-                  {p.status}
+                  {statusLabel(p.status)}
                 </span>
               </li>
             ))}

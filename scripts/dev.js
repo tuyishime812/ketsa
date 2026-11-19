@@ -17,12 +17,9 @@
 // disagree about where the API lives. Next.js does not override env vars that
 // are already set, so these win over frontend/.env.local.
 //
-// The same reasoning pins the *backend's* view of the two URLs the Auth0 social
-// login derives from: KETSA_PUBLIC_BASE_URL (where Auth0 redirects the browser
-// back to — it must be browser-reachable) and KETSA_FRONTEND_URL (where the
-// single-use ticket is then handed off). If those drift from the ports actually
-// in use, social login fails on the last hop with a 404 instead of at startup.
-// Real env vars win over backend/.env, so the launcher is authoritative here.
+// Pin the backend's public/frontend origin for local dev so links generated
+// by the API (e.g. staff set-password emails) match the ports actually in use.
+// Real env vars win over backend/.env.
 
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -126,12 +123,10 @@ const api = spawn(
   {
     cwd: backendDir,
     stdio: ['ignore', 'pipe', 'pipe'],
-    // Pin the two URLs the Auth0 social flow derives from, so the redirect
-    // target can never point at a port this launcher is not serving.
     env: {
       ...process.env,
-      KETSA_PUBLIC_BASE_URL: apiUrl,
       KETSA_FRONTEND_URL: webUrl,
+      KETSA_PUBLIC_URL: webUrl,
     },
   },
 );
@@ -203,7 +198,6 @@ process.stdout.write(`${CYAN}[api]${RESET} starting FastAPI backend (${apiUrl}).
 process.stdout.write(`${MAGENTA}[web]${RESET} starting Next.js frontend (${webUrl})...\n`);
 if (apiPort !== 8000 || webPort !== 3000) {
   process.stdout.write(
-    `${CYAN}[api]${RESET} non-default ports — Auth0's Allowed Callback URL must be exactly:\n`,
+    `${CYAN}[api]${RESET} non-default ports in use (api ${apiUrl}, web ${webUrl}).\n`,
   );
-  process.stdout.write(`${CYAN}[api]${RESET}   ${apiUrl}/api/auth/social/callback\n`);
 }

@@ -28,6 +28,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, WebSocket,
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
 from . import authstate
 from . import audit
@@ -1144,11 +1145,11 @@ def create_app() -> "FastAPI":
             "amount": round(float(body.amount), 2),
             "number": number,
             "correspondent": correspondent,
-            "status": "pending",
+            "status": "pending_approval",
             "credited": False,
             "rolled_back": False,
             "provider_charge_id": payment_id,
-            "message": None,
+            "message": "Awaiting administrator approval",
             "last_checked": 0.0,
             "created": now,
             "updated": now,
@@ -1157,13 +1158,13 @@ def create_app() -> "FastAPI":
         async with _engine_lock:
             # The limit must be evaluated under the same lock as the debit:
             # otherwise two concurrent requests could each pass a stale check.
-            # Failed/refunded withdrawals do not count against the daily cap.
+            # Failed/rejected/refunded withdrawals do not count against the daily cap.
             recent = sum(
                 p["amount"]
                 for p in store.list_payments(body.wallet_id)
                 if p["kind"] == "withdraw"
                 and p["created"] >= now - 86400
-                and p.get("status") != "failed"
+                and p.get("status") not in ("failed", "rejected")
                 and not p.get("rolled_back")
             )
             if recent + body.amount > cfg["daily_withdrawal_limit_mwk"]:
@@ -1179,57 +1180,153 @@ def create_app() -> "FastAPI":
             engine.notify(
                 record["wallet_id"],
                 "withdraw",
-                "Withdrawal initiated",
-                f"{record['amount']:.2f} MWK is being sent to {number}.",
+                "Withdrawal requested",
+                f"{record['amount']:.2f} MWK withdrawal requested. It will be processed after administrator approval.",
             )
+            await _pump_events(manager)
+            return _payment_payload(record)
 
+    async def _initiate_withdrawal_payout(rec: dict) -> dict:
+        """Start the mobile-money payout for an approved withdrawal."""
+        payment_id = rec["id"]
         try:
             payload = await asyncio.to_thread(
                 paychangu.create_withdrawal,
-                body.amount,
-                number,
-                correspondent,
+                rec["amount"],
+                rec["number"],
+                rec["correspondent"],
                 payment_id,
             )
         except paychangu.PayChanguError as e:
-            rec = store.get_payment(payment_id) or dict(record)
-            rec["message"] = str(e)
-            if e.status_code is not None and 400 <= e.status_code < 500:
-                # Definitive rejection: refund immediately.
-                async with _engine_lock:
-                    fresh = store.get_payment(payment_id) or rec
+            async with _engine_lock:
+                fresh = store.get_payment(payment_id) or dict(rec)
+                fresh["message"] = str(e)
+                if e.status_code is not None and 400 <= e.status_code < 500:
                     _apply_payment_state(fresh, "failed", str(e))
                     await _pump_events(manager)
-                raise HTTPException(status_code=502, detail=str(e))
-            # Ambiguous (timeout/5xx): keep the debit reserved and let the
-            # reconciler confirm whether the payout was accepted. Re-read under
-            # the lock so a webhook that already settled the payout is not
-            # overwritten with a stale "pending" copy.
-            async with _engine_lock:
-                fresh = store.get_payment(payment_id) or rec
+                    return store.get_payment(payment_id) or fresh
                 if fresh.get("status") == "pending":
-                    fresh["message"] = str(e)
                     fresh["updated"] = time.time()
                     store.upsert_payment(fresh)
-                return _payment_payload(fresh)
+                await _pump_events(manager)
+                return store.get_payment(payment_id) or fresh
 
         ref = paychangu.provider_reference(payload)
         state, message = paychangu.charge_status(payload)
         async with _engine_lock:
-            rec = store.get_payment(payment_id) or dict(record)
+            fresh = store.get_payment(payment_id) or dict(rec)
             if ref:
-                rec["provider_charge_id"] = ref
-            rec["message"] = message
-            # A terminal state on the init response is authoritative (a payout
-            # may settle immediately). Anything else stays pending and is
-            # settled by polling / the webhook / the reconciler.
+                fresh["provider_charge_id"] = ref
+            fresh["message"] = message
             if state in ("completed", "failed"):
-                _apply_payment_state(rec, state, message)
-            else:
-                rec["updated"] = time.time()
-                store.upsert_payment(rec)
+                _apply_payment_state(fresh, state, message)
+            elif fresh.get("status") == "pending":
+                fresh["updated"] = time.time()
+                store.upsert_payment(fresh)
             await _pump_events(manager)
-            return _payment_payload(store.get_payment(payment_id) or rec)
+            return store.get_payment(payment_id) or fresh
+
+    class _WithdrawalDecision(BaseModel):
+        reason: str | None = Field(default=None, max_length=300)
+
+    @app.get("/api/admin/withdrawals", response_model=list[Payment])
+    async def admin_list_withdrawals(
+        status: str | None = "pending_approval",
+        actor: str = Depends(require_capability(permissions.WITHDRAWALS_READ)),
+    ) -> list[Payment]:
+        allowed = {"pending_approval", "pending", "completed", "failed", "rejected"}
+        items = [p for p in store.list_payments() if p.get("kind") == "withdraw"]
+        if status and status != "all":
+            if status not in allowed:
+                raise HTTPException(status_code=400, detail="Unknown status filter")
+            items = [p for p in items if p.get("status") == status]
+        items.sort(key=lambda p: p.get("created") or 0, reverse=True)
+        return [_payment_payload(p) for p in items]
+
+    @app.post("/api/admin/withdrawals/{payment_id}/approve", response_model=Payment)
+    async def admin_approve_withdrawal(
+        payment_id: str,
+        request: Request,
+        actor: str = Depends(require_capability(permissions.WITHDRAWALS_MANAGE)),
+    ) -> Payment:
+        _require_payments()
+        async with _engine_lock:
+            rec = store.get_payment(payment_id)
+            if rec is None or rec.get("kind") != "withdraw":
+                raise HTTPException(status_code=404, detail="Withdrawal not found")
+            if rec.get("status") != "pending_approval":
+                raise HTTPException(status_code=409, detail="Withdrawal is not awaiting approval")
+            rec["status"] = "pending"
+            rec["message"] = "Approved by administrator, processing payout"
+            rec["updated"] = time.time()
+            store.upsert_payment(rec)
+            engine.notify(
+                rec["wallet_id"],
+                "withdraw",
+                "Withdrawal approved",
+                f"{rec['amount']:.2f} MWK withdrawal approved and is being processed.",
+            )
+            await _pump_events(manager)
+            to_send = dict(rec)
+
+        result = await _initiate_withdrawal_payout(to_send)
+
+        _actor_type = "staff" if actor.startswith("staff:") else "admin"
+        _actor_id = actor.split(":", 1)[1] if _actor_type == "staff" else actor
+        audit.record(
+            audit.Actions.WITHDRAWAL_APPROVED if hasattr(audit.Actions, "WITHDRAWAL_APPROVED") else "withdrawal.approved",
+            actor_type=_actor_type,
+            actor_id=_actor_id,
+            ip=netutil.client_ip(request),
+            target_type="payment",
+            target_id=payment_id,
+            metadata={"wallet_id": result.get("wallet_id"), "amount": result.get("amount")},
+        )
+        return _payment_payload(store.get_payment(payment_id) or result)
+
+    @app.post("/api/admin/withdrawals/{payment_id}/reject", response_model=Payment)
+    async def admin_reject_withdrawal(
+        payment_id: str,
+        request: Request,
+        body: _WithdrawalDecision | None = None,
+        actor: str = Depends(require_capability(permissions.WITHDRAWALS_MANAGE)),
+    ) -> Payment:
+        reason = ((body.reason if body else None) or "Rejected by administrator").strip() or "Rejected by administrator"
+        async with _engine_lock:
+            rec = store.get_payment(payment_id)
+            if rec is None or rec.get("kind") != "withdraw":
+                raise HTTPException(status_code=404, detail="Withdrawal not found")
+            if rec.get("status") != "pending_approval":
+                raise HTTPException(status_code=409, detail="Withdrawal is not awaiting approval")
+            if not rec.get("rolled_back"):
+                engine.credit_balance(rec["wallet_id"], rec["amount"])
+                rec["rolled_back"] = True
+                engine.emit({"type": "leaderboard"})
+            rec["status"] = "rejected"
+            rec["message"] = reason[:300]
+            rec["updated"] = time.time()
+            store.upsert_payment(rec)
+            engine.notify(
+                rec["wallet_id"],
+                "withdraw",
+                "Withdrawal rejected",
+                f"Your {rec['amount']:.2f} MWK withdrawal was rejected and refunded. {rec['message']}",
+            )
+            await _pump_events(manager)
+            result = dict(rec)
+
+        _actor_type = "staff" if actor.startswith("staff:") else "admin"
+        _actor_id = actor.split(":", 1)[1] if _actor_type == "staff" else actor
+        audit.record(
+            audit.Actions.WITHDRAWAL_REJECTED if hasattr(audit.Actions, "WITHDRAWAL_REJECTED") else "withdrawal.rejected",
+            actor_type=_actor_type,
+            actor_id=_actor_id,
+            ip=netutil.client_ip(request),
+            target_type="payment",
+            target_id=payment_id,
+            metadata={"wallet_id": result.get("wallet_id"), "amount": result.get("amount"), "reason": reason[:300]},
+        )
+        return _payment_payload(store.get_payment(payment_id) or result)
 
     @app.post("/api/trade", response_model=TradeResponse)
     @app.post("/api/trades", response_model=TradeResponse)
