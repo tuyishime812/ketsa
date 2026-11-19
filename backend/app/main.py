@@ -384,31 +384,16 @@ def create_app() -> "FastAPI":
                 "supabase (with db/schema.sql applied) for durable storage."
             )
 
-        # Tell the operator, once, whether transactional email can actually
-        # reach users. Signup/reset depend on it, so a silent log-only or
-        # sandbox misconfiguration is the difference between "account creation
-        # works" and a field of 502s.
+        # Tell the operator, once, how transactional email is handled.
+        # External email delivery (Resend) is disabled: messages/codes are
+        # written to the server log, not delivered to inboxes.
         status = mailer.email_status()
-        logger.info(
-            "email delivery=%s from=%s api_key_set=%s",
-            status["delivery"],
-            status["from"],
-            status["api_key_set"],
+        logger.info("email delivery=%s configured=%s", status.get("delivery"), status.get("configured"))
+        logger.warning(
+            "Email delivery is log-only — verification/reset codes and staff links "
+            "are written to server logs and NOT sent to recipients. Treat logs as "
+            "sensitive operational data."
         )
-        if status["delivery"] == "log":
-            logger.warning(
-                "Email is in LOG mode â€” verification and reset codes are written "
-                "to this log and NOT sent. Set KETSA_RESEND_API_KEY (and a verified "
-                "KETSA_RESEND_FROM domain) or KETSA_EMAIL_DELIVERY=resend for real "
-                "delivery."
-            )
-        elif status["sandbox_sender"]:
-            logger.warning(
-                "Email sender %s is Resend's sandbox â€” only the account owner's own "
-                "inbox receives mail, so other users cannot complete signup. Verify "
-                "a sending domain and set KETSA_RESEND_FROM.",
-                status["from"],
-            )
 
         # Sessions, OTPs and throttles live in the storage backend, so a
         # Supabase deployment needs the `ketsa_auth` table from db/schema.sql.

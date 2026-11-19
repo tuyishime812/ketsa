@@ -39,13 +39,8 @@ services:
       - key: KETSA_PUBLIC_URL
         sync: false
 
-      # --- Email (Resend) ---
-      - key: KETSA_EMAIL_DELIVERY
-        value: resend
-      - key: KETSA_RESEND_API_KEY
-        sync: false
-      - key: KETSA_RESEND_FROM
-        sync: false
+      # --- Email ---
+      # External email delivery (Resend) is disabled; messages/codes are logged.
 
       # --- Payments (PayChangu, optional) ---
       - key: PAYCHANGU_SECRET_KEY

@@ -10,7 +10,7 @@ Both endpoints *only* send when the identifier matched a real account. A
 distinct failure status on those paths would therefore answer "does this
 address have an account?" — user enumeration (CWE-203). Their uniform 200 is a
 security property, not an oversight, and the tests below keep that guarantee
-alongside the transport-mode matrix.
+alongside the log-only delivery behavior.
 """
 
 from unittest import mock
@@ -66,59 +66,29 @@ def test_account_discovery_endpoints_stay_uniform_on_send_failure(
     assert known.json() == unknown.json()
 
 
-# --- dev mode keeps working ------------------------------------------------
+# --- log-only delivery -----------------------------------------------------
 
 
-def test_dev_mode_without_a_key_still_delivers_to_the_log(monkeypatch) -> None:
-    """No API key means "logged, not sent" — that must count as delivered.
-
-    Dev mode is the documented local workflow (the reset/sign-in code is
-    printed to the backend log), so a fresh checkout must not fail closed.
-    """
+def test_email_is_log_only_and_not_inbox_configured(monkeypatch) -> None:
+    """External delivery is disabled: messages are logged, not sent to inboxes."""
+    # Ensure no Resend-related env influences behavior (feature removed).
     monkeypatch.delenv("KETSA_RESEND_API_KEY", raising=False)
-    assert mailer._api_key() is None
+    monkeypatch.delenv("KETSA_EMAIL_DELIVERY", raising=False)
+
+    status = mailer.email_status()
+    assert status["delivery"] == "log"
+    assert status["configured"] is False
+    assert mailer.delivery_configured() is False
     assert mailer.send_email("dev@ketsa.io", "test", "<p>hi</p>") is True
 
 
-# --- explicit KETSA_EMAIL_DELIVERY switch ----------------------------------
-
-
-def test_log_mode_skips_the_network_even_with_a_key(monkeypatch) -> None:
-    """`log` is the local-dev transport: a configured key must NOT be used."""
-    monkeypatch.setenv("KETSA_RESEND_API_KEY", "re_fake_key")
-    monkeypatch.setenv("KETSA_EMAIL_DELIVERY", "log")
+def test_log_transport_never_touches_network(monkeypatch) -> None:
+    """Log-only mode must never make outbound HTTP calls."""
+    import urllib.request
 
     def _boom(*_a, **_k):  # pragma: no cover — must never run
-        raise AssertionError("log mode must not touch the network")
+        raise AssertionError("log-only mailer must not touch the network")
 
-    monkeypatch.setattr(mailer.urllib.request, "urlopen", _boom)
-    assert mailer.delivery_configured() is False
+    monkeypatch.setattr(urllib.request, "urlopen", _boom)
     assert mailer.send_email("dev@ketsa.io", "test", "<p>hi</p>") is True
-
-
-def test_resend_mode_without_a_key_fails_closed(monkeypatch) -> None:
-    """`resend` is explicit: a missing key is a hard failure, not a silent log."""
-    monkeypatch.delenv("KETSA_RESEND_API_KEY", raising=False)
-    monkeypatch.setenv("KETSA_EMAIL_DELIVERY", "resend")
-    assert mailer.delivery_configured() is False
-    assert mailer.send_email("dev@ketsa.io", "test", "<p>hi</p>") is False
-
-
-def test_auto_mode_follows_the_key(monkeypatch) -> None:
-    """Default `auto`: log without a key, resend with one."""
-    monkeypatch.setenv("KETSA_EMAIL_DELIVERY", "auto")
-    monkeypatch.delenv("KETSA_RESEND_API_KEY", raising=False)
-    assert mailer.email_status()["delivery"] == "log"
-
-    monkeypatch.setenv("KETSA_RESEND_API_KEY", "re_fake_key")
-    assert mailer.email_status()["delivery"] == "resend"
-
-
-def test_email_status_flags_the_sandbox_sender(monkeypatch) -> None:
-    """The startup banner relies on this to warn that only the owner inbox works."""
-    monkeypatch.setenv("KETSA_RESEND_FROM", "Ketsa <onboarding@resend.dev>")
-    monkeypatch.setenv("KETSA_RESEND_API_KEY", "re_fake_key")
-    assert mailer.email_status()["sandbox_sender"] is True
-
-    monkeypatch.setenv("KETSA_RESEND_FROM", "Ketsa <no-reply@ketsa.example>")
-    assert mailer.email_status()["sandbox_sender"] is False
+    assert mailer.send_otp_email("dev@ketsa.io", "123456", "login", 10) is True

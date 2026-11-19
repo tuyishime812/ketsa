@@ -1,30 +1,20 @@
-"""Email delivery via Resend (https://resend.com).
+"""Email delivery (log-only).
 
-Sends transactional emails (password-reset OTP, passwordless sign-in OTP,
-admin broadcasts) through the Resend REST API. The transport is a thin
-``urllib`` POST; the test-suite patches ``send_email`` directly, so no network
-is ever touched there.
+External email delivery (Resend) is disabled. Transactional messages
+(password-reset OTP, passwordless sign-in OTP, broadcasts, staff invites and
+credential links) are written to the server log so flows can be exercised and
+tested without a third-party mail provider.
 
-Dev/offline mode: with ``KETSA_EMAIL_DELIVERY=log`` (or no
-``KETSA_RESEND_API_KEY`` under the default ``auto`` mode) the message is logged
-instead of sent, so a local checkout can exercise the full forgot-password and
-passwordless sign-in flows before a sending domain exists. The OTP visible in
-the server log is exactly what the email would have contained — never run this
-in production, where the startup banner warns when the transport cannot deliver.
+The log transport redacts credential tokens in logged bodies. Treat server logs
+as sensitive operational data.
 """
 
 import html
-import json
 import logging
-import os
 import re
-import urllib.error
-import urllib.request
 from typing import Any
 
 log = logging.getLogger(__name__)
-
-RESEND_ENDPOINT = "https://api.resend.com/emails"
 
 # Any ``token=...`` query parameter in a logged email body. Group 1 is kept so
 # the log still shows *which* link was sent while the secret itself is masked.
@@ -34,6 +24,7 @@ _LOG_TOKEN_RE = re.compile(r"(?i)(token=)[^&\s\"'<>]+")
 def _redact_tokens_for_log(body: str) -> str:
     """Mask credential query-string tokens in a log-bound email body."""
     return _LOG_TOKEN_RE.sub(r"\1<redacted>", str(body or ""))
+
 
 _OTP_TEMPLATE = """\
 <!doctype html>
@@ -76,129 +67,45 @@ _BROADCAST_TEMPLATE = """\
 """
 
 
-def _api_key() -> str | None:
-    key = os.getenv("KETSA_RESEND_API_KEY", "").strip()
-    return key or None
-
-
-def _from_address() -> str:
-    # Defaults to Resend's sandbox domain, which only delivers to the account
-    # owner's verified inbox. Set KETSA_RESEND_FROM to your verified sending
-    # domain once one is configured in Resend.
-    return os.getenv("KETSA_RESEND_FROM", "Ketsa <onboarding@resend.dev>")
-
-
-def _delivery_mode() -> str:
-    """Effective transport, from ``KETSA_EMAIL_DELIVERY``.
-
-    * ``resend`` — always POST to Resend. Missing API key is a hard failure, so
-      a misconfigured deployment is loud rather than silently dropping mail.
-    * ``log`` — never touch the network; write the message to the server log.
-      This is the supported local-dev workflow: the OTP is visible in the
-      backend output, so password reset and login codes can be exercised
-      end-to-end without a sending domain.
-    * ``auto`` (default) — ``resend`` when an API key is configured, else
-      ``log``. Keeps a bare checkout working with no setup while still sending
-      for real the moment a key appears.
-    """
-    raw = os.getenv("KETSA_EMAIL_DELIVERY", "auto").strip().lower()
-    if raw in ("log", "resend"):
-        return raw
-    return "resend" if _api_key() else "log"
-
-
 def delivery_configured() -> bool:
-    """True when a sent message is expected to actually leave the building.
+    """True when a sent message is expected to reach a recipient inbox.
 
-    ``log`` mode is a deliberate dev transport, not a misconfiguration, so it
-    reports False (nothing is really delivered) even though it lets the OTP
-    flow complete locally. ``resend`` mode without an API key is likewise not
-    deliverable, so it reports False and ``send_email`` fails closed.
+    External delivery is disabled, so this always returns False. Messages are
+    written to server logs instead (see ``send_email``).
     """
-    return _delivery_mode() == "resend" and _api_key() is not None
+    return False
 
 
 def email_status() -> dict[str, Any]:
-    """Non-secret description of the active transport (for startup logging)."""
-    sender = _from_address()
-    # Resend's shared sandbox domain: deliverable only to the account owner's
-    # own verified inbox, never to arbitrary recipients.
-    sandbox = sender.lower().rstrip(">").endswith("@resend.dev")
+    """Non-secret description of the active transport (for startup/UI logging)."""
     return {
-        "delivery": _delivery_mode(),
-        "from": sender,
-        "sandbox_sender": sandbox,
-        "api_key_set": _api_key() is not None,
+        "delivery": "log",
+        "configured": False,
     }
 
 
 def send_email(to: str, subject: str, html: str) -> bool:
-    """Send one transactional email.
+    """Record one transactional email in the server log.
 
-    Returns True when the message reached its destination: handed to Resend in
-    a configured deployment, or written to the log in dev/offline mode, which
-    is exactly where that mode is documented to deliver. Returns False only
-    when delivery genuinely failed — Resend rejected the request or the
-    transport errored.
-
-    Callers that owe the user an honest answer ("check your inbox") must act on
-    False; treating it as success ships a dead-end flow where the UI promises
-    an email that was never sent.
+    Returns True when the message was written to the log. External inbox
+    delivery is disabled. Callers should use ``delivery_configured()`` to
+    report whether a recipient will actually receive mail.
     """
-    if _delivery_mode() == "log":
-        # WARNING, not INFO, on purpose: the app logger has no handler in every
-        # launcher, so an INFO body line is silently dropped and the code becomes
-        # invisible — defeating the whole point of this dev transport.
-        #
-        # Redact credential tokens before logging. Without this the dev transport
-        # would write a working set-password link into the server log, which is a
-        # durable, widely-readable location (CWE-532). The rest of the body is
-        # still logged so local template work remains possible.
-        safe_html = _redact_tokens_for_log(html)
-        log.warning(
-            "email delivery=log — NOT sent. to=%s subject=%s\n%s",
-            to,
-            subject,
-            safe_html,
-        )
-        return True
-
-    key = _api_key()
-    if key is None:
-        # Explicit ``resend`` mode with no key: a real misconfiguration. Fail so
-        # the caller reports the truth instead of promising an email that can
-        # never be sent.
-        log.error(
-            "KETSA_EMAIL_DELIVERY=resend but KETSA_RESEND_API_KEY is unset — "
-            "email to %s not sent",
-            to,
-        )
-        return False
-
-    payload: dict[str, Any] = {
-        "from": _from_address(),
-        "to": [to],
-        "subject": subject,
-        "html": html,
-    }
-    request = urllib.request.Request(
-        RESEND_ENDPOINT,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
+    # WARNING, not INFO, on purpose: the app logger has no handler in every
+    # launcher, so an INFO body line is silently dropped and the code becomes
+    # invisible — defeating the whole point of this transport.
+    #
+    # Redact credential tokens before logging. Without this the log transport
+    # would write a working set-password link into the server log, which is a
+    # durable, widely-readable location (CWE-532). The rest of the body is
+    # still logged so local template work remains possible.
+    safe_html = _redact_tokens_for_log(html)
+    log.warning(
+        "email delivery=log — NOT sent. to=%s subject=%s\n%s",
+        to,
+        subject,
+        safe_html,
     )
-    try:
-        with urllib.request.urlopen(request, timeout=15) as response:
-            body = response.read().decode("utf-8", "replace")
-            if response.status >= 400:
-                log.error("Resend rejected email to %s: %s", to, body)
-                return False
-    except urllib.error.URLError as exc:  # pragma: no cover — real network
-        log.error("Resend send failed for %s: %s", to, exc)
-        return False
     return True
 
 
@@ -228,10 +135,9 @@ def send_otp_email(
     body_html = _OTP_TEMPLATE.format(
         name=greeting, lead=lead, code=code, ttl=max(1, ttl_minutes)
     )
-    if _delivery_mode() == "log":
-        # One clean, greppable line so a developer can find the code without
-        # parsing the HTML body below.
-        log.warning("dev one-time code for %s (%s): %s", to, purpose, code)
+    # One clean, greppable line so a developer can find the code without
+    # parsing the HTML body below.
+    log.warning("dev one-time code for %s (%s): %s", to, purpose, code)
     return send_email(to, subject, body_html)
 
 
@@ -274,11 +180,10 @@ _STAFF_INVITE_TEMPLATE = """\
 
 
 def send_staff_invite(to: str, name: str = "", role: str = "support") -> bool:
-    """Email a newly-added staff member that their profile was created.
+    """Notify a newly-added staff member that their profile was created.
 
-    Returns True only when the message actually reached its destination (or was
-    written to the log in dev mode) — same contract as ``send_email``, so the
-    admin UI can report an honest "invite sent" instead of a silent no-op.
+    Returns True when the message was written to the log. External inbox
+    delivery is disabled.
     """
     clean_name = " ".join(str(name or "").split())[:80]
     clean_role = (str(role or "").strip().lower() or "support")[:40]
@@ -287,15 +192,13 @@ def send_staff_invite(to: str, name: str = "", role: str = "support") -> bool:
         name=html.escape(greeting, quote=True),
         role=html.escape(clean_role, quote=True),
     )
-    if _delivery_mode() == "log":
-        log.warning("dev staff invite for %s (role=%s)", to, clean_role)
+    log.warning("dev staff invite for %s (role=%s)", to, clean_role)
     return send_email(to, "You've been added to the Ketsa team", body_html)
 
 
 # Staff credential invite / reset. The link carries a single-use, expiring token
-# in its query string; the recipient's name and role are escaped TEXT. The token
-# itself is never logged by this module (``send_email`` logs the whole body in
-# dev mode, which is the documented, local-only way to test the flow).
+# in its URL fragment (see staffauth._invite_link); the recipient's name and role
+# are escaped TEXT.
 _STAFF_CREDENTIALS_TEMPLATE = """\
 <!doctype html>
 <html>
@@ -328,12 +231,10 @@ def send_staff_credentials_invite(
     """Email a single-use link that lets a staff member set their password.
 
     ``link`` is server-built from ``KETSA_PUBLIC_URL`` plus an unguessable
-    token; it is escaped before interpolation. Nothing in this function ever
-    receives or logs the plaintext token separately.
+    token; it is escaped before interpolation.
 
-    Returns the same honest contract as ``send_email``: True only when the
-    message was handed to the transport (in dev ``log`` mode that means it is
-    written to the server log, which is where that mode delivers).
+    Returns True when the message was written to the log. External inbox
+    delivery is disabled.
     """
     clean_name = " ".join(str(name or "").split())[:80]
     clean_role = (str(role or "").strip().lower() or "support")[:40]
@@ -362,13 +263,12 @@ def send_staff_credentials_invite(
         button=button,
         ttl=max(1, int(ttl_minutes)),
     )
-    if _delivery_mode() == "log":
-        log.warning(
-            "dev staff %s link for %s (role=%s): %s (token redacted — "
-            "set KETSA_EMAIL_DELIVERY=resend to receive a working link)",
-            "reset" if reset else "invite",
-            to,
-            clean_role,
-            str(link or "").split("?", 1)[0].split("#", 1)[0],
-        )
+    log.warning(
+        "dev staff %s link for %s (role=%s): %s (token redacted in body log; "
+        "external email delivery is disabled)",
+        "reset" if reset else "invite",
+        to,
+        clean_role,
+        str(link or "").split("?", 1)[0].split("#", 1)[0],
+    )
     return send_email(to, subject, body_html)

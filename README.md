@@ -146,15 +146,15 @@ services by the launcher.
 With both services running, log in at **`http://localhost:3000/admin`**:
 
 - **Staff accounts (recommended).** Add people under **Staff**, then use
-  **Set-password link** to email them a single-use link to
+  **Set-password link** to generate a single-use link for
   `/admin/set-password`; they sign in with their email and password. Roles are
   enforced by the API — a support agent can read, a marketing editor can write
   content, and `owner` is the highest staff role — not merely hidden in the UI.
   Links expire (`KETSA_STAFF_INVITE_TTL_SECONDS`, default 24h) and can only be
-  used once. If email delivery is not configured (`KETSA_EMAIL_DELIVERY=log`),
-  bootstrap or recover an account from `backend/` with
-  `python scripts/set_staff_password.py --email … --role owner` (it prompts for
-  the password and stores only the PBKDF2 hash).
+  used once. External email delivery is disabled (messages/links are written to
+  server logs), so bootstrap or recover an account from `backend/` with
+  `python scripts/set_staff_password.py --email … --role owner` when needed (it
+  prompts for the password and stores only the PBKDF2 hash).
 - **Break-glass owner login.** The **Owner** tab on `/admin` accepts
   `KETSA_ADMIN_PASSWORD`: the shared super-user path used to bootstrap the first
   staff account and to recover if staff credentials are lost. Keep it strong and
@@ -223,36 +223,37 @@ With both services running you can trade each market for real on the site:
   - **Email signups are immediate.** An email registration creates the account
     (and its wallet) straight away — there is no email-verification step, so an
     address is not proven to belong to the registrant (registration only checks
-    it is not already taken). Resend powers **forgot-password**: enter the
-    account email, enter the emailed code plus a new password ("Resend code"
-    re-sends it, subject to the same cooldown), and all existing sessions are
-    revoked. Phone-only accounts can't self-reset yet (no SMS provider) — an
-    admin resets those from the dashboard. Without `KETSA_RESEND_API_KEY` the
-    reset/sign-in flows still respond, but no mail goes out (codes land in the
-    server log for local testing).
+    it is not already taken). **Forgot-password** issues a reset code (and
+    "Resend code" re-issues it, subject to cooldown); enter the code plus a new
+    password to reset, which revokes existing sessions. Phone-only accounts
+    can't self-reset yet (no SMS provider) — an admin resets those from the
+    dashboard. External email delivery is disabled, so codes/links are written
+    to server logs rather than delivered to inboxes.
   - **Passwordless sign-in by email code.** The login modal also offers
-    "Sign in with a code instead of a password": enter the account email and
-    Resend delivers a 6-digit code ("Resend code" re-sends it, subject to the
-    same cooldown). This is *additive* — password login is unchanged and
-    phone-only accounts still sign in with a password, since this path needs
-    an inbox. `POST /api/auth/login/code` answers `{"ok": true}` for **every**
-    input — unknown address, phone number, malformed value, or a suppressed
-    resend — so it cannot be used to discover which addresses are registered.
-    Because the reply is deliberately uninformative, the UI shows the code
-    step either way; that's the same trade-off `forgot-password` already makes.
-    Codes are bound to one account, stored only as a SHA-256 digest, burned on
-    use, attempt-capped and TTL'd by the same OTP engine as password reset.
-  - **Broadcast (admin).** Admin → Broadcast emails one announcement to every
+    "Sign in with a code instead of a password": enter the account email to
+    request a 6-digit code ("Resend code" re-issues it, subject to cooldown).
+    This is *additive* — password login is unchanged and phone-only accounts
+    still sign in with a password. `POST /api/auth/login/code` answers
+    `{"ok": true}` for **every** input — unknown address, phone number,
+    malformed value, or a suppressed resend — so it cannot be used to discover
+    which addresses are registered. Because the reply is deliberately
+    uninformative, the UI shows the code step either way; that's the same
+    trade-off `forgot-password` already makes. Codes are bound to one account,
+    stored only as a SHA-256 digest, burned on use, attempt-capped and TTL'd by
+    the same OTP engine as password reset. External email delivery is disabled,
+    so codes are written to server logs.
+  - **Broadcast (admin).** Admin → Broadcast composes one announcement for every
     account that has an email address (phone-only accounts are skipped). The
     send runs as a background job — `POST /api/admin/broadcast` returns a
     `job_id` immediately and `GET /api/admin/broadcast/<job_id>` reports
-    progress — because a per-recipient HTTPS round trip takes far longer than
-    an HTTP request may wait. Guards: admin token required, one job at a time,
-    recipients de-duplicated and capped (`BROADCAST_MAX_RECIPIENTS`), one
-    message per recipient (never a shared To/CC/Bcc, which would disclose the
-    user list), and the admin's subject/body is HTML-escaped into the mail
-    template so admin copy renders as text rather than as markup. There is no
-    unsubscribe, so reserve it for genuinely important announcements.
+    progress. Guards: admin token required, one job at a time, recipients
+    de-duplicated and capped (`BROADCAST_MAX_RECIPIENTS`), one message per
+    recipient (never a shared To/CC/Bcc, which would disclose the user list),
+    and the admin's subject/body is HTML-escaped into the mail template so admin
+    copy renders as text rather than as markup. External email delivery is
+    disabled, so broadcast messages are written to server logs rather than sent
+    to inboxes. There is no unsubscribe, so reserve it for genuinely important
+    announcements.
 - **Leaderboard.** `/leaderboard` ranks every wallet that has traded by live
   equity (P&L shown per row); refresh every 30s and immediately whenever a
   market resolves or a deposit/refund lands.
@@ -383,9 +384,7 @@ and wired through `docker-compose.yml`.
 | `PAYCHANGU_BASE_URL`         | backend   | PayChangu API base URL                             | `https://api.paychangu.com` |
 | `KETSA_AUTH_MAX_FAILURES`    | backend   | Failed logins per email/phone before a temporary lockout  | `5` |
 | `KETSA_AUTH_LOCKOUT_SECONDS` | backend   | Lockout window after too many failed logins         | `900` |
-| `KETSA_RESEND_API_KEY`       | backend   | Resend API key — emails password-reset and sign-in OTPs, plus admin broadcasts (absent ⇒ no mail sent; codes logged for dev) | — (email OTP off) |
-| `KETSA_RESEND_FROM`          | backend   | "From" address for OTP + broadcast emails; must be on a domain verified in Resend (the default sandbox sender only accepts `delivered@resend.dev`) | `Ketsa <onboarding@resend.dev>` |
-| `KETSA_EMAIL_DELIVERY`       | backend   | Transport for OTP/broadcast email: `auto` (Resend when a key is set, else log), `resend` (always send; missing key is a hard 502), or `log` (never send; write the code to the server log — **local dev only**) | `auto` |
+| *(email delivery)*           | backend   | External email delivery (Resend) is disabled; transactional messages/codes/links are written to server logs (not sent to inboxes). Treat logs as sensitive operational data. | `log` (fixed) |
 | `NEXT_PUBLIC_KETSA_CONTACT_EMAIL` | frontend | Contact address shown on the Terms/Privacy pages | — (generic "via the app" wording) |
 | `KETSA_OTP_TTL_SECONDS`      | backend   | One-time code lifetime                                   | `600` |
 | `KETSA_OTP_MAX_ATTEMPTS`     | backend   | Wrong entries before a code is burned                     | `5` |
