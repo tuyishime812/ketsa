@@ -1,31 +1,8 @@
 import type { Metadata } from 'next';
-import { Newsreader, Inter, IBM_Plex_Mono } from 'next/font/google';
 import { WalletProvider } from '@/components/wallet/WalletProvider';
 import { BetSlipProvider } from '@/components/betslip/BetSlipProvider';
 import BetSlip from '@/components/betslip/BetSlip';
 import './globals.css';
-
-const newsreader = Newsreader({
-  subsets: ['latin'],
-  weight: ['400', '500', '600'],
-  style: ['normal', 'italic'],
-  variable: '--font-newsreader',
-  display: 'swap',
-});
-
-const inter = Inter({
-  subsets: ['latin'],
-  variable: '--font-inter',
-  weight: ['400', '500', '600', '700'],
-  display: 'swap',
-});
-
-const ibmPlexMono = IBM_Plex_Mono({
-  subsets: ['latin'],
-  variable: '--font-mono',
-  weight: ['400', '500', '600'],
-  display: 'swap',
-});
 
 export const metadata: Metadata = {
   title: 'Ketsa — Trade on what happens next',
@@ -53,10 +30,15 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html
-      lang="en"
-      className={`${newsreader.variable} ${inter.variable} ${ibmPlexMono.variable}`}
-    >
+    <html lang="en">
+      <head>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
+        <link
+          href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&family=Newsreader:ital,wght@0,400;0,500;0,600;1,400;1,500;1,600&display=swap"
+          rel="stylesheet"
+        />
+      </head>
       <body>
         <WalletProvider>
           <BetSlipProvider>

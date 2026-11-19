@@ -4,6 +4,9 @@
 
 :root {
   --ease-ketsa: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --font-newsreader: 'Newsreader', serif;
+  --font-inter: 'Inter', sans-serif;
+  --font-mono: 'IBM Plex Mono', monospace;
 }
 
 html {
