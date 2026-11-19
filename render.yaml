@@ -1,0 +1,79 @@
+# Render Blueprint: Ketsa backend (FastAPI)
+# Deploy frontend separately on Vercel (Root Directory: frontend).
+# After creating the service, set the secret/URL env vars marked sync: false
+# in the Render dashboard, then redeploy.
+
+services:
+  - type: web
+    name: ketsa-api
+    runtime: python
+    rootDir: backend
+    plan: starter
+    numInstances: 1
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/ready
+    autoDeploy: true
+    envVars:
+      # --- Storage (required for production persistence) ---
+      - key: KETSA_DB_BACKEND
+        value: supabase
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+
+      # --- Security / admin ---
+      - key: KETSA_ADMIN_PASSWORD
+        sync: false
+      - key: KETSA_PROXY_SECRET
+        sync: false
+      - key: KETSA_EXPOSE_DOCS
+        value: "0"
+
+      # --- Public URLs / CORS (set to your real domains) ---
+      - key: KETSA_ALLOWED_ORIGINS
+        sync: false
+      - key: KETSA_PUBLIC_BASE_URL
+        sync: false
+      - key: KETSA_FRONTEND_URL
+        sync: false
+      - key: KETSA_PUBLIC_URL
+        sync: false
+
+      # --- Email (Resend) ---
+      - key: KETSA_EMAIL_DELIVERY
+        value: resend
+      - key: KETSA_RESEND_API_KEY
+        sync: false
+      - key: KETSA_RESEND_FROM
+        sync: false
+
+      # --- Payments (PayChangu, optional) ---
+      - key: PAYCHANGU_SECRET_KEY
+        sync: false
+      - key: PAYCHANGU_WEBHOOK_SECRET
+        sync: false
+
+      # --- Tuning (optional; defaults are safe) ---
+      - key: KETSA_RATE_LIMIT_PER_MIN
+        value: "120"
+      - key: KETSA_WRITE_RATE_LIMIT_PER_MIN
+        value: "30"
+      - key: KETSA_AUTH_MAX_FAILURES
+        value: "5"
+      - key: KETSA_AUTH_LOCKOUT_SECONDS
+        value: "900"
+      - key: KETSA_ADMIN_MAX_FAILURES
+        value: "10"
+      - key: KETSA_ADMIN_LOCKOUT_SECONDS
+        value: "900"
+      - key: KETSA_WS_MAX_CONNECTIONS
+        value: "2000"
+      - key: KETSA_PAYMENT_RECONCILE_SECONDS
+        value: "60"
+      # Keep a single process/instance for money-moving safety.
+      - key: WEB_CONCURRENCY
+        value: "1"
+      - key: UVICORN_WORKERS
+        value: "1"
