@@ -430,19 +430,20 @@ export default function AuthModal({
 
   return (
     <div
-      className="fixed inset-0 z-[200] flex items-center justify-center bg-ink/40 p-4 backdrop-blur-[3px]"
+      className="fixed inset-0 z-[200] overflow-y-auto bg-ink/40 p-3 backdrop-blur-[3px] sm:p-4"
       onClick={(e) => {
         if (e.target === e.currentTarget && !busy) onClose();
       }}
     >
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="auth-modal-heading"
-        aria-describedby="auth-modal-kicker"
-        className="grid w-full max-w-[880px] overflow-hidden rounded-l border border-line bg-white shadow-[0_24px_60px_-20px_rgba(12,21,38,.35)] md:grid-cols-[0.9fr_1fr]"
-      >
+      <div className="flex min-h-full items-start justify-center py-2 sm:items-center sm:py-4">
+        <div
+          ref={dialogRef}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="auth-modal-heading"
+          aria-describedby="auth-modal-kicker"
+          className="grid w-full max-w-[880px] overflow-hidden rounded-l border border-line bg-white shadow-[0_24px_60px_-20px_rgba(12,21,38,.35)] md:grid-cols-[0.9fr_1fr]"
+        >
         {/* Brand panel */}
         <aside className="relative hidden flex-col justify-between bg-ink p-8 text-white md:flex">
           <div className="flex items-center gap-[9px] font-serif text-[20px] font-semibold italic">
@@ -479,7 +480,7 @@ export default function AuthModal({
         </aside>
 
         {/* Form panel */}
-        <div className="flex flex-col p-7 md:p-8">
+        <div className="flex max-h-[calc(100dvh-2rem)] flex-col overflow-y-auto p-5 sm:max-h-none sm:overflow-visible sm:p-7 md:p-8">
           <div className="mb-1 flex items-start justify-between">
             <div>
               <div
@@ -853,6 +854,7 @@ export default function AuthModal({
               )}
             </div>
           )}
+        </div>
         </div>
       </div>
     </div>
