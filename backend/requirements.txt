@@ -7,7 +7,7 @@ supabase==2.31.0
 # supabase release cannot silently change the transport semantics the retry
 # and readiness paths rely on.
 httpx==0.28.1
-psycopg[binary]==3.2.9  # enables KETSA_DB_URL row locking for multi-process safety
+psycopg[binary]==3.2.13  # enables KETSA_DB_URL row locking for multi-process safety
 
 # supabase-auth 2.31.0 (pulled in by supabase==2.31.0) declares
 #   pyjwt[crypto]>=2.12.0
