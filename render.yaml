@@ -34,8 +34,6 @@ services:
       # --- Public URLs / CORS (set to your real domains) ---
       - key: KETSA_ALLOWED_ORIGINS
         sync: false
-      - key: KETSA_PUBLIC_BASE_URL
-        sync: false
       - key: KETSA_FRONTEND_URL
         sync: false
       - key: KETSA_PUBLIC_URL
