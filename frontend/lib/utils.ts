@@ -48,17 +48,17 @@ export function fmt(n: number): string {
 // Marketplace formatting helpers
 // ---------------------------------------------------------------------------
 
-/** Compact dollar formatting: $2.4M, $98K, $640. */
+/** Compact currency formatting (MWK): MK 2.4M, MK 98.0K, MK 640. */
 export function fmtUsd(n: number): string {
   const abs = Math.abs(n);
-  if (abs >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
-  if (abs >= 1_000) return `$${(n / 1_000).toFixed(1)}K`;
-  return `$${n.toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
+  if (abs >= 1_000_000) return `MK ${(n / 1_000_000).toFixed(1)}M`;
+  if (abs >= 1_000) return `MK ${(n / 1_000).toFixed(1)}K`;
+  return `MK ${n.toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
 }
 
-/** Full dollar amount with cents: $1,234.56 */
+/** Full amount with cents (MWK): MK 1,234.56 */
 export function fmtUsdFull(n: number): string {
-  return `$${n.toLocaleString('en-US', {
+  return `MK ${n.toLocaleString('en-US', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
