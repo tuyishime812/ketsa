@@ -77,6 +77,18 @@ MARKETS: list[Market] = [
     Market(id='trump-out-before-2027', cat='politics', tag='Politics', q='Will Donald Trump be out as President before 2027?', yes=2, no=98, meta=('MK 0 vol', '0 traders'), trend='down', pts=[4, 4, 3, 3, 3, 3, 2, 2, 2, 2], volume=0.0, liquidity=0.0,
            description='Resolves to YES if Donald Trump ceases to be President of the United States at any point before January 1, 2027. Resolves to NO if he remains President through the end of 2026.',
            end_date='2027-01-01T04:59:00Z', created='2026-11-20T00:00:00Z'),
+    Market(id='mutharika-fuel-crisis-address-2026', cat='politics', tag='Politics', q='Will President Peter Mutharika deliver a formal national address on the fuel and economic crisis before December 15, 2026?', yes=38, no=62, meta=('MK 0 vol', '0 traders'), trend='down', pts=[44, 43, 42, 42, 41, 40, 40, 39, 39, 38], volume=0.0, liquidity=0.0,
+           description='Resolves to YES if President Peter Mutharika delivers a formal national address specifically addressing the fuel and economic crisis before December 15, 2026. Otherwise resolves to NO.',
+           end_date='2026-12-14T23:59:59Z', created='2026-11-20T00:00:00Z'),
+    Market(id='suleman-midyear-budget-review-2027', cat='politics', tag='Politics', q='Will Speaker Sameer Suleman convene the postponed Mid-Year Budget Review Meeting of Parliament before January 1, 2027?', yes=25, no=75, meta=('MK 0 vol', '0 traders'), trend='down', pts=[31, 30, 29, 29, 28, 27, 27, 26, 26, 25], volume=0.0, liquidity=0.0,
+           description='Resolves to YES if Speaker Sameer Suleman convenes the postponed Mid-Year Budget Review Meeting of Parliament before January 1, 2027. Otherwise resolves to NO.',
+           end_date='2026-12-31T23:59:59Z', created='2026-11-20T00:00:00Z'),
+    Market(id='mutharika-cabinet-cut-jan31-2027', cat='politics', tag='Politics', q='Will President Peter Mutharika reduce the size of the Malawian Cabinet or fire at least one minister before January 31, 2027?', yes=25, no=75, meta=('MK 0 vol', '0 traders'), trend='down', pts=[31, 30, 29, 29, 28, 27, 27, 26, 26, 25], volume=0.0, liquidity=0.0,
+           description='Resolves to YES if President Peter Mutharika reduces the size of the Malawian Cabinet or dismisses at least one minister before January 31, 2027. Otherwise resolves to NO.',
+           end_date='2027-01-30T23:59:59Z', created='2026-11-20T00:00:00Z'),
+    Market(id='bon-kalindo-malawi-first-demos-dec10-2026', cat='politics', tag='Politics', q='Will Bon Kalindo and Malawi First hold organized street demonstrations in Lilongwe or Blantyre before December 10, 2026?', yes=33, no=67, meta=('MK 0 vol', '0 traders'), trend='down', pts=[39, 38, 37, 37, 36, 35, 35, 34, 34, 33], volume=0.0, liquidity=0.0,
+           description='Resolves to YES if Bon Kalindo and Malawi First hold organized street demonstrations in Lilongwe or Blantyre before December 10, 2026. Otherwise resolves to NO.',
+           end_date='2026-12-09T23:59:59Z', created='2026-11-20T00:00:00Z'),
 ]
 
 CATEGORIES = ['politics', 'crypto', 'sports', 'culture', 'tech', 'climate']
