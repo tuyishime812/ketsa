@@ -219,6 +219,28 @@ export interface Payment {
   updated: number;
 }
 
+export interface AdminFinanceSummary {
+  currency: string;
+  users_total: number;
+  users_with_deposits: number;
+  deposits_completed_total: number;
+  deposits_completed_count: number;
+  deposits_pending_total: number;
+  deposits_pending_count: number;
+  withdrawals_completed_total: number;
+  withdrawals_completed_count: number;
+  withdrawals_pending_approval_total: number;
+  withdrawals_pending_approval_count: number;
+  withdrawals_processing_total: number;
+  withdrawals_processing_count: number;
+  withdrawals_rejected_total: number;
+  withdrawals_failed_total: number;
+  net_completed_flow: number;
+  wallet_cash_balance_total: number;
+  wallet_withdrawable_total: number;
+  payments_total: number;
+}
+
 export type Correspondent = 'AIRTEL_MWI' | 'TNM_MWI' | 'USDT';
 
 export interface TradeLeg {

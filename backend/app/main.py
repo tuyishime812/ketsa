@@ -1313,6 +1313,100 @@ def create_app() -> "FastAPI":
         )
         return _payment_payload(store.get_payment(payment_id) or result)
 
+    @app.get("/api/admin/payments", response_model=list[Payment])
+    async def admin_list_payments(
+        kind: str | None = "all",
+        status: str | None = "all",
+        actor: str = Depends(require_capability(permissions.WITHDRAWALS_READ)),
+    ) -> list[Payment]:
+        allowed_status = {"pending_approval", "pending", "completed", "failed", "rejected"}
+        allowed_kind = {"deposit", "withdraw"}
+        items = store.list_payments()
+        if kind and kind != "all":
+            if kind not in allowed_kind:
+                raise HTTPException(status_code=400, detail="Unknown kind filter")
+            items = [p for p in items if p.get("kind") == kind]
+        if status and status != "all":
+            if status not in allowed_status:
+                raise HTTPException(status_code=400, detail="Unknown status filter")
+            items = [p for p in items if p.get("status") == status]
+        items.sort(key=lambda p: p.get("created") or 0, reverse=True)
+        return [_payment_payload(p) for p in items]
+
+    @app.get("/api/admin/finance")
+    async def admin_finance_summary(
+        actor: str = Depends(require_capability(permissions.WITHDRAWALS_READ)),
+    ) -> dict:
+        payments = store.list_payments()
+        users = store.list_users()
+        wallets = store.list_wallets()
+
+        def _sum(kind: str, statuses: set[str]) -> float:
+            return round(
+                sum(
+                    float(p.get("amount") or 0.0)
+                    for p in payments
+                    if p.get("kind") == kind and p.get("status") in statuses
+                ),
+                2,
+            )
+
+        def _count(kind: str, statuses: set[str]) -> int:
+            return sum(
+                1
+                for p in payments
+                if p.get("kind") == kind and p.get("status") in statuses
+            )
+
+        deposits_completed_total = _sum("deposit", {"completed"})
+        deposits_completed_count = _count("deposit", {"completed"})
+        deposits_pending_total = _sum("deposit", {"pending"})
+        deposits_pending_count = _count("deposit", {"pending"})
+        withdrawals_completed_total = _sum("withdraw", {"completed"})
+        withdrawals_completed_count = _count("withdraw", {"completed"})
+        withdrawals_pending_approval_total = _sum("withdraw", {"pending_approval"})
+        withdrawals_pending_approval_count = _count("withdraw", {"pending_approval"})
+        withdrawals_processing_total = _sum("withdraw", {"pending"})
+        withdrawals_processing_count = _count("withdraw", {"pending"})
+        withdrawals_rejected_total = _sum("withdraw", {"rejected"})
+        withdrawals_failed_total = _sum("withdraw", {"failed"})
+
+        net_completed_flow = round(deposits_completed_total - withdrawals_completed_total, 2)
+
+        users_with_deposits = {
+            p.get("wallet_id")
+            for p in payments
+            if p.get("kind") == "deposit" and p.get("status") == "completed"
+        }
+
+        total_cash_balance = 0.0
+        total_withdrawable = 0.0
+        for w in wallets:
+            total_cash_balance += float(w.get("balance") or 0.0)
+            total_withdrawable += float(w.get("deposited") or w.get("withdrawable") or 0.0)
+
+        return {
+            "currency": "MWK",
+            "users_total": len(users),
+            "users_with_deposits": len(users_with_deposits),
+            "deposits_completed_total": deposits_completed_total,
+            "deposits_completed_count": deposits_completed_count,
+            "deposits_pending_total": round(deposits_pending_total, 2),
+            "deposits_pending_count": deposits_pending_count,
+            "withdrawals_completed_total": withdrawals_completed_total,
+            "withdrawals_completed_count": withdrawals_completed_count,
+            "withdrawals_pending_approval_total": round(withdrawals_pending_approval_total, 2),
+            "withdrawals_pending_approval_count": withdrawals_pending_approval_count,
+            "withdrawals_processing_total": round(withdrawals_processing_total, 2),
+            "withdrawals_processing_count": withdrawals_processing_count,
+            "withdrawals_rejected_total": round(withdrawals_rejected_total, 2),
+            "withdrawals_failed_total": round(withdrawals_failed_total, 2),
+            "net_completed_flow": net_completed_flow,
+            "wallet_cash_balance_total": round(total_cash_balance, 2),
+            "wallet_withdrawable_total": round(total_withdrawable, 2),
+            "payments_total": len(payments),
+        }
+
     @app.post("/api/trade", response_model=TradeResponse)
     @app.post("/api/trades", response_model=TradeResponse)
     @app.post("/api/bet", response_model=TradeResponse)

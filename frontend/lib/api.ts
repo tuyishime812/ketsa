@@ -814,6 +814,18 @@ export function listAdminWithdrawals(
   return adminGet<Payment[]>(`/withdrawals?status=${encodeURIComponent(status)}`);
 }
 
+export function listAdminPayments(
+  kind = 'all',
+  status = 'all',
+): Promise<Payment[]> {
+  const q = new URLSearchParams({ kind, status });
+  return adminGet<Payment[]>(`/payments?${q.toString()}`);
+}
+
+export function getAdminFinanceSummary(): Promise<import('./types').AdminFinanceSummary> {
+  return adminGet<import('./types').AdminFinanceSummary>('/finance');
+}
+
 export function approveWithdrawal(
   id: string,
 ): Promise<{ ok: boolean; detail?: string; payment?: Payment }> {
