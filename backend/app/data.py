@@ -68,6 +68,15 @@ MARKETS: list[Market] = [
     Market(id='lil-kellz-fill-mangochi', cat='culture', tag='Culture', q='Will Lil Kellz fill Mangochi Stadium?', yes=33, no=67, meta=('MK 0 vol', '0 traders'), trend='down', pts=[39, 38, 37, 37, 36, 35, 35, 34, 34, 33], volume=0.0, liquidity=0.0,
            description='Resolves to YES if Lil Kellz\'s concert at Mangochi Stadium is officially declared sold out / at full capacity by the event organizers or venue. Otherwise resolves to NO.',
            end_date='2026-12-31T20:00:00Z', created='2026-11-20T00:00:00Z'),
+    Market(id='israel-iran-ceasefire-dec31-2026', cat='politics', tag='Politics', q='Will the Israel–Iran ceasefire continue through December 31, 2026?', yes=66, no=34, meta=('MK 0 vol', '0 traders'), trend='down', pts=[72, 71, 70, 70, 69, 68, 68, 67, 67, 66], volume=0.0, liquidity=0.0,
+           description='Resolves to YES if the ceasefire between Israel and Iran remains in effect through December 31, 2026, per the market\'s published resolution criteria and credible official reporting. Resolves to NO if a qualifying breach/end of the ceasefire occurs before then.',
+           end_date='2026-12-31T20:29:00Z', created='2026-11-20T00:00:00Z'),
+    Market(id='israel-next-pm-eizenkot', cat='politics', tag='Politics', q='Will Gadi Eisenkot be Prime Minister of Israel after the next election?', yes=64, no=36, meta=('MK 0 vol', '0 traders'), trend='up', pts=[56, 57, 58, 59, 60, 61, 62, 62, 63, 64], volume=0.0, liquidity=0.0,
+           description='Resolves to YES if Gadi Eisenkot becomes Prime Minister of Israel following the next Israeli election and government formation process. Resolves to NO if another person becomes Prime Minister. (Adapted from a multi-candidate market.)',
+           end_date='2026-10-28T03:59:00Z', created='2026-11-20T00:00:00Z'),
+    Market(id='trump-out-before-2027', cat='politics', tag='Politics', q='Will Donald Trump be out as President before 2027?', yes=2, no=98, meta=('MK 0 vol', '0 traders'), trend='down', pts=[4, 4, 3, 3, 3, 3, 2, 2, 2, 2], volume=0.0, liquidity=0.0,
+           description='Resolves to YES if Donald Trump ceases to be President of the United States at any point before January 1, 2027. Resolves to NO if he remains President through the end of 2026.',
+           end_date='2027-01-01T04:59:00Z', created='2026-11-20T00:00:00Z'),
 ]
 
 CATEGORIES = ['politics', 'crypto', 'sports', 'culture', 'tech', 'climate']
